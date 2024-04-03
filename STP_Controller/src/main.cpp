@@ -1,6 +1,6 @@
 #include "Arduino.h"
 #include "elapsedMillis.h"
-#include "serial_transfer_protocol.h"
+#include "serialized_transfer_protocol.h"
 
 // Initializes the serial protocol class. Note, passes Serial class reference but does not open the serial port.
 SerializedTransferProtocol<uint16_t, 254, 254> protocol(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
