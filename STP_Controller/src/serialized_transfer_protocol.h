@@ -79,9 +79,7 @@
 #include "Arduino.h"
 #include "cobs_processor.h"
 #include "crc_processor.h"
-#include "cstring"
 #include "elapsedMillis.h"
-#include "stdint.h"
 
 /**
  * @class SerializedTransferProtocol
@@ -160,9 +158,11 @@ class SerializedTransferProtocol
     // Ensures that the class only accepts uint8, 16 or 32 as valid CRC types, as no other type can be used to store a
     // CRC polynomial at the time of writing.
     static_assert(
-        std::is_same_v<PolynomialType, uint8_t> || std::is_same_v<PolynomialType, uint16_t> ||
-            std::is_same_v<PolynomialType, uint32_t>,
-        "SerializedTransferProtocol class template PolynomialType argument must be either uint8_t, uint16_t, or uint32_t."
+        stp_shared_assets::is_same_v<PolynomialType, uint8_t> ||
+            stp_shared_assets::is_same_v<PolynomialType, uint16_t> ||
+            stp_shared_assets::is_same_v<PolynomialType, uint32_t>,
+        "SerializedTransferProtocol class template PolynomialType argument must be either uint8_t, uint16_t, or "
+        "uint32_t."
     );
 
     // Verifies that the maximum Transmitted and Received payload sizes do not exceed 254 bytes (due to COBS, this is
@@ -251,29 +251,25 @@ class SerializedTransferProtocol
      * );
      * @endcode
      */
-    SerializedTransferProtocol(
+    explicit SerializedTransferProtocol(
         Stream& communication_port,
-        const PolynomialType crc_polynomial = 0x1021,
-        const PolynomialType crc_initial_value = 0xFFFF,
+        const PolynomialType crc_polynomial      = 0x1021,
+        const PolynomialType crc_initial_value   = 0xFFFF,
         const PolynomialType crc_final_xor_value = 0x0000,
-        const uint8_t start_byte = 129,
-        const uint8_t delimiter_byte = 0,
-        const uint32_t timeout = 20000,
-        const bool allow_start_byte_errors = false
+        const uint8_t start_byte                 = 129,
+        const uint8_t delimiter_byte             = 0,
+        const uint32_t timeout                   = 20000,
+        const bool allow_start_byte_errors       = false
     ) :
         _port(communication_port),
         _crc_processor(crc_polynomial, crc_initial_value, crc_final_xor_value),
         kStartByte(start_byte),
         kDelimiterByte(delimiter_byte),
         kTimeout(timeout),
-        kAllowStartByteErrors(allow_start_byte_errors)
-
-    {
-        // Resets the buffers to 0 so that they are always initialized using consistent values (good for testing
-        // purposes).
-        memset(_transmission_buffer, 0, sizeof(_transmission_buffer));
-        memset(_reception_buffer, 0, sizeof(_reception_buffer));
-    }
+        kAllowStartByteErrors(allow_start_byte_errors),
+        _transmission_buffer {},  // Initialization doubles up as resetting buffers to 0
+        _reception_buffer {}
+    {}
 
     /**
      * @brief Evaluates whether the reception buffer of the bundled Stream class has bytes to read (checks whether
@@ -390,7 +386,7 @@ class SerializedTransferProtocol
         );
 
         // Copies the _transmission_buffer into the referenced destination buffer
-        std::memcpy(destination, _transmission_buffer, DestinationSize);
+        memcpy(destination, _transmission_buffer, DestinationSize);
     }
 
     /**
@@ -428,7 +424,7 @@ class SerializedTransferProtocol
         );
 
         // Copies the _reception_buffer into the referenced destination buffer
-        std::memcpy(destination, _reception_buffer, DestinationSize);
+        memcpy(destination, _reception_buffer, DestinationSize);
     }
 
     /**
@@ -465,7 +461,7 @@ class SerializedTransferProtocol
         }
 
         // Copies the payload from _transmission_buffer to _reception_buffer
-        std::memcpy(&_reception_buffer[1], &_transmission_buffer[1], _bytes_in_transmission_buffer);
+        memcpy(&_reception_buffer[1], &_transmission_buffer[1], _bytes_in_transmission_buffer);
 
         // Updates the _bytes_in_reception_buffer to match the copied payload size
         _bytes_in_reception_buffer = _bytes_in_transmission_buffer;
@@ -474,12 +470,16 @@ class SerializedTransferProtocol
     }
 
     /// Returns the current value of the _bytes_in_transmission_buffer variable as a uint16_t integer.
+    [[nodiscard]]
+    // No reason to call this method in the first place if returned value is discarded.
     uint16_t get_bytes_in_transmission_buffer() const
     {
         return _bytes_in_transmission_buffer;
     }
 
     /// Returns the current value of the _bytes_in_reception_buffer variable as a uint16_t integer.
+    [[nodiscard]]
+    // No reason to call this method in the first place if returned value is discarded.
     uint16_t get_bytes_in_reception_buffer() const
     {
         return _bytes_in_reception_buffer;
@@ -566,7 +566,8 @@ class SerializedTransferProtocol
             _port.write(_transmission_buffer, combined_size);
 
             // Communicates that the packet has been sent via the transfer_status variable
-            transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketSent);
+            transfer_status =
+                static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketSent);
 
             // Resets the transmission_buffer after every successful transmission
             ResetTransmissionBuffer();
@@ -644,7 +645,8 @@ class SerializedTransferProtocol
         _bytes_in_reception_buffer = payload_size;  // Records the number of unpacked payload bytes to tracker
 
         // Sets the status appropriately and returns 'true' to indicate successful runtime.
-        transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketReceived);
+        transfer_status =
+            static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketReceived);
         return true;
     }
 
@@ -725,14 +727,15 @@ class SerializedTransferProtocol
         {
             // If the payload does not have enough space, returns 0 to indicate no bytes were written and sets
             // transfer_status to the appropriate error code
-            transfer_status =
-                static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kWritePayloadTooSmallError);
+            transfer_status = static_cast<uint8_t>(
+                stp_shared_assets::kSerializedTransferProtocolStatusCodes::kWritePayloadTooSmallError
+            );
             return 0;
         }
 
         // If there is enough space in the payload to accommodate the data, uses memcpy to efficiently copy the data
         // into the _transmission_buffer.
-        std::memcpy(
+        memcpy(
             static_cast<void*>(&_transmission_buffer[local_start_index]
             ),                                  // Destination in the buffer to start writing to
             static_cast<const void*>(&object),  // Source object address to copy from
@@ -746,8 +749,7 @@ class SerializedTransferProtocol
         // has to be cleared and re-written if the payload size needs to be reduced (there is no other mechanism to do
         // it right now). Note, -1 subtracts the size of the overhead byte so that the user always inputs and receives
         // the size of the payload that excludes the overhead byte.
-        _bytes_in_transmission_buffer =
-            std::max(_bytes_in_transmission_buffer, static_cast<uint16_t>(required_size - 1));
+        _bytes_in_transmission_buffer = max(_bytes_in_transmission_buffer, static_cast<uint16_t>(required_size - 1));
 
         // Sets the status code to indicate writing to buffer was successful
         transfer_status =
@@ -839,14 +841,15 @@ class SerializedTransferProtocol
         {
             // If the payload does not have enough bytes, returns 0 to indicate no bytes were read and sets
             // transfer_status to the appropriate error code
-            transfer_status =
-                static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kReadPayloadTooSmallError);
+            transfer_status = static_cast<uint8_t>(
+                stp_shared_assets::kSerializedTransferProtocolStatusCodes::kReadPayloadTooSmallError
+            );
             return 0;
         }
 
         // If there are enough bytes in the payload to read, uses memcpy to efficiently copy the data into the
         // object from the reception_buffer.
-        std::memcpy(
+        memcpy(
             static_cast<void*>(&object),                                      // Destination object to write the data to
             static_cast<const void*>(&_reception_buffer[local_start_index]),  // Source to read the data from
             requested_bytes  // The number of bytes to read into the object
@@ -905,19 +908,22 @@ class SerializedTransferProtocol
     /// the time of writing, only includes the CRC checksum for the packet. To optimize data transfer, the postamble
     /// is appended to the specifically reserved portion of the _transmission_buffer and received into the specific
     /// portion of the _reception_buffer, rather than being stored in a separate buffer.
-    static constexpr uint8_t kPostambleSize = sizeof(PolynomialType);
+
+    static constexpr uint8_t kPostambleSize = sizeof(PolynomialType);  // NOLINT(*-dynamic-static-initializers)
 
     /// Stores the size of the _transmission_buffer array, which is statically set to the maximum transmitted payload
     /// size (kMaximumTransmittedPayloadSize template parameter) + 2 + size of the postamble. The +2 accounts for the
     /// overhead byte and delimiter byte and the + kPostambleSize accounts for the CRC checksum placeholder space at the
     /// end of the buffer (used to do zero-return CRC checks on the packet).
-    static constexpr uint16_t kMaximumTxBufferSize = kMaximumTransmittedPayloadSize + 2 + kPostambleSize;
+    static constexpr uint16_t kMaximumTxBufferSize =  // NOLINT(*-dynamic-static-initializers)
+        kMaximumTransmittedPayloadSize + 2 + kPostambleSize;
 
     /// Stores the size of the _reception_buffer array, which is statically set to the maximum received payload size
     /// (kMaximumReceivedPayloadSize template parameter) + 2 + size of the postamble. The +2 accounts for the overhead
     /// byte and delimiter byte and the + kPostambleSize accounts for the CRC checksum placeholder space at the end of
     /// the buffer (used to do zero-return CRC checks on the packet).
-    static constexpr uint16_t kMaximumRxBufferSize = kMaximumReceivedPayloadSize + 2 + kPostambleSize;
+    static constexpr uint16_t kMaximumRxBufferSize =  // NOLINT(*-dynamic-static-initializers)
+        kMaximumReceivedPayloadSize + 2 + kPostambleSize;
 
     /// The buffer that stages the payload data before it is transmitted to the PC. The buffer is constructed with the
     /// assumption that the first index is always reserved for the overhead byte of each transmitted packet (after the
@@ -1065,8 +1071,9 @@ class SerializedTransferProtocol
             {
                 // Sets the status to indicate start byte has been found. The status is immediately used below to
                 // evaluate loop runtime
-                transfer_status =
-                    static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketStartByteFound);
+                transfer_status = static_cast<uint8_t>(
+                    stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketStartByteFound
+                );
                 break;
             }
         }
@@ -1200,7 +1207,8 @@ class SerializedTransferProtocol
             else
             {
                 transfer_status =
-                    static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketTimeoutError);
+                    static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketTimeoutError
+                    );
             }
 
             return 0;
@@ -1284,7 +1292,8 @@ class SerializedTransferProtocol
         }
 
         // If COBS decoding was successful, sets the packet status appropriately and returns the payload size to caller
-        transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketValidated);
+        transfer_status =
+            static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketValidated);
         return payload_size;
     }
 };

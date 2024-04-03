@@ -63,8 +63,6 @@
 
 // Dependencies
 #include "Arduino.h"
-#include "cstring"
-#include "stdint.h"
 #include "stp_shared_assets.h"
 
 /**
@@ -103,8 +101,9 @@ class CRCProcessor
     // Ensures that the class only accepts uint8, 16 or 32 as valid CRC types, as no other type can be used to store a
     // CRC polynomial at the time of writing.
     static_assert(
-        std::is_same_v<PolynomialType, uint8_t> || std::is_same_v<PolynomialType, uint16_t> ||
-            std::is_same_v<PolynomialType, uint32_t>,
+        stp_shared_assets::is_same_v<PolynomialType, uint8_t> ||
+            stp_shared_assets::is_same_v<PolynomialType, uint16_t> ||
+            stp_shared_assets::is_same_v<PolynomialType, uint32_t>,
         "CRCProcessor class template PolynomialType argument must be either uint8_t, uint16_t, or uint32_t."
     );
 
@@ -399,7 +398,7 @@ class CRCProcessor
 
     /// Stores the length of the CRC polynomial in bytes. This is used across most methods of the class to automatically
     /// scale processing to the number of bytes used to store the CRC checksum value.
-    static constexpr uint8_t kCRCByteLength = sizeof(PolynomialType);
+    static constexpr uint8_t kCRCByteLength = sizeof(PolynomialType);  // NOLINT(*-dynamic-static-initializers)
 
     /**
      * @brief Uses the polynomial specified (as an argument) during class instantiation to compute the CRC checksums for
@@ -426,10 +425,11 @@ class CRCProcessor
     void GenerateCRCTable(PolynomialType polynomial)
     {
         // Determines the number of bits in the CRC type
-        static constexpr size_t crc_bits = kCRCByteLength * 8;
+        static constexpr size_t crc_bits = kCRCByteLength * 8;  // NOLINT(*-dynamic-static-initializers)
 
         // Determines the Most Significant Bit (MSB) mask based on the CRC type
-        static constexpr PolynomialType msb_mask = static_cast<PolynomialType>(1) << (crc_bits - 1);
+        static constexpr PolynomialType msb_mask =  // NOLINT(*-dynamic-static-initializers)
+            static_cast<PolynomialType>(1) << (crc_bits - 1);
 
         // Iterates over each possible value of a byte variable
         for (uint16_t byte = 0; byte < 256; ++byte)

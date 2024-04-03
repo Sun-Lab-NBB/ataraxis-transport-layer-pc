@@ -52,7 +52,6 @@
 
 //Dependencies
 #include "Arduino.h"
-#include "stdint.h"
 #include "stp_shared_assets.h"
 
 /**
@@ -372,7 +371,7 @@ class COBSProcessor
 
         // Tracks distance to the next delimiter_byte_value. Initializes to the value obtained from reading the overhead
         // byte, which points to the first (or only) occurrence of the delimiter_byte_value in the packet.
-        uint16_t next_index = static_cast<uint16_t>(packet_buffer[read_index]);
+        auto next_index = static_cast<uint16_t>(packet_buffer[read_index]);
 
         // Resets the overhead byte to 0 to indicate that the buffer has been through a decoding cycle, even if the
         // cycle (see below) fails.

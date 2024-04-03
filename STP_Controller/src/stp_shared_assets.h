@@ -5,8 +5,8 @@
  *
  * @subsection description Description:
  *
- * This file aggregates all general assets that have to be shared between multiple classes of the SerializedTransferProtocol
- * library.
+ * This file aggregates all general assets that have to be shared between multiple classes of the
+ * SerializedTransferProtocol library.
  *
  * This file contains:
  * - kCOBSProcessorCodes structure that stores status bytecodes used by the COBSProcessor to report it's runtime status.
@@ -38,8 +38,8 @@ namespace stp_shared_assets
      * @brief Assigns meaningful names to all status codes used by the COBSProcessor class.
      *
      * @note Due to a unified approach to error-code handling in this library, this enumeration should only use code
-     * values in the range of 51 through 100. This is to simplify chained error handling in the SerializedTransferProtocol
-     * class of the library.
+     * values in the range of 51 through 100. This is to simplify chained error handling in the
+     * SerializedTransferProtocol class of the library.
      */
     enum class kCOBSProcessorCodes : uint8_t
     {
@@ -63,8 +63,8 @@ namespace stp_shared_assets
      * @brief Assigns meaningful names to all status codes used by the CRCProcessor class.
      *
      * @note Due to a unified approach to error-code handling in this library, this enumeration should only use code
-     * values in the range of 51 through 100. This is to simplify chained error handling in the SerializedTransferProtocol
-     * class of the library.
+     * values in the range of 51 through 100. This is to simplify chained error handling in the
+     * SerializedTransferProtocol class of the library.
      */
     enum class kCRCProcessorCodes : uint8_t
     {
@@ -82,8 +82,8 @@ namespace stp_shared_assets
      * @brief Assigns meaningful names to all status codes used by the SerializedTransferProtocol class.
      *
      * @note Due to a unified approach to error-code handling in this library, this enumeration should only use code
-     * values in the range of 101 through 150. This is to simplify chained error handling in the SerializedTransferProtocol
-     * class of the library.
+     * values in the range of 101 through 150. This is to simplify chained error handling in the
+     * SerializedTransferProtocol class of the library.
      */
     enum class kSerializedTransferProtocolStatusCodes : uint8_t
     {
@@ -106,6 +106,56 @@ namespace stp_shared_assets
         kBytesReadFromBuffer          = 117,  ///< Reading from buffer succeeded
         kNoBytesToParseFromBuffer     = 118   ///< Stream class reception buffer had no packet bytes to parse
     };
+
+    // Since Arduino Uno (the lower-end board this code was tested with) boards do not get access to 'cstring' header
+    // that is available to Teensy, some useful assets have to be reimplemented manually. They are implemented in as
+    // similar of a way as possible to be drop-in replaceable with std:: namespace.
+
+    /**
+     * @brief A type trait that determines if two types are the same.
+     *
+     * @tparam T The first type.
+     * @tparam U The second type.
+     *
+     * This struct is used to compare two types at compile-time. It defines a static constant member `value` which is
+     * set to `false` by default, indicating that the two types are not the same.
+     */
+    template <typename T, typename U>
+    struct is_same {
+        static const bool value = false;
+    };
+
+    /**
+      * @brief Specialization of is_same for the case when both types are the same.
+      *
+      * @tparam T The type to compare.
+      *
+      * This specialization is used when both type parameters are the same. In this case, the static constant member
+      * `value` is set to `true`, indicating that the types are indeed the same.
+      */
+    template <typename T>
+    struct is_same<T, T> {
+        static const bool value = true;
+    };
+
+    /**
+     * @brief A helper variable template that provides a convenient way to access the value of is_same.
+     *
+     * @tparam T The first type.
+     * @tparam U The second type.
+     *
+     * This variable template is declared as `constexpr`, allowing it to be used in compile-time expressions. It
+     * provides a more concise way to check if two types are the same, without the need to explicitly access the
+     * `value` member of the `is_same` struct.
+     *
+     * Example usage:
+     * @code
+     * static_assert(is_same_v<int, int>, "int and int are the same");
+     * static_assert(!is_same_v<int, float>, "int and float are not the same");
+     * @endcode
+     */
+    template <typename T, typename U>
+    constexpr bool is_same_v = is_same<T, U>::value;
 
 }  // namespace stp_shared_assets
 

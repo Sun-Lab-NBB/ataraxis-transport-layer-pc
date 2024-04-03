@@ -2,14 +2,10 @@
 // single centralized hub for running all available tests for all supported classes and methods of the
 // SerializedTransferProtocol library. Declare all required tests using separate functions (as needed) and then add the
 // tests to be evaluated to the RunUnityTests function at the bottom of this file. Comment unused tests out if needed.
-// The downside of this approach is higher compilation time and embedded controller resource usage, but this is a
-// relatively minor concern for the target teensy boards. For Arduino boards, you may have to manually enable only a
-// handful of tests at a time or modify them to use less memory.
 
 // Dependencies
 #include <Arduino.h>                   // For Arduino functions
 #include <unity.h>                     // This is the C testing framework, no connection to the Unity game engine
-#include <cstring>                     // For std::memcpy
 #include "cobs_processor.h"            // COBSProcessor class
 #include "crc_processor.h"             // CRCProcessor class
 #include "serialized_transfer_protocol.h"  // SerializedTransferProtocol class
@@ -639,9 +635,9 @@ void TestStreamMock(void)
     TEST_ASSERT_EQUAL_INT16(-1, peeked_value);
 }
 
-// Tests WriteData() and ReadData() methods of SerializedTransferProtocol class. The test is performed as a cycle to allow
-// reusing test assets. Tests writing and reading a structure, an array and a concrete value. Also, this is the only
-// method that verifies that the class variables initialize to the expected constant values and that tests using
+// Tests WriteData() and ReadData() methods of SerializedTransferProtocol class. The test is performed as a cycle to
+// allow reusing test assets. Tests writing and reading a structure, an array and a concrete value. Also, this is the
+// only method that verifies that the class variables initialize to the expected constant values and that tests using
 // different transmission and reception buffer sizes.
 void TestSerializedTransferProtocolBufferManipulation(void)
 {
@@ -837,15 +833,15 @@ void TestSerializedTransferProtocolBufferManipulation(void)
 
     // Verifies that the reception buffer (which is basically set to the _transmission_buffer state now) was not
     // altered by the read method runtime
-    std::memcpy(expected_rx_buffer, expected_tx_buffer, rx_buffer_size);  // Copies expected values from tx to rx buffer
+    memcpy(expected_rx_buffer, expected_tx_buffer, rx_buffer_size);  // Copies expected values from tx to rx buffer
     protocol.CopyRxDataToBuffer(test_rx_buffer);  // Sets test_rx_buffer to the actual state of the _reception_buffer
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_tx_buffer, test_rx_buffer, rx_buffer_size);
 }
 
-// Tests expected error handling by WriteData() and ReadData() methods of SerializedTransferProtocol class. This is a fairly
-// minor function, as buffer reading and writing can only fail in a small subset of cases. Uses the same payload size
-// for the _reception_buffer and the _transmission_buffer. Note, this function reserves a lot of memory for all of its
-// buffers (> 2kB), so it is advised to disable it for lower-end boards like Uno.
+// Tests expected error handling by WriteData() and ReadData() methods of SerializedTransferProtocol class. This is a
+// fairly minor function, as buffer reading and writing can only fail in a small subset of cases. Uses the same payload
+// size for the _reception_buffer and the _transmission_buffer. Note, this function reserves a lot of memory for all of
+// its buffers (> 2kB), so it is advised to disable it for lower-end boards like Uno.
 void TestSerializedTransferProtocolBufferManipulationErrors(void)
 {
     // Initializes the tested class
@@ -1048,18 +1044,20 @@ void TestSerializedTransferProtocolDataTransmission(void)
 }
 
 // Tests the errors and, where applicable, edge cases associated with the SendData() and ReceiveData() methods of the
-// SerializedTransferProtocol class. No auxiliary methods are tested here since they do not raise any errors. Note, focuses
-// specifically on errors raised by SerializedTransferProtocol class methods, COBS and CRC errors should be tested by their
-// respective test functions. Also, does not test errors that are generally impossible to encounter without modifying
-// the class code, such as COBS encoding due to incorrect overhead placeholder value error.
+// SerializedTransferProtocol class. No auxiliary methods are tested here since they do not raise any errors. Note,
+// focuses specifically on errors raised by SerializedTransferProtocol class methods, COBS and CRC errors should be
+// tested by their respective test functions. Also, does not test errors that are generally impossible to encounter
+// without modifying the class code, such as COBS encoding due to incorrect overhead placeholder value error.
+// Note, to better accommodate testing on Uno boards, the CRC used for these tests is CRC8. This should not affect the
+// tested logic, but will reduce the memory size reserved by these functions
 void TestSerializedTransferProtocolDataTransmissionErrors(void)
 {
     // Initializes the tested class
     StreamMock mock_port;
-    SerializedTransferProtocol<uint16_t, 20, 20> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
+    SerializedTransferProtocol<uint16_t, 254, 254> protocol(mock_port, 0x07, 0x00, 0x00, 129, 0, 20000, false);
 
     // Instantiates crc encoder class separately to generate test data
-    CRCProcessor<uint16_t> crc_class = CRCProcessor<uint16_t>(0x1021, 0xFFFF, 0x0000);
+    CRCProcessor<uint16_t> crc_class = CRCProcessor<uint16_t>(0x07, 0x00, 0x00);
 
     // Initializes a test payload
     uint8_t test_payload[10] = {1, 2, 3, 4, 0, 0, 7, 8, 9, 10};
@@ -1107,7 +1105,7 @@ void TestSerializedTransferProtocolDataTransmissionErrors(void)
     // wasteful as this reserves another 540 bytes of memory for little reason, but this is the price of late fixes to
     // class logic, I guess. Uno owners: feel free to comment this line and the test below out, these are the only
     // places 'new protocol class is used to make it easy to remove'
-    SerializedTransferProtocol<uint16_t, 20, 20> new_protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, true);
+    SerializedTransferProtocol<uint16_t, 254, 254> new_protocol(mock_port, 0x07, 0x00, 0x00, 129, 0, 20000, true);
 
     // Verifies that when Start Bytes are enabled, the algorithm correctly returns the error code.
     new_protocol.ReceiveData();
@@ -1209,7 +1207,12 @@ int RunUnityTests(void)
     // CRC Processor
     RUN_TEST(TestCRCProcessorGenerateTable_CRC8);
     RUN_TEST(TestCRCProcessorGenerateTable_CRC16);
-    RUN_TEST(TestCRCProcessorGenerateTable_CRC32);
+
+    // This test requires at least 2048 bytes of RAM to work, so prevents it from being evaluated by boards like Arduino
+    // Uno. Specifically, uses a static 3kb RAM limit
+    #if !defined RAMEND >= 0x0BFF
+        RUN_TEST(TestCRCProcessorGenerateTable_CRC32);
+    #endif
     RUN_TEST(TestCRCProcessor);
     RUN_TEST(TestCRCProcessorErrors);
 
