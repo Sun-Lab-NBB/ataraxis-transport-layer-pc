@@ -4,12 +4,12 @@
 // tests to be evaluated to the RunUnityTests function at the bottom of this file. Comment unused tests out if needed.
 
 // Dependencies
-#include <Arduino.h>                   // For Arduino functions
-#include <unity.h>                     // This is the C testing framework, no connection to the Unity game engine
-#include "cobs_processor.h"            // COBSProcessor class
-#include "crc_processor.h"             // CRCProcessor class
+#include <Arduino.h>                       // For Arduino functions
+#include <unity.h>                         // This is the C testing framework, no connection to the Unity game engine
+#include "cobs_processor.h"                // COBSProcessor class
+#include "crc_processor.h"                 // CRCProcessor class
 #include "serialized_transfer_protocol.h"  // SerializedTransferProtocol class
-#include "stream_mock.h"               // StreamMock class required for SerializedTransferProtocol class testing
+#include "stream_mock.h"                   // StreamMock class required for SerializedTransferProtocol class testing
 
 // This function is called automatically before each test function. Currently not used.
 void setUp(void)
@@ -1208,11 +1208,11 @@ int RunUnityTests(void)
     RUN_TEST(TestCRCProcessorGenerateTable_CRC8);
     RUN_TEST(TestCRCProcessorGenerateTable_CRC16);
 
-    // This test requires at least 2048 bytes of RAM to work, so prevents it from being evaluated by boards like Arduino
-    // Uno. Specifically, uses a static 3kb RAM limit
-    #if !defined RAMEND >= 0x0BFF
-        RUN_TEST(TestCRCProcessorGenerateTable_CRC32);
-    #endif
+// This test requires at least 2048 bytes of RAM to work, so prevents it from being evaluated by boards like Arduino
+// Uno. Specifically, uses a static 3kb RAM limit
+#if !defined RAMEND >= 0x0BFF
+    RUN_TEST(TestCRCProcessorGenerateTable_CRC32);
+#endif
     RUN_TEST(TestCRCProcessor);
     RUN_TEST(TestCRCProcessorErrors);
 

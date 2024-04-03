@@ -416,7 +416,8 @@ class COBSProcessor
                 // caught by the CRC check. IN this case, issues an appropriate error codes and breaks method runtime.
                 else
                 {
-                    cobs_status = static_cast<uint8_t>(stp_shared_assets::kCOBSProcessorCodes::kDecoderDelimiterFoundTooEarly);
+                    cobs_status =
+                        static_cast<uint8_t>(stp_shared_assets::kCOBSProcessorCodes::kDecoderDelimiterFoundTooEarly);
                     return 0;
                 }
             }
