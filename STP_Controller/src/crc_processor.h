@@ -435,7 +435,7 @@ class CRCProcessor
         for (uint16_t byte = 0; byte < 256; ++byte)
         {
             // Initializes the byte CRC value based on the CRC (Polynomial) datatype
-            PolynomialType crc = static_cast<PolynomialType>(byte);
+            auto crc = static_cast<PolynomialType>(byte);
 
             // Shifts the CRC value left by the appropriate number of bits based on the CRC type to align the initial
             // value to the highest byte of the CRC variable.
