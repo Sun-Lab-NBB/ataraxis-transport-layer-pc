@@ -563,10 +563,10 @@ def test_serial_transfer_protocol_data_transmission():
         polynomial=np.uint16(0x1021),
         initial_crc_value=np.uint16(0xFFFF),
         final_crc_xor_value=np.uint16(0x0000),
-        maximum_transmitted_payload_size=np.uint8(254),
-        start_byte=np.uint8(129),
-        delimiter_byte=np.uint8(0),
-        timeout=np.uint64(20000),
+        maximum_transmitted_payload_size=254,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=20000,
         test_mode=True,  # Makes it port-agnostic by switching to SerialMock class as the 'serial interface'
         allow_start_byte_errors=False,  # Disables start_byte errors
     )
@@ -602,7 +602,7 @@ def test_serial_transfer_protocol_data_transmission():
     expected_packet = cobs_processor.encode_payload(test_array, delimiter=np.uint8(0))
     checksum = crc_processor.calculate_packet_crc_checksum(expected_packet)
     checksum = crc_processor.convert_crc_checksum_to_bytes(checksum)
-    np.concatenate((expected_packet, checksum))
+    expected_packet = np.concatenate((expected_packet, checksum))
 
     # Assess the state of the tx_buffer by generating a numpy uint8 array using the contents of the tx_buffer
     # noinspection PyUnresolvedReferences

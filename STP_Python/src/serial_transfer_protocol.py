@@ -1224,7 +1224,7 @@ class SerializedTransferProtocol:
             # Waits for at least one more byte to become available or for the reception to timeout.
             self.__timer.reset()
             available_bytes = self.__port.in_waiting
-            while self.__timer.elapsed() < self.__timeout or available_bytes != 0:
+            while self.__timer.elapsed < self.__timeout or available_bytes != 0:
                 available_bytes = self.__port.in_waiting
 
             # If no more bytes are available (only one is needed) returns code 103: Packet reception staled at
@@ -1267,7 +1267,7 @@ class SerializedTransferProtocol:
                 self.__timer.reset()
                 available_bytes = self.__port.in_waiting
                 delta = required_size - available_bytes  # Used to determine when to reset the timer
-                while self.__timer.elapsed() < self.__timeout or delta > 0:
+                while self.__timer.elapsed < self.__timeout or delta > 0:
                     available_bytes = self.__port.in_waiting
                     delta_new = required_size - available_bytes
 
@@ -1326,7 +1326,7 @@ class SerializedTransferProtocol:
             self.__timer.reset()
             available_bytes = self.__port.in_waiting
             delta = required_size - available_bytes  # Used to determine when to reset the timer
-            while self.__timer.elapsed() < self.__timeout or delta > 0:
+            while self.__timer.elapsed < self.__timeout or delta > 0:
                 available_bytes = self.__port.in_waiting
                 delta_new = required_size - available_bytes
 
