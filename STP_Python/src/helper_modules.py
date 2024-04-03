@@ -1,23 +1,33 @@
 """This file stores low-level helper modules that are used by the main SerializedTransferProtocol class to support its
 runtime.
 
-Specifically, this includes the COBSProcessor and CRCProcessor modules used to process the transferred data before and
-after transmission. Also, the SerialMock class used to test SerializedTransferProtocol's transmission and reception
-behavior. Finally, stores the ElapsedTimer class, which is a custom perf_counter_ns-based implementation of
-elapsedMillis C++ library, used to time serial packet reception delays.
+At this time, this file includes the following classes:
+- COBSProcessor and CRCProcessor modules that are used to process the transferred data before and after transmission.
+- SerialMock class used to test SerializedTransferProtocol's transmission and reception behavior.
+- ElapsedTimer class, which is a custom perf_counter_ns-based implementation of elapsedMillis C++ library, used to time
+serial packet reception delays.
+- ZeroMQSerial class, which is a wrapper around the ZeroMQ communication protocol that allows interfacing with
+non-microcontroller devices running the Python or C# version of this library.
 
 All methods of CRCProcessor and COBSProcessor classes are implemented using Numba and Numpy to optimize runtime
 execution speed. This allows compiling the classes to machine-code (via first translating them to C under-the-hood)
-whenever they are first called by the main class and achieves execution speeds that are at least 5 times as fast as the
-equivalent pure-python implementation. As a downside, many python features are not supported by numba optimized classes
-and, to improve user experience, the compiled classes are wrapped into equally named pure-python classes to provide a
-more standard python API. The API is primarily intended for unit testing and users who want to use any of the helper
-modules without using the main SerializedTransferProtocol class.
+whenever they are first called by the main class and achieves execution speeds that are at least 5 times as fast as
+the equivalent pure-python implementation. As a downside, many python features are not supported by numba optimized
+classes and, to improve user experience, the compiled classes are wrapped into equally named pure-python classes to
+provide a more standard python API. The API is primarily intended for unit testing and users who want to use any of
+the helper modules without using the main SerializedTransferProtocol class.
 
-The SerialMock class is a pure-python class whose main job is to 'overload' the methods of the pySerial's Serial class
-so that SerializedTransferProtocol can be tested without a properly configured microcontroller (and also without trying
-to guess which specific COM port (if any) is available for each user running the tests). It has no practical use past
-that specific role.
+The SerialMock class is a pure-python class whose main job is to 'overload' the methods of the pySerial's Serial
+class so that SerializedTransferProtocol can be tested without a properly configured microcontroller (and also
+without trying to guess which specific COM port (if any) is available for each user running the tests). It has no
+practical use past that specific role.
+
+Also contains the ZeroMQSerial class. This class is a wrapper around the ZeroMQ communication protocol that allows
+interfacing with ZeroMQ sockets using the same commands as used to interface with pySerial's Serial class. This
+allows using ZeroMQSerial as a drop-in replacement for the Serial class at SerializedTransferProtocol class
+instantiation. ZeroMq is a widely available communication protocol that allows to use this class to connect to other
+clients running either the python or special C-version of this library intended for major devices (microcontrollers
+only support Serial communication).
 """
 
 import textwrap
@@ -1350,6 +1360,9 @@ class SerialMock:
         to the buffers as the real Serial class. This allows using this class to fully test and verify all
         SerializedTransferProtocol class methods and expect them to behave identically during real runtime.
 
+        Since all communication protocols share the same interface, this class is also perfectly adequate for imitating
+        the functioning of the ZeroMQSerial class.
+
     Attributes:
         is_open: A boolean flag that tracks the state of the serial port.
         tx_buffer: A buffer that stores the data to be sent over the serial port.
@@ -1528,11 +1541,15 @@ class ElapsedTimer:
         """
         return np.round((current_time - baseline_time) / divider, 3)
 
+
 class ZeroMQSerial:
-    def __init__(self, port, baudrate=9600, timeout=1):
+    def __init__(self, port, baudrate=9600, timeout=1, mode:Literal['host', 'client'] = 'host'):
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.PAIR)
-        self.socket.bind(f"tcp://127.0.0.1:{port}")
+        if mode == 'host':
+            self.socket.bind(f"tcp://127.0.0.1:{port}")
+        else:
+            self.socket.connect(f"tcp://127.0.0.1:{port}")
         self.baudrate = baudrate
         self.timeout = timeout
         self.buffer = bytearray()
@@ -1541,6 +1558,15 @@ class ZeroMQSerial:
         self.receiver_thread.daemon = True
         self.receiver_thread.start()
 
+    def __del__(self):
+        self.socket.close()
+        self.context.term()
+
+    @property
+    def in_waiting(self):
+        with self.lock:
+            return len(self.buffer)
+
     def _receiver(self):
         while True:
             try:
@@ -1548,14 +1574,14 @@ class ZeroMQSerial:
                 with self.lock:
                     self.buffer.extend(data)
             except zmq.Again:
-                time.sleep(1 / self.baudrate)
+                tm.sleep(1 / self.baudrate)
 
     def read(self, size=1):
-        start_time = time.time()
+        start_time = tm.time()
         while len(self.buffer) < size:
-            if time.time() - start_time > self.timeout:
+            if tm.time() - start_time > self.timeout:
                 break
-            time.sleep(0.001)
+            tm.sleep(0.001)
         with self.lock:
             data = self.buffer[:size]
             self.buffer = self.buffer[size:]
@@ -1564,7 +1590,6 @@ class ZeroMQSerial:
     def write(self, data):
         self.socket.send(data)
 
-    @property
-    def in_waiting(self):
+    def clear_buffer(self):
         with self.lock:
-            return len(self.buffer)
+            self.buffer.clear()

@@ -5,12 +5,13 @@ methods.
 
 import re
 import textwrap
-import time
+import time as tm
 
 import numpy as np
 import pytest
+import zmq
 
-from src.helper_modules import COBSProcessor, CRCProcessor, ElapsedTimer, SerialMock
+from src.helper_modules import COBSProcessor, CRCProcessor, ElapsedTimer, SerialMock, ZeroMQSerial
 
 
 def test_cobs_processor():
@@ -1283,33 +1284,94 @@ def test_elapsed_timer():
 
     # Tests nanosecond precision
     elapsed_timer = ElapsedTimer("ns")
-    time.sleep(0.000001)  # Sleeps for 1 microsecond
+    tm.sleep(0.000001)  # Sleeps for 1 microsecond
     elapsed_ns = elapsed_timer.elapsed
     assert elapsed_ns > 0, "Elapsed nanoseconds should be greater than 0"
 
     # Tests microsecond precision
     elapsed_timer = ElapsedTimer(precision="us")
-    time.sleep(0.001)  # Sleeps for 1 millisecond
+    tm.sleep(0.001)  # Sleeps for 1 millisecond
     elapsed_us = elapsed_timer.elapsed
     assert elapsed_us > 0, "Elapsed microseconds should be greater than 0"
 
     # Tests millisecond precision
     elapsed_timer = ElapsedTimer(precision="ms")
-    time.sleep(0.1)  # Sleeps for 100 milliseconds
+    tm.sleep(0.1)  # Sleeps for 100 milliseconds
     elapsed_ms = elapsed_timer.elapsed
     assert elapsed_ms > 0, "Elapsed milliseconds should be greater than 0"
 
     # Tests second precision
     elapsed_timer = ElapsedTimer(precision="s")
-    time.sleep(1)  # Sleeps for 1 second
+    tm.sleep(1)  # Sleeps for 1 second
     elapsed_s = elapsed_timer.elapsed
     assert elapsed_s > 0, "Elapsed seconds should be greater than 0"
 
     # Tests reset functionality
     reset_timer = ElapsedTimer(precision="ms")
-    time.sleep(0.5)  # Sleeps for 500 milliseconds
+    tm.sleep(0.5)  # Sleeps for 500 milliseconds
     elapsed_before_reset = reset_timer.elapsed
     reset_timer.reset()
-    time.sleep(0.2)  # Sleeps for 200 milliseconds
+    tm.sleep(0.2)  # Sleeps for 200 milliseconds
     elapsed_after_reset = reset_timer.elapsed
     assert elapsed_after_reset < elapsed_before_reset, "Elapsed time should be reset"
+
+
+def test_zeromq_serial_successful_cases():
+    # Create ZeroMQSerial instance
+    zeromq_serial = ZeroMQSerial(port=5555)
+
+    # Create ZeroMQ socket
+    context = zmq.Context()
+    zeromq_socket = context.socket(zmq.PAIR)
+    zeromq_socket.connect("tcp://127.0.0.1:5555")
+
+    # Test writing data to ZeroMQSerial
+    zeromq_socket.send(b"Hello, ZeroMQSerial!")
+    tm.sleep(0.1)  # Wait for a short time to ensure the data is received
+
+    # Test reading data from ZeroMQSerial
+    data = zeromq_serial.read(size=20)
+    assert data == b"Hello, ZeroMQSerial!"
+
+    # Test writing data from ZeroMQSerial
+    zeromq_serial.write(b"Hello, client!")
+    tm.sleep(0.1)  # Wait for a short time to ensure the data is sent
+
+    # Test reading data written by ZeroMQSerial
+    data = zeromq_socket.recv()
+    assert data == b"Hello, client!"
+
+    # Test checking the number of bytes in the buffer
+    zeromq_socket.send(b"Hello, ZeroMQSerial!")
+    tm.sleep(0.1)  # Wait for a short time to ensure the data is received
+    assert zeromq_serial.in_waiting == 20
+
+    # Close ZeroMQ socket and context
+    zeromq_socket.close()
+    context.term()
+
+    # Close ZeroMQSerial instance
+    zeromq_serial.socket.close()
+    zeromq_serial.context.term()
+
+
+def test_zeromq_serial_error_cases():
+    # Create ZeroMQSerial instance
+    zeromq_serial = ZeroMQSerial(port=5556)
+
+    zeromq_serial.clear_buffer()
+
+    # Test reading data with insufficient data in the buffer
+    data = zeromq_serial.read(size=10)
+    assert data == b""  # Expected empty bytes since no data is available
+
+    # Test reading data with a timeout
+    start_time = tm.time()
+    data = zeromq_serial.read(size=10)
+    end_time = tm.time()
+    assert data == b""  # Expected empty bytes due to timeout
+    assert end_time - start_time >= zeromq_serial.timeout  # Check if timeout occurred
+
+    # Close ZeroMQSerial instance
+    zeromq_serial.socket.close()
+    zeromq_serial.context.term()

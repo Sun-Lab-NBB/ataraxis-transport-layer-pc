@@ -17,8 +17,8 @@ from src.serial_transfer_protocol import SerializedTransferProtocol
 
 @dataclass
 class SampleDataClass:
-    """A simple dataclass used to test 'structure' serialization capability of the SerializedTransferProtocol class. Has to
-    use numpy arrays and scalars as field types to support serialization.
+    """A simple dataclass used to test 'structure' serialization capability of the SerializedTransferProtocol class. Has
+     to use numpy arrays and scalars as field types to support serialization.
 
     Attributes:
         uint_value: Any numpy unsigned integer scalar value. Used to test the ability to serialize scalar dataclass
@@ -109,7 +109,7 @@ def test_serial_transfer_protocol_buffer_manipulation():
 
     # Modifies the expected buffer to account for the newly added data (120 newly added bytes) so that the buffer state
     # can be verified against the expected values. Then verifies the __transmission_buffer actually looks as expected
-    # and that the bytes tracker was updated accordingly.
+    # and that the bytes' tracker was updated accordingly.
     next_expected_array = np.array(
         [
             1,
@@ -356,8 +356,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"({255}) cannot exceed 254."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         _ = SerializedTransferProtocol(
             port="COM7",
@@ -371,8 +371,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"({0}) must be between 1 and 254 (inclusive)."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         _ = SerializedTransferProtocol(
             port="COM7",
@@ -384,8 +384,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"({255}) must be between 1 and 254 (inclusive)."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         _ = SerializedTransferProtocol(
             port="COM7",
@@ -399,8 +399,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"cannot be set to the same value ({129})."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         _ = SerializedTransferProtocol(
             port="COM7",
@@ -435,12 +435,12 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     error_message = (
         f"Unsupported input data_object type ({type(invalid_input)}) encountered when writing data "
         f"to __transmission_buffer. At this time, only the following numpy scalar or array types are "
-        f"supported: {protocol._SerializedTransferProtocol__accepted_numpy_scalars}. Alternatively, a dataclass with all "
-        f"attributes set to supported numpy scalar or array types is also supported."
+        f"supported: {protocol._SerializedTransferProtocol__accepted_numpy_scalars}. Alternatively, a dataclass with "
+        f"all attributes set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(
-        TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            TypeError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         # noinspection PyTypeChecker
         protocol.write_data(invalid_input)
@@ -457,8 +457,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"'{protocol.transmission_buffer.size}' bytes."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.write_data(payload, start_index=start_index)
 
@@ -469,8 +469,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"data to __transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.write_data(invalid_array)
 
@@ -481,8 +481,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"is not supported."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         # noinspection PyTypeChecker
         protocol.write_data(empty_array)
@@ -498,12 +498,12 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     error_message = (
         f"Unsupported input data_object type ({type(invalid_input)}) encountered when reading data "
         f"from __reception_buffer. At this time, only the following numpy scalar or array types are supported: "
-        f"{protocol._SerializedTransferProtocol__accepted_numpy_scalars}. Alternatively, a dataclass with all attributes "
-        f"set to supported numpy scalar or array types is also supported."
+        f"{protocol._SerializedTransferProtocol__accepted_numpy_scalars}. Alternatively, a dataclass with all "
+        f"attributes set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(
-        TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            TypeError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         # noinspection PyTypeChecker
         protocol.read_data(invalid_input)
@@ -519,8 +519,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"'{protocol.bytes_in_reception_buffer}' bytes."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.read_data(payload, start_index=start_index)
 
@@ -531,8 +531,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"data from __reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.read_data(invalid_array)
 
@@ -544,8 +544,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         f"arrays is currently not supported."
     )
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         # noinspection PyTypeChecker
         protocol.read_data(empty_array)
@@ -610,7 +610,7 @@ def test_serial_transfer_protocol_data_transmission():
     assert tx_buffer[0] == 129  # Asserts that the first byte-value in the buffer is the same as the start_byte value
 
     # Verifies that the data written to the tx_buffer is the same as the expected packet
-    assert np.array_equal(tx_buffer[1 : expected_packet.size + 1], expected_packet)
+    assert np.array_equal(tx_buffer[1: expected_packet.size + 1], expected_packet)
 
     # Verifies that attempting to receive data when there are no bytes inside the port reception buffer graciously
     # returns 'False'
@@ -639,9 +639,9 @@ def test_serial_transfer_protocol_data_transmission():
 
 
 def test_serial_transfer_protocol_data_transmission_errors():
-    """Tests SerializedTransferProtocol class send_data() and receive_data() method error handling. Focuses on testing the
-    errors that arise specifically from these methods or private methods of the SerializedTransferProtocol class. Assumes
-    helper method errors are tested using the dedicated helper testing functions."""
+    """Tests SerializedTransferProtocol class send_data() and receive_data() method error handling. Focuses on testing
+    the errors that arise specifically from these methods or private methods of the SerializedTransferProtocol class.
+    Assumes= helper method errors are tested using the dedicated helper testing functions."""
 
     # Instantiates the tested class
     # noinspection DuplicatedCode
@@ -706,8 +706,8 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # noinspection PyUnresolvedReferences
     protocol._SerializedTransferProtocol__port.rx_buffer = empty_buffer.tobytes()  # Refills rx buffer
     with pytest.raises(
-        RuntimeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            RuntimeError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.receive_data()
 
@@ -724,8 +724,8 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # noinspection PyUnresolvedReferences
     protocol._SerializedTransferProtocol__port.rx_buffer = empty_buffer.tobytes()  # Refills rx buffer
     with pytest.raises(
-        RuntimeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            RuntimeError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.receive_data()
 
@@ -741,8 +741,8 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # noinspection PyUnresolvedReferences
     protocol._SerializedTransferProtocol__port.rx_buffer = test_data.tobytes()  # Refills rx buffer
     with pytest.raises(
-        RuntimeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            RuntimeError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.receive_data()
 
@@ -756,8 +756,8 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # noinspection PyUnresolvedReferences
     protocol._SerializedTransferProtocol__port.rx_buffer = test_data.tobytes()  # Refills rx buffer
     with pytest.raises(
-        RuntimeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            RuntimeError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.receive_data()
     test_data[1] = 10  # Restores the payload size
@@ -785,8 +785,8 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # noinspection PyUnresolvedReferences
     protocol._SerializedTransferProtocol__port.rx_buffer = test_data.tobytes()  # Refills rx buffer
     with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+            ValueError,
+            match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
         protocol.receive_data()
     test_data[-2:] = expected_checksum  # Restores the CRC checksum back to the correct value
