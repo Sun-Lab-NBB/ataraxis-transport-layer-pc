@@ -1,11 +1,11 @@
 /**
  * @file
- * @brief The header-only file that stores all assets intended to be shared between SerialTransferProtocol library
+ * @brief The header-only file that stores all assets intended to be shared between SerializedTransferProtocol library
  * classes wrapped into a common namespace.
  *
  * @subsection description Description:
  *
- * This file aggregates all general assets that have to be shared between multiple classes of the SerialTransferProtocol
+ * This file aggregates all general assets that have to be shared between multiple classes of the SerializedTransferProtocol
  * library.
  *
  * This file contains:
@@ -25,7 +25,7 @@
 /**
  * @namespace stp_shared_assets
  * @brief Provides all assets (structures, enumerations, functions) that are intended to be shared between the classes
- * of the SerialTransferProtocol library.
+ * of the SerializedTransferProtocol library.
  *
  * The shared assets are primarily used to simplify library development by storing co-dependent assets in the
  * same place. Additionally, it simplifies using these assets with template classes (currently only CRCProcessor) from
@@ -38,7 +38,7 @@ namespace stp_shared_assets
      * @brief Assigns meaningful names to all status codes used by the COBSProcessor class.
      *
      * @note Due to a unified approach to error-code handling in this library, this enumeration should only use code
-     * values in the range of 51 through 100. This is to simplify chained error handling in the SerialTransferProtocol
+     * values in the range of 51 through 100. This is to simplify chained error handling in the SerializedTransferProtocol
      * class of the library.
      */
     enum class kCOBSProcessorCodes : uint8_t
@@ -63,7 +63,7 @@ namespace stp_shared_assets
      * @brief Assigns meaningful names to all status codes used by the CRCProcessor class.
      *
      * @note Due to a unified approach to error-code handling in this library, this enumeration should only use code
-     * values in the range of 51 through 100. This is to simplify chained error handling in the SerialTransferProtocol
+     * values in the range of 51 through 100. This is to simplify chained error handling in the SerializedTransferProtocol
      * class of the library.
      */
     enum class kCRCProcessorCodes : uint8_t
@@ -78,14 +78,14 @@ namespace stp_shared_assets
     };
 
     /**
-     * @enum kSerialTransferProtocolStatusCodes
-     * @brief Assigns meaningful names to all status codes used by the SerialTransferProtocol class.
+     * @enum kSerializedTransferProtocolStatusCodes
+     * @brief Assigns meaningful names to all status codes used by the SerializedTransferProtocol class.
      *
      * @note Due to a unified approach to error-code handling in this library, this enumeration should only use code
-     * values in the range of 101 through 150. This is to simplify chained error handling in the SerialTransferProtocol
+     * values in the range of 101 through 150. This is to simplify chained error handling in the SerializedTransferProtocol
      * class of the library.
      */
-    enum class kSerialTransferProtocolStatusCodes : uint8_t
+    enum class kSerializedTransferProtocolStatusCodes : uint8_t
     {
         kStandby                      = 101,  ///< The default value used to initialize the transfer_status variable
         kPacketConstructed            = 102,  ///< Packet construction succeeded

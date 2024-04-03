@@ -1,4 +1,4 @@
-"""This file stores the SerialTransferProtocol class, which provides the high-level API that encapsulates all methods
+"""This file stores the SerializedTransferProtocol class, which provides the high-level API that encapsulates all methods
 necessary to bidirectionally communicate with microcontroller devices running the C-version of this library. All
 features of the class are available through 4 main methods: write_data(), send_data(), receive_data() and read_data().
 See method and class docstrings for more information.
@@ -16,9 +16,9 @@ from serial.tools import list_ports
 from src.helper_modules import COBSProcessor, CRCProcessor, ElapsedTimer, SerialMock
 
 
-class SerialTransferProtocol:
+class SerializedTransferProtocol:
     """Provides the high-level API that encapsulates all methods necessary to bidirectionally communicate with
-    microcontrollers running the C-version of the SerialTransferProtocol library.
+    microcontrollers running the C-version of the SerializedTransferProtocol library.
 
     This class functions as a central hub that calls various internal and external helper methods and fully encapsulates
     the serial port interface (via pySerial third-party library). Most of this class is hidden behind private attributes
@@ -174,7 +174,7 @@ class SerialTransferProtocol:
         initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
         final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
         maximum_transmitted_payload_size: int = 254,
-        minimum_received_payload_size: Optional[int] = None,
+        minimum_received_payload_size: int = 1,
         start_byte: int = 129,
         delimiter_byte: int = 0,
         timeout: int = 20000,
@@ -184,20 +184,20 @@ class SerialTransferProtocol:
         # Ensures that the class is initialized properly by catching possible class configuration argument errors.
         if start_byte == delimiter_byte:
             error_message = (
-                f"Unable to initialize SerialTransferProtocol class. 'start_byte' and 'delimiter_byte' arguments "
+                f"Unable to initialize SerializedTransferProtocol class. 'start_byte' and 'delimiter_byte' arguments "
                 f"cannot be set to the same value ({start_byte})."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
         elif maximum_transmitted_payload_size > 254:
             error_message = (
-                f"Unable to initialize SerialTransferProtocol class. 'maximum_transmitted_payload_size' argument value "
-                f"({maximum_transmitted_payload_size}) cannot exceed 254."
+                f"Unable to initialize SerializedTransferProtocol class. 'maximum_transmitted_payload_size' argument "
+                f"value ({maximum_transmitted_payload_size}) cannot exceed 254."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
         elif not (1 <= minimum_received_payload_size <= 254):
             error_message = (
-                f"Unable to initialize SerialTransferProtocol class. 'minimum_received_payload_size' argument value "
-                f"({minimum_received_payload_size}) must be between 1 and 254 (inclusive)."
+                f"Unable to initialize SerializedTransferProtocol class. 'minimum_received_payload_size' argument "
+                f"value ({minimum_received_payload_size}) must be between 1 and 254 (inclusive)."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -242,7 +242,7 @@ class SerialTransferProtocol:
 
         # Opens (connects to) the serial port. Cycles closing and opening to ensure the port is opened if it exists at
         # the cost of potentially non-graciously replacing whatever is using the port at the time of instantiating
-        # SerialTransferProtocol class. This may not be required on all platforms, but the original developer used
+        # SerializedTransferProtocol class. This may not be required on all platforms, but the original developer used
         # the combination fo platformio and Windows which was notoriously bad at releasing the port ownership after
         # uploading controller firmware.
         self.__port.close()
@@ -256,7 +256,7 @@ class SerialTransferProtocol:
     def __repr__(self) -> str:
         if isinstance(self.__port, serial.Serial):
             repr_message = (
-                f"SerialTransferProtocol(port='{self.__port.name}', baudrate={self.__port.baudrate}, polynomial="
+                f"SerializedTransferProtocol(port='{self.__port.name}', baudrate={self.__port.baudrate}, polynomial="
                 f"{self.__crc_processor.polynomial}, initial_crc_value={self.__crc_processor.initial_crc_value}, "
                 f"final_xor_value={self.__crc_processor.final_xor_value}, crc_byte_length="
                 f"{self.__crc_processor.crc_byte_length} start_byte={self.__start_byte}, delimiter_byte="
@@ -266,7 +266,7 @@ class SerialTransferProtocol:
             )
         else:
             repr_message = (
-                f"SerialTransferProtocol(port & baudrate=MOCKED, polynomial={self.__crc_processor.polynomial}, "
+                f"SerializedTransferProtocol(port & baudrate=MOCKED, polynomial={self.__crc_processor.polynomial}, "
                 f"initial_crc_value={self.__crc_processor.initial_crc_value}, final_xor_value="
                 f"{self.__crc_processor.final_xor_value}, crc_byte_length={self.__crc_processor.crc_byte_length}, "
                 f"start_byte={self.__start_byte}, delimiter_byte={self.__delimiter_byte}, timeout={self.__timeout} us, "
@@ -1137,10 +1137,10 @@ class SerialTransferProtocol:
             the incoming packet. In this case, any 'leftover' bytes are saved to the class __leftover_bytes attribute
             and reused by the next call to __parse_packet().
 
-            This method assumes the sender uses the same CRC type as the SerialTransferProtocol class, as it directly
-            controls the CRC checksum byte-size. Similarly, it assumes teh sender uses the same delimiter and start_byte
-            values as the class instance. If any of these assumptions are violated, this method will not parse the
-            packet data correctly.
+            This method assumes the sender uses the same CRC type as the SerializedTransferProtocol class, as it
+            directly controls the CRC checksum byte-size. Similarly, it assumes teh sender uses the same delimiter and
+            start_byte values as the class instance. If any of these assumptions are violated, this method will not
+            parse the packet data correctly.
 
             Returned static codes: 101 -> no bytes to read. 102 -> start byte not found error. 103 -> reception staled
             at acquiring the payload_size / packet_size. 104 -> payload size too large (not valid). 105 -> reception

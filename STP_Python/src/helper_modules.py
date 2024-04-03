@@ -1,8 +1,8 @@
-"""This file stores low-level helper modules that are used by the main SerialTransferProtocol class to support its
+"""This file stores low-level helper modules that are used by the main SerializedTransferProtocol class to support its
 runtime.
 
 Specifically, this includes the COBSProcessor and CRCProcessor modules used to process the transferred data before and
-after transmission. Also, the SerialMock class used to test SerialTransferProtocol's transmission and reception
+after transmission. Also, the SerialMock class used to test SerializedTransferProtocol's transmission and reception
 behavior. Finally, stores the ElapsedTimer class, which is a custom perf_counter_ns-based implementation of
 elapsedMillis C++ library, used to time serial packet reception delays.
 
@@ -12,17 +12,19 @@ whenever they are first called by the main class and achieves execution speeds t
 equivalent pure-python implementation. As a downside, many python features are not supported by numba optimized classes
 and, to improve user experience, the compiled classes are wrapped into equally named pure-python classes to provide a
 more standard python API. The API is primarily intended for unit testing and users who want to use any of the helper
-modules without using the main SerialTransferProtocol class.
+modules without using the main SerializedTransferProtocol class.
 
 The SerialMock class is a pure-python class whose main job is to 'overload' the methods of the pySerial's Serial class
-so that SerialTransferProtocol can be tested without a properly configured microcontroller (and also without trying to
-guess which specific COM port (if any) is available for each user running the tests). It has no practical use past that
-specific role.
+so that SerializedTransferProtocol can be tested without a properly configured microcontroller (and also without trying
+to guess which specific COM port (if any) is available for each user running the tests). It has no practical use past
+that specific role.
 """
 
 import textwrap
 import time as tm
 from typing import Any, Literal, Union
+import zmq
+import threading
 
 import numpy as np
 from numba import njit, uint8, uint16, uint32
@@ -43,8 +45,8 @@ class COBSProcessor:
         automatically converts internal class runtime status codes into exception error messages where appropriate to
         notify users about runtime errors.
 
-        For the maximum execution speed, you can access the private methods directly (see SerialTransferProtocol class),
-        although this is highly discouraged.
+        For the maximum execution speed, you can access the private methods directly (see SerializedTransferProtocol
+        class), although this is highly discouraged.
 
     Attributes:
         __processor: The private instance of the jit-compiled _COBSProcessor class which actually does all the required
@@ -593,8 +595,8 @@ class CRCProcessor:
         automatically converts internal class runtime status codes into exception error messages where appropriate to
         notify users about runtime errors.
 
-        For the maximum execution speed, you can access the private methods directly (see SerialTransferProtocol class),
-        although this is highly discouraged.
+        For the maximum execution speed, you can access the private methods directly (see SerializedTransferProtocol
+        class), although this is highly discouraged.
 
         To increase runtime speed, this class generates a static CRC lookup table using the input polynomial, which is
         subsequently used to calculate CRC checksums. This statically reserves 256, 512 or 1024 bytes of RAM to store
@@ -763,7 +765,7 @@ class CRCProcessor:
     def convert_crc_checksum_to_bytes(self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]) -> np.ndarray:
         """Converts the input numpy integer checksum into a byte numpy array.
 
-        This method converts a multi-byte CRC checksum into multiple bytes and writes them to a numpy uint8 array
+        This method converts a multibyte CRC checksum into multiple bytes and writes them to a numpy uint8 array
         starting with the highest byte of the checksum.
 
         Returns:
@@ -1331,12 +1333,12 @@ class CRCProcessor:
 
 
 class SerialMock:
-    """Simulates the methods of pySerial.Serial class used by SerialTransferProtocol class to support unit-testing.
+    """Simulates the methods of pySerial.Serial class used by SerializedTransferProtocol class to support unit-testing.
 
     This class only provides the methods that are either helpful for testing (like resetting the Mock class buffers)
-    or are directly used by the SerialTransferProtocol class (reading and writing data, opening / closing the port,
-    etc.). For example, since SerialTransferProtocol class does not use readlines() method, this class does not offer
-    its mock implementation.
+    or are directly used by the SerializedTransferProtocol class (reading and writing data, opening / closing the port,
+    etc.). For example, since SerializedTransferProtocol class does not use readlines() method, this class does not
+    offer its mock implementation.
 
     Notes:
         This class is used in place of the actual Serial class to enable unit-testing of main class methods without
@@ -1346,7 +1348,7 @@ class SerialMock:
 
         Also, unlike its prototype, this class exposes the rx_ and tx_ buffers while using similar logic for adding data
         to the buffers as the real Serial class. This allows using this class to fully test and verify all
-        SerialTransferProtocol class methods and expect them to behave identically during real runtime.
+        SerializedTransferProtocol class methods and expect them to behave identically during real runtime.
 
     Attributes:
         is_open: A boolean flag that tracks the state of the serial port.
@@ -1495,7 +1497,7 @@ class ElapsedTimer:
 
         self.__elapsed_reference = tm.perf_counter_ns()  # Baselines the timer at instantiation
 
-        # Since elapsed property uses convert_time() and convert_time() is an njit method, it is beneficial to call the
+        # Since elapsed property uses convert_time() and convert_time() is an nit method, it is beneficial to call the
         # method once to force JIT compilation. All further calls will be made without the compilation overhead.
         _ = self.elapsed
 
@@ -1525,3 +1527,44 @@ class ElapsedTimer:
         numba to maximize method runtime speeds (totally an overkill, but oh well).
         """
         return np.round((current_time - baseline_time) / divider, 3)
+
+class ZeroMQSerial:
+    def __init__(self, port, baudrate=9600, timeout=1):
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.PAIR)
+        self.socket.bind(f"tcp://127.0.0.1:{port}")
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.buffer = bytearray()
+        self.lock = threading.Lock()
+        self.receiver_thread = threading.Thread(target=self._receiver)
+        self.receiver_thread.daemon = True
+        self.receiver_thread.start()
+
+    def _receiver(self):
+        while True:
+            try:
+                data = self.socket.recv(flags=zmq.NOBLOCK)
+                with self.lock:
+                    self.buffer.extend(data)
+            except zmq.Again:
+                time.sleep(1 / self.baudrate)
+
+    def read(self, size=1):
+        start_time = time.time()
+        while len(self.buffer) < size:
+            if time.time() - start_time > self.timeout:
+                break
+            time.sleep(0.001)
+        with self.lock:
+            data = self.buffer[:size]
+            self.buffer = self.buffer[size:]
+        return bytes(data)
+
+    def write(self, data):
+        self.socket.send(data)
+
+    @property
+    def in_waiting(self):
+        with self.lock:
+            return len(self.buffer)

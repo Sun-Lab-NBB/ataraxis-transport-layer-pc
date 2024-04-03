@@ -1,6 +1,6 @@
 // Due to certain issues with reconnecting to teensy boards for running separate test suits, this test suit acts as a
 // single centralized hub for running all available tests for all supported classes and methods of the
-// SerialTransferProtocol library. Declare all required tests using separate functions (as needed) and then add the
+// SerializedTransferProtocol library. Declare all required tests using separate functions (as needed) and then add the
 // tests to be evaluated to the RunUnityTests function at the bottom of this file. Comment unused tests out if needed.
 // The downside of this approach is higher compilation time and embedded controller resource usage, but this is a
 // relatively minor concern for the target teensy boards. For Arduino boards, you may have to manually enable only a
@@ -12,8 +12,8 @@
 #include <cstring>                     // For std::memcpy
 #include "cobs_processor.h"            // COBSProcessor class
 #include "crc_processor.h"             // CRCProcessor class
-#include "serial_transfer_protocol.h"  // SerialTransferProtocol class
-#include "stream_mock.h"               // StreamMock class required for SerialTransferProtocol class testing
+#include "serialized_transfer_protocol.h"  // SerializedTransferProtocol class
+#include "stream_mock.h"               // StreamMock class required for SerializedTransferProtocol class testing
 
 // This function is called automatically before each test function. Currently not used.
 void setUp(void)
@@ -529,7 +529,7 @@ void TestCRCProcessorErrors(void)
 }
 
 // Tests that the StreamMock class methods function as expected. This is a fairly minor, but necessary test to carry out
-// prior to testing major SerialTransferProtocol methods.
+// prior to testing major SerializedTransferProtocol methods.
 void TestStreamMock(void)
 {
     // Instantiates the StreamMock class object to be tested. StreamMock mimics the base Stream class, but exposes
@@ -639,16 +639,16 @@ void TestStreamMock(void)
     TEST_ASSERT_EQUAL_INT16(-1, peeked_value);
 }
 
-// Tests WriteData() and ReadData() methods of SerialTransferProtocol class. The test is performed as a cycle to allow
+// Tests WriteData() and ReadData() methods of SerializedTransferProtocol class. The test is performed as a cycle to allow
 // reusing test assets. Tests writing and reading a structure, an array and a concrete value. Also, this is the only
 // method that verifies that the class variables initialize to the expected constant values and that tests using
 // different transmission and reception buffer sizes.
-void TestSerialTransferProtocolBufferManipulation(void)
+void TestSerializedTransferProtocolBufferManipulation(void)
 {
-    // Instantiates the mock serial class and the tested SerialTransferProtocol class
+    // Instantiates the mock serial class and the tested SerializedTransferProtocol class
     StreamMock mock_port;
     // Note, uses different maximum payload size for the Rx and Tx buffers
-    SerialTransferProtocol<uint16_t, 254, 160> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
+    SerializedTransferProtocol<uint16_t, 254, 160> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
 
     // Verifies the performance of payload and buffer size accessor (get) methods
     TEST_ASSERT_EQUAL_UINT16(254, protocol.get_maximum_tx_payload_size());
@@ -677,7 +677,7 @@ void TestSerialTransferProtocolBufferManipulation(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_rx_buffer, test_rx_buffer, rx_buffer_size);
 
     // Transfer Status
-    uint8_t expected_code = static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kStandby);
+    uint8_t expected_code = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kStandby);
     TEST_ASSERT_EQUAL_UINT8(expected_code, protocol.transfer_status);
 
     // Byte in Buffer trackers
@@ -706,7 +706,7 @@ void TestSerialTransferProtocolBufferManipulation(void)
 
     // Verifies that the buffer status matches the expected status (bytes successfully written)
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kBytesWrittenToBuffer,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kBytesWrittenToBuffer,
         protocol.transfer_status
     );
 
@@ -816,7 +816,7 @@ void TestSerialTransferProtocolBufferManipulation(void)
 
     // Verifies that the buffer status matches the expected status (bytes successfully read)
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kBytesReadFromBuffer,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kBytesReadFromBuffer,
         protocol.transfer_status
     );
 
@@ -842,16 +842,16 @@ void TestSerialTransferProtocolBufferManipulation(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_tx_buffer, test_rx_buffer, rx_buffer_size);
 }
 
-// Tests expected error handling by WriteData() and ReadData() methods of SerialTransferProtocol class. This is a fairly
+// Tests expected error handling by WriteData() and ReadData() methods of SerializedTransferProtocol class. This is a fairly
 // minor function, as buffer reading and writing can only fail in a small subset of cases. Uses the same payload size
 // for the _reception_buffer and the _transmission_buffer. Note, this function reserves a lot of memory for all of its
 // buffers (> 2kB), so it is advised to disable it for lower-end boards like Uno.
-void TestSerialTransferProtocolBufferManipulationErrors(void)
+void TestSerializedTransferProtocolBufferManipulationErrors(void)
 {
     // Initializes the tested class
     StreamMock mock_port;
     // Uses identical rx and tx payload sizes
-    SerialTransferProtocol<uint16_t, 254, 254> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
+    SerializedTransferProtocol<uint16_t, 254, 254> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
 
     // Initializes a test variable
     uint8_t test_value = 223;
@@ -860,7 +860,7 @@ void TestSerialTransferProtocolBufferManipulationErrors(void)
     // payload size and status code
     uint16_t final_payload_index = protocol.WriteData(test_value, 254 - 1);
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kBytesWrittenToBuffer,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kBytesWrittenToBuffer,
         protocol.transfer_status
     );
 
@@ -868,7 +868,7 @@ void TestSerialTransferProtocolBufferManipulationErrors(void)
     uint16_t error_index = protocol.WriteData(test_value, final_payload_index);
     TEST_ASSERT_EQUAL_UINT16(0, error_index);
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kWritePayloadTooSmallError,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kWritePayloadTooSmallError,
         protocol.transfer_status
     );
 
@@ -880,7 +880,7 @@ void TestSerialTransferProtocolBufferManipulationErrors(void)
     // Verifies that reading from the end of the payload functions as expected
     final_payload_index = protocol.ReadData(test_value, 254 - 1);
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kBytesReadFromBuffer,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kBytesReadFromBuffer,
         protocol.transfer_status
     );
 
@@ -888,25 +888,25 @@ void TestSerialTransferProtocolBufferManipulationErrors(void)
     error_index = protocol.ReadData(test_value, final_payload_index);
     TEST_ASSERT_EQUAL_UINT16(0, error_index);
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kReadPayloadTooSmallError,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kReadPayloadTooSmallError,
         protocol.transfer_status
     );
 }
 
-// Tests major SendData() and ReceiveData() methods of the SerialTransferProtocol class, alongside all used
+// Tests major SendData() and ReceiveData() methods of the SerializedTransferProtocol class, alongside all used
 // sub-methods (ParsePacket(), ValidatePacket(), ConstructPacket(), private for the class) and auxiliary methods
 // (Available(), public, but not frequently used by-themselves). Note, assumes lower level tests have already verified
 // the functionality of StreamMock and buffer manipulation methods, which are also used here to facilitate testing.
-void TestSerialTransferProtocolDataTransmission(void)
+void TestSerializedTransferProtocolDataTransmission(void)
 {
     // Initializes the tested class
     StreamMock mock_port;
     // Uses identical rx and tx payload sizes
-    SerialTransferProtocol<uint16_t, 254, 254> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
+    SerializedTransferProtocol<uint16_t, 254, 254> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
 
     // Instantiates separate instances of encoder classes used to verify processing results
     COBSProcessor cobs_class;
-    // CRC settings HAVE to be the same as used by the SerialTransferProtocol instance.
+    // CRC settings HAVE to be the same as used by the SerializedTransferProtocol instance.
     CRCProcessor<uint16_t> crc_class = CRCProcessor<uint16_t>(0x1021, 0xFFFF, 0x0000);
 
     // Generates the test array to be packaged and 'sent'
@@ -925,7 +925,7 @@ void TestSerialTransferProtocolDataTransmission(void)
     // Verifies that the data has been successfully sent to the Stream buffer
     TEST_ASSERT_TRUE(sent_status);
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketSent,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketSent,
         protocol.transfer_status
     );
 
@@ -1001,7 +1001,7 @@ void TestSerialTransferProtocolDataTransmission(void)
 
     // Verifies that the data has been successfully received from the Stream buffer
     TEST_ASSERT_EQUAL_UINT8(
-        stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketReceived,
+        stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketReceived,
         protocol.transfer_status
     );
     TEST_ASSERT_TRUE(receive_status);
@@ -1048,15 +1048,15 @@ void TestSerialTransferProtocolDataTransmission(void)
 }
 
 // Tests the errors and, where applicable, edge cases associated with the SendData() and ReceiveData() methods of the
-// SerialTransferProtocol class. No auxiliary methods are tested here since they do not raise any errors. Note, focuses
-// specifically on errors raised by SerialTransferProtocol class methods, COBS and CRC errors should be tested by their
+// SerializedTransferProtocol class. No auxiliary methods are tested here since they do not raise any errors. Note, focuses
+// specifically on errors raised by SerializedTransferProtocol class methods, COBS and CRC errors should be tested by their
 // respective test functions. Also, does not test errors that are generally impossible to encounter without modifying
 // the class code, such as COBS encoding due to incorrect overhead placeholder value error.
-void TestSerialTransferProtocolDataTransmissionErrors(void)
+void TestSerializedTransferProtocolDataTransmissionErrors(void)
 {
     // Initializes the tested class
     StreamMock mock_port;
-    SerialTransferProtocol<uint16_t, 20, 20> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
+    SerializedTransferProtocol<uint16_t, 20, 20> protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, false);
 
     // Instantiates crc encoder class separately to generate test data
     CRCProcessor<uint16_t> crc_class = CRCProcessor<uint16_t>(0x1021, 0xFFFF, 0x0000);
@@ -1098,7 +1098,7 @@ void TestSerialTransferProtocolDataTransmissionErrors(void)
     mock_port.rx_buffer[0] = 0;  // Removes the start byte
     protocol.ReceiveData();
     TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kNoBytesToParseFromBuffer),
+        static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kNoBytesToParseFromBuffer),
         protocol.transfer_status
     );
     mock_port.rx_buffer_index = 0;  // Resets readout index back to 0
@@ -1107,19 +1107,19 @@ void TestSerialTransferProtocolDataTransmissionErrors(void)
     // wasteful as this reserves another 540 bytes of memory for little reason, but this is the price of late fixes to
     // class logic, I guess. Uno owners: feel free to comment this line and the test below out, these are the only
     // places 'new protocol class is used to make it easy to remove'
-    SerialTransferProtocol<uint16_t, 20, 20> new_protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, true);
+    SerializedTransferProtocol<uint16_t, 20, 20> new_protocol(mock_port, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000, true);
 
     // Verifies that when Start Bytes are enabled, the algorithm correctly returns the error code.
     new_protocol.ReceiveData();
     TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketStartByteNotFoundError),
+        static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketStartByteNotFoundError),
         new_protocol.transfer_status
     );
     mock_port.rx_buffer[0]    = 129;  // Restores the start byte
     mock_port.rx_buffer_index = 0;    // Resets readout index back to 0
 
     // Sets the entire rx_buffer to valid non-delimiter byte-values for the test below to work, as it has to consume
-    // most of the rx_buffer to run out of the _reception_buffer space of the SerialTransferProtocol class.
+    // most of the rx_buffer to run out of the _reception_buffer space of the SerializedTransferProtocol class.
     for (uint16_t i = 15; i < mock_port.buffer_size; i++)
     {
         mock_port.rx_buffer[i] = 11;
@@ -1130,7 +1130,7 @@ void TestSerialTransferProtocolDataTransmissionErrors(void)
     mock_port.rx_buffer[12] = 11;  // Removes the delimiter byte
     protocol.ReceiveData();
     TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketOutOfBufferSpaceError),
+        static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketOutOfBufferSpaceError),
         protocol.transfer_status
     );
     mock_port.rx_buffer[12]   = 0;  // Restores the delimiter byte value
@@ -1142,7 +1142,7 @@ void TestSerialTransferProtocolDataTransmissionErrors(void)
     mock_port.rx_buffer[5] = -1;  // Sets byte 5 to an 'invalid' value to simulate not receiving valid bytes at index 5
     protocol.ReceiveData();
     TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketTimeoutError),
+        static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketTimeoutError),
         protocol.transfer_status
     );
     mock_port.rx_buffer[5]    = packet_and_postamble[4];  // Restores the invalidated byte back to the original value
@@ -1153,7 +1153,7 @@ void TestSerialTransferProtocolDataTransmissionErrors(void)
     mock_port.rx_buffer[13] = -1;  // Uses as a 'no data' placeholder instead of the first postamble byte value
     protocol.ReceiveData();
     TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPostambleTimeoutError),
+        static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPostambleTimeoutError),
         protocol.transfer_status
     );
     // Note, does not restore the CRC byte here, as it is used for the test below
@@ -1163,14 +1163,14 @@ void TestSerialTransferProtocolDataTransmissionErrors(void)
     mock_port.rx_buffer[13] = 123;  // Fake CRC byte, overwrites the -1 code from the test above
     protocol.ReceiveData();
     TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kCRCCheckFailed),
+        static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kCRCCheckFailed),
         protocol.transfer_status
     );
     mock_port.rx_buffer[13]   = static_cast<int16_t>(packet_and_postamble[12]);  // Restores the CRC byte value
     mock_port.rx_buffer_index = 0;                                               // Resets readout index back to 0
 
     // Verifies that the errors originating from sub-methods (in this case, the COBSProcessor class method) are properly
-    // raised and handled by the caller methods of the SerialTransferProtocol class. Specifically, expects COBS errors
+    // raised and handled by the caller methods of the SerializedTransferProtocol class. Specifically, expects COBS errors
     // to be raised to the main class level and saved to the transfer_status variable. To facilitate this test, sets
     // the packet to a value below the minimal value supported by the COBSProcessor. Note! Assumes default COBSProcessor
     // limits are used here (3 byte minimum for any packet).
@@ -1217,12 +1217,12 @@ int RunUnityTests(void)
     RUN_TEST(TestStreamMock);
 
     // Serial Transfer Protocol Write / Read Data
-    RUN_TEST(TestSerialTransferProtocolBufferManipulation);
-    RUN_TEST(TestSerialTransferProtocolBufferManipulationErrors);
+    RUN_TEST(TestSerializedTransferProtocolBufferManipulation);
+    RUN_TEST(TestSerializedTransferProtocolBufferManipulationErrors);
 
     // Serial Transfer Protocol Send / Receive Data
-    RUN_TEST(TestSerialTransferProtocolDataTransmission);
-    RUN_TEST(TestSerialTransferProtocolDataTransmissionErrors);
+    RUN_TEST(TestSerializedTransferProtocolDataTransmission);
+    RUN_TEST(TestSerializedTransferProtocolDataTransmissionErrors);
 
     return UNITY_END();
 }

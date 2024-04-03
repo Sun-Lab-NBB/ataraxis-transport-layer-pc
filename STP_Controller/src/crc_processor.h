@@ -82,7 +82,7 @@
  *
  * @attention This class makes certain assumptions about the layout of the input buffers and, additionally, is very
  * sensitive to the correct constructor configuration (due to the high versatility of CRC-table generation method). Due
- * to these reasons, this class is intended to be used exclusively by the SerialTransferProtocol class, which
+ * to these reasons, this class is intended to be used exclusively by the SerializedTransferProtocol class, which
  * appropriately handles all assumptions and configuration requirements.
  *
  * @tparam PolynomialType The datatype of the CRC polynomial to be used by the class. Valid types are uint8_t, uint16_t
@@ -152,7 +152,7 @@ class CRCProcessor
      * This method loops over packet_size bytes starting with start_index inside the buffer and iteratively computes a
      * CRC checksum for the data.
      *
-     * The method is primarily intended to be used on the buffers of the SerialTransferProtocol class and was
+     * The method is primarily intended to be used on the buffers of the SerializedTransferProtocol class and was
      * constructed to work with their specific layout. However, the method is implemented in a way that it can be
      * flexibly configured for any buffer layout.
      *
@@ -170,7 +170,7 @@ class CRCProcessor
      * fits inside the buffer and will not lead to an out-of-bounds access. This guards against undefined behavior and
      * potential data corruption.
      * @param buffer The buffer that stores the data to be checksummed. This is intended to be a well-formed and
-     * COBS-encoded packet to be sent to the PC using SerialTransferProtocol class. That said, the method will checksum
+     * COBS-encoded packet to be sent to the PC using SerializedTransferProtocol class. That said, the method will checksum
      * any valid byte-array.
      * @param start_index The index that points to the first byte-value of the portion of the data inside the input
      * buffer to be checksummed (where to start check-summing from). This is helpful to limit the checksum calculation

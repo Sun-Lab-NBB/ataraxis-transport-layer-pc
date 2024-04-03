@@ -21,8 +21,8 @@
  * - kCOBSProcessorParameters structure that is used to statically configure class behavior.
  *
  * @subsection developer_notes Developer Notes:
- * This class is a helper class that is used by the main SerialTransferProtocol class to encode and decode payloads
- * using COBS scheme. It is not meant to be used on its own and should always be called from the SerialTransferProtocol
+ * This class is a helper class that is used by the main SerializedTransferProtocol class to encode and decode payloads
+ * using COBS scheme. It is not meant to be used on its own and should always be called from the SerializedTransferProtocol
  * class. The class methods expect particularly formatted and organized inputs to function properly and will behave
  * unexpectedly if input expectations are not met.
  *
@@ -67,8 +67,8 @@
  * buffer at a maximum needs to be of size 254+2 == 256 bytes. Ths reserves index 0 for overhead byte and index 255 for
  * delimiter byte.
  *
- * @note Do not use this class outside of the SerialTransferProtocol class unless you know what you are doing, as it is
- * the job of the SerialTransferProtocol class to make sure the data buffer(s) used by the methods of this class are
+ * @note Do not use this class outside of the SerializedTransferProtocol class unless you know what you are doing, as it is
+ * the job of the SerializedTransferProtocol class to make sure the data buffer(s) used by the methods of this class are
  * configured appropriately. If buffers are not appropriately sized, this can lead to undefined behavior and memory
  * corruption.
  *
@@ -97,7 +97,7 @@ class COBSProcessor
      * @attnetion It is generally not recommended to change these parameters as they are currently configured to allow
      * any valid input to be COBS-encoded. These parameter only control maximum and minimum input sizes, within these
      * limits the input can be of any supported size. The input itself can be modified through configuring appropriate
-     * SerialTransferProtocol parameters.
+     * SerializedTransferProtocol parameters.
      */
     struct kCOBSProcessorParameters
     {
@@ -132,7 +132,7 @@ class COBSProcessor
      * will behave unexpectedly and may corrupt your data.
      *
      * @note To ensure assumptions are met, this method is not intended to be called directly. Instead, it should be
-     * called by the SerialTransferProtocol class.
+     * called by the SerializedTransferProtocol class.
      *
      * @tparam buffer_size The size of the input buffer array. This size is used to ensure any memory modifications
      * carried out using the buffer stay within the bounds of the buffer. This prevents undefined behavior and / or data
@@ -294,7 +294,7 @@ class COBSProcessor
      * will not be able to decode the packet.
      *
      * @note To ensure assumptions are met, this method is not intended to be called directly. Instead, it should be
-     * called by the SerialTransferProtocol class.
+     * called by the SerializedTransferProtocol class.
      *
      * @tparam buffer_size The size of the input buffer, calculated automatically via template. This ensures that all
      * buffer-manipulating operations are performed within the buffer boundaries. This is crucial for avoiding
@@ -306,7 +306,7 @@ class COBSProcessor
      * case the size should include the overhead byte and the delimiter byte. This is used as an extra security check to
      * make sure the method will not attempt to jump out of the payload bounds and as a fallback if CRC check fails to
      * detect any data corruption / errors introduced during the transmission. Has to be 3 bytes at a minimum and 256
-     * bytes at a maximum. Should not include CRC bytes or any other postamble information (See SerialTransferProtocol
+     * bytes at a maximum. Should not include CRC bytes or any other postamble information (See SerializedTransferProtocol
      * class for more details).
      * @param delimiter_byte_value The value between 0 and 255 (any value that fits into uint8_t range) that was used
      * as packet delimiter. The methods assumes that all instances of this value inside the payload are replaced with

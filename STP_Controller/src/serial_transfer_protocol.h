@@ -1,6 +1,6 @@
 /**
  * @file
- * @brief The header file for the SerialTransferProtocol class, which aggregates all methods for sending and receiving
+ * @brief The header file for the SerializedTransferProtocol class, which aggregates all methods for sending and receiving
  * data over Serial Stream interface (USB / UART).
  *
  * @subsection description Description:
@@ -33,7 +33,7 @@
  *
  * @subsection developer_notes Developer Notes:
  * This class functions as the root hub of the library, relying on CRCProcessor and COBSProcessor helper-classes to
- * cary out the specific packet processing and integrity verification steps. The SerialTransferProtocol class abstracts
+ * cary out the specific packet processing and integrity verification steps. The SerializedTransferProtocol class abstracts
  * these two classes and a bundled Stream class instance by providing an API that can be used to realize serial
  * communication functionality through 4 major methods (SendData(), ReceiveData(), WriteData() and
  * ReadData()).
@@ -84,7 +84,7 @@
 #include "stdint.h"
 
 /**
- * @class SerialTransferProtocol
+ * @class SerializedTransferProtocol
  * @brief Provides a collection of methods that can be used to send and receive packetised data over the serial Stream
  * interface (USB or UART).
  *
@@ -139,8 +139,8 @@
  * uint8_t delimiter_byte = 0;
  * uint32_t timeout = 20000; // In microseconds
  *
- * // Instantiates a new SerialTransferProtocol object
- * SerialTransferProtocol<uint16_t, maximum_tx_payload_size, maximum_rx_payload_size> stp_class(
+ * // Instantiates a new SerializedTransferProtocol object
+ * SerializedTransferProtocol<uint16_t, maximum_tx_payload_size, maximum_rx_payload_size> stp_class(
  * Serial,
  * polynomial,
  * initial_value,
@@ -155,38 +155,38 @@ template <
     typename PolynomialType,
     const uint8_t kMaximumTransmittedPayloadSize,
     const uint8_t kMaximumReceivedPayloadSize>
-class SerialTransferProtocol
+class SerializedTransferProtocol
 {
     // Ensures that the class only accepts uint8, 16 or 32 as valid CRC types, as no other type can be used to store a
     // CRC polynomial at the time of writing.
     static_assert(
         std::is_same_v<PolynomialType, uint8_t> || std::is_same_v<PolynomialType, uint16_t> ||
             std::is_same_v<PolynomialType, uint32_t>,
-        "SerialTransferProtocol class template PolynomialType argument must be either uint8_t, uint16_t, or uint32_t."
+        "SerializedTransferProtocol class template PolynomialType argument must be either uint8_t, uint16_t, or uint32_t."
     );
 
     // Verifies that the maximum Transmitted and Received payload sizes do not exceed 254 bytes (due to COBS, this is
     // the maximum supported size).
     static_assert(
         kMaximumTransmittedPayloadSize < 255,
-        "SerialTransferProtocol class template MaximumTxPayloadSize must be less than 255."
+        "SerializedTransferProtocol class template MaximumTxPayloadSize must be less than 255."
     );
     static_assert(
         kMaximumReceivedPayloadSize < 255,
-        "SerialTransferProtocol class template MaximumRxPayloadSize must be less than 255."
+        "SerializedTransferProtocol class template MaximumRxPayloadSize must be less than 255."
     );
 
   public:
     /// Stores the runtime status of the most recently called method. Note, this variable can either store the status
-    /// derived from the kSerialTransferProtocolStatusCodes enumeration if it originates from this class or use the
+    /// derived from the kSerializedTransferProtocolStatusCodes enumeration if it originates from this class or use the
     /// enumerations for the COBSProcessor and CRCProcessor helper classes, if the status (error) originates from one
     /// of these classes. As such, you may need to use all of the enumerations available through stp_shared_assets
     /// namespace to determine the status of the most recently called method. All status codes used by this library are
     /// unique across the library, so any returned byte-code always has a single meaning.
-    uint8_t transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kStandby);
+    uint8_t transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kStandby);
 
     /**
-     * @brief Instantiates a new SerialTransferProtocol object.
+     * @brief Instantiates a new SerializedTransferProtocol object.
      *
      * The constructor resets the _transmission_buffer and _reception_buffer of the instantiated class to 0 following
      * initialization. Also initializes the CRCProcessor class using the provided CRC parameters. Note, the CRCProcessor
@@ -238,8 +238,8 @@ class SerialTransferProtocol
      * uint32_t timeout = 20000; // In microseconds
      * bool allow_start_byte_errors = false;
      *
-     * // Instantiates a new SerialTransferProtocol object
-     * SerialTransferProtocol<uint16_t, maximum_tx_payload_size, maximum_rx_payload_size> stp_class(
+     * // Instantiates a new SerializedTransferProtocol object
+     * SerializedTransferProtocol<uint16_t, maximum_tx_payload_size, maximum_rx_payload_size> stp_class(
      * Serial,
      * polynomial,
      * initial_value,
@@ -251,7 +251,7 @@ class SerialTransferProtocol
      * );
      * @endcode
      */
-    SerialTransferProtocol(
+    SerializedTransferProtocol(
         Stream& communication_port,
         const PolynomialType crc_polynomial = 0x1021,
         const PolynomialType crc_initial_value = 0xFFFF,
@@ -291,7 +291,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * bool available = serial_protocol.Available();
      * @endcode
      */
@@ -321,7 +321,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * serial_protocol.ResetTransmissionBuffer();
      * @endcode
      */
@@ -345,7 +345,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * serial_protocol.ResetReceptionBuffer();
      * @endcode
      */
@@ -375,7 +375,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * uint8_t test_buffer[254];
      * serial_protocol.CopyTxDataToBuffer(test_buffer);
      * @endcode
@@ -413,7 +413,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * uint8_t test_buffer[254];
      * serial_protocol.CopyRxDataToBuffer(test_buffer);
      * @endcode
@@ -450,7 +450,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * uint8_t test_value = 50;
      * serial_protocol.WriteData(test_value); // Saves the test value to the _transmission_buffer payload
      * serial_protocol.CopyTxBufferPayloadToRxBuffer();  // Moves the payload over to the _reception_buffer
@@ -528,13 +528,13 @@ class SerialTransferProtocol
      * @returns bool True if the packet was successfully constructed and sent and false otherwise. If method runtime
      * fails, use the transfer_status variable to determine the reason for the failure, as it would be set to the
      * specific error code of the failed operation. Transfer_status values are guaranteed to uniquely match one of the
-     * enumerators stored inside the kCOBSProcessorCodes, kCRCProcessorCodes or kSerialTransferProtocolStatusCodes
+     * enumerators stored inside the kCOBSProcessorCodes, kCRCProcessorCodes or kSerializedTransferProtocolStatusCodes
      * enumerations available through the stp_shared_assets namespace.
      *
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * bool packet_sent = serial_protocol.SendData();
      * @endcode
      */
@@ -566,7 +566,7 @@ class SerialTransferProtocol
             _port.write(_transmission_buffer, combined_size);
 
             // Communicates that the packet has been sent via the transfer_status variable
-            transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketSent);
+            transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketSent);
 
             // Resets the transmission_buffer after every successful transmission
             ResetTransmissionBuffer();
@@ -596,14 +596,14 @@ class SerialTransferProtocol
      * @returns bool true if the packet was successfully received and unpacked, false otherwise. If method runtime
      * fails, use the transfer_status variable to determine the reason for the failure, as it would be set to the
      * specific error code of the failed operation. Transfer_status values are guaranteed to uniquely match one of the
-     * enumerators stored inside the kCOBSProcessorCodes, kCRCProcessorCodes or kSerialTransferProtocolStatusCodes
+     * enumerators stored inside the kCOBSProcessorCodes, kCRCProcessorCodes or kSerializedTransferProtocolStatusCodes
      * enumerations available through the stp_shared_assets namespace.
      * enumeration.
      *
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * bool data_received = serial_protocol.ReceiveData();
      * @endcode
      */
@@ -644,7 +644,7 @@ class SerialTransferProtocol
         _bytes_in_reception_buffer = payload_size;  // Records the number of unpacked payload bytes to tracker
 
         // Sets the status appropriately and returns 'true' to indicate successful runtime.
-        transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketReceived);
+        transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketReceived);
         return true;
     }
 
@@ -687,7 +687,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * uint16_t value = 44321;
      * uint8_t array[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
      * struct MyStruct
@@ -726,7 +726,7 @@ class SerialTransferProtocol
             // If the payload does not have enough space, returns 0 to indicate no bytes were written and sets
             // transfer_status to the appropriate error code
             transfer_status =
-                static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kWritePayloadTooSmallError);
+                static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kWritePayloadTooSmallError);
             return 0;
         }
 
@@ -751,7 +751,7 @@ class SerialTransferProtocol
 
         // Sets the status code to indicate writing to buffer was successful
         transfer_status =
-            static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kBytesWrittenToBuffer);
+            static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kBytesWrittenToBuffer);
 
         // Also returns the index immediately following the last updated (overwritten) index of the buffer to caller to
         // support chained method calls.
@@ -801,7 +801,7 @@ class SerialTransferProtocol
      * Example usage:
      * @code
      * Serial.begin(9600);
-     * SerialTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
+     * SerializedTransferProtocol<uint16_t, 254, 254> stp_class(Serial, 0x1021, 0xFFFF, 0x0000, 129, 0, 20000);
      * uint16_t value = 44321;
      * uint8_t array[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
      * struct MyStruct
@@ -840,7 +840,7 @@ class SerialTransferProtocol
             // If the payload does not have enough bytes, returns 0 to indicate no bytes were read and sets
             // transfer_status to the appropriate error code
             transfer_status =
-                static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kReadPayloadTooSmallError);
+                static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kReadPayloadTooSmallError);
             return 0;
         }
 
@@ -858,7 +858,7 @@ class SerialTransferProtocol
 
         // Sets the status code to indicate reading from buffer was successful
         transfer_status =
-            static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kBytesReadFromBuffer);
+            static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kBytesReadFromBuffer);
 
         // Also returns the index immediately following the index of the final read byte (relative to the payload) to
         // caller. This index can be used as the next input start_index if multiple read calls are chained together.
@@ -868,7 +868,7 @@ class SerialTransferProtocol
   private:
     /// The reference to the Stream class object used to transmit and receive data. This variable is made public to
     /// support class testing via the use of StreamMock class. When it is set to an instance of StreamMock class, it can
-    /// be used to directly access the mock buffers to evaluate the performance of the SerialTransferProtocol class.
+    /// be used to directly access the mock buffers to evaluate the performance of the SerializedTransferProtocol class.
     Stream& _port;
 
     /// The local instance of the COBSProcessor class that provides the methods to encode and decode packets using
@@ -952,7 +952,7 @@ class SerialTransferProtocol
      * Next, calculates the CRC checksum for the constructed packet and adds it to the _transmission_buffer right after
      * the packet (the maximum packet size achieved after this operation is currently 260 bytes).
      *
-     * @note This method is intended to be called only within the SerialTransferProtocol class.
+     * @note This method is intended to be called only within the SerializedTransferProtocol class.
      *
      * @returns uint16_t The combined size of the packet and the CRC checksum postamble in bytes (260 bytes maximum).
      * If method runtime fails, returns 0 to indicate that the packet was not constructed and uses transfer_status to
@@ -1015,7 +1015,7 @@ class SerialTransferProtocol
         // appropriately and returns the combined size of the packet and the added CRC checksum to let the caller know
         // how many bytes to transmit to the PC.
         transfer_status =
-            static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketConstructed);
+            static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketConstructed);
         return combined_size;
     }
 
@@ -1039,7 +1039,7 @@ class SerialTransferProtocol
      * If the packet's delimiter byte was found, the method then reads the kPostambleSize number of bytes that follow
      * the delimiter adn saves them into the _reception_buffer immediately after the packet.
      *
-     * @note This method is intended to be called only within the SerialTransferProtocol class.
+     * @note This method is intended to be called only within the SerializedTransferProtocol class.
      *
      * @returns uint16_t The number of packet bytes read into the reception_buffer. If method runtime fails, returns 0
      * to indicate no packet bytes were read. If 0 is returned, transfer_status is set to the appropriate error code
@@ -1066,14 +1066,14 @@ class SerialTransferProtocol
                 // Sets the status to indicate start byte has been found. The status is immediately used below to
                 // evaluate loop runtime
                 transfer_status =
-                    static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketStartByteFound);
+                    static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketStartByteFound);
                 break;
             }
         }
 
         // If the start byte was found, as indicated by the status variable, enters packet parsing loop
         if (transfer_status ==
-            static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketStartByteFound))
+            static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketStartByteFound))
         {
             timeout_timer = 0;  // Resets the timer to 0 before entering the loop
 
@@ -1104,7 +1104,7 @@ class SerialTransferProtocol
                     {
                         // Uses the status to communicate that the delimiter byte has been found
                         transfer_status = static_cast<uint8_t>(
-                            stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketDelimiterByteFound
+                            stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketDelimiterByteFound
                         );
                         break;
                     }
@@ -1121,13 +1121,13 @@ class SerialTransferProtocol
             if (kAllowStartByteErrors)
             {
                 transfer_status = static_cast<uint8_t>(
-                    stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketStartByteNotFoundError
+                    stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketStartByteNotFoundError
                 );
             }
             else
             {
                 transfer_status = static_cast<uint8_t>(
-                    stp_shared_assets::kSerialTransferProtocolStatusCodes::kNoBytesToParseFromBuffer
+                    stp_shared_assets::kSerializedTransferProtocolStatusCodes::kNoBytesToParseFromBuffer
                 );
             }
             return 0;
@@ -1140,7 +1140,7 @@ class SerialTransferProtocol
         // once-again realize a mechanism of waiting for bytes to become available if the reception buffer becomes fully
         // consumed.
         if (transfer_status ==
-            static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketDelimiterByteFound))
+            static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketDelimiterByteFound))
         {
             // Loops over each postamble byte and attempts to read it from the incoming stream
             for (uint8_t i = 0; i < kPostambleSize; i++)
@@ -1155,7 +1155,7 @@ class SerialTransferProtocol
                     if (timeout_timer >= kTimeout)
                     {
                         transfer_status = static_cast<uint8_t>(
-                            stp_shared_assets::kSerialTransferProtocolStatusCodes::kPostambleTimeoutError
+                            stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPostambleTimeoutError
                         );
                         return 0;
                     }
@@ -1175,7 +1175,7 @@ class SerialTransferProtocol
             // parsed. Since this is the last step of packet reception, sets the status appropriately and returns the
             // packet size to caller.
             transfer_status =
-                static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketParsed);
+                static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketParsed);
 
             // Since bytes_read directly corresponds to the packet size, returns this to the caller
             return bytes_read;
@@ -1190,7 +1190,7 @@ class SerialTransferProtocol
             if (bytes_read >= kMaximumRxBufferSize - kPostambleSize)
             {
                 transfer_status = static_cast<uint8_t>(
-                    stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketOutOfBufferSpaceError
+                    stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketOutOfBufferSpaceError
                 );
             }
 
@@ -1200,7 +1200,7 @@ class SerialTransferProtocol
             else
             {
                 transfer_status =
-                    static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketTimeoutError);
+                    static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketTimeoutError);
             }
 
             return 0;
@@ -1218,7 +1218,7 @@ class SerialTransferProtocol
      * packet using COBS to obtain the payload. See CRCProcessor documentation if you wonder why this looks for a 0
      * return value for the CRC check, but this is a property of the CRC.
      *
-     * @note This method is intended to be called only within the SerialTransferProtocol class and only after the
+     * @note This method is intended to be called only within the SerializedTransferProtocol class and only after the
      * ParsePacket() method has been successfully called.
      *
      * @param packet_size The size of the packet that was parsed into the _reception_buffer by the ParsePacket() method
@@ -1263,7 +1263,7 @@ class SerialTransferProtocol
             // If the returned checksum is not 0, that means that the packet failed the CRC check and is likely
             // corrupted
             transfer_status =
-                static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kCRCCheckFailed);
+                static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kCRCCheckFailed);
             return 0;
         }
 
@@ -1284,7 +1284,7 @@ class SerialTransferProtocol
         }
 
         // If COBS decoding was successful, sets the packet status appropriately and returns the payload size to caller
-        transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerialTransferProtocolStatusCodes::kPacketValidated);
+        transfer_status = static_cast<uint8_t>(stp_shared_assets::kSerializedTransferProtocolStatusCodes::kPacketValidated);
         return payload_size;
     }
 };

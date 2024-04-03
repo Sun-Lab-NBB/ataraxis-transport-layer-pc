@@ -1,10 +1,10 @@
 /**
  * @file
  * @brief A header-only file for the helper StreamMock class that simulates the base Stream class used by the
- * SerialTransferProtocol class.
+ * SerializedTransferProtocol class.
  *
  * @subsection description Description:
- * This class allows on-controller testing of the SerialTransferProtocol class without establishing a fully functional
+ * This class allows on-controller testing of the SerializedTransferProtocol class without establishing a fully functional
  * bidirectional USB/UART connection with the PC. To do so, it implements two large (600 bytes each) public buffers to
  * mimic the tx and rx buffers used by the real Stream class.
  *
@@ -20,7 +20,7 @@
  * by overloading the virtual methods of the base class where necessary.
  *
  * @subsection developer_notes Developer Notes:
- * This class is used solely to enable on-controller testing of the SerialTransferProtocol class. Since on-controller
+ * This class is used solely to enable on-controller testing of the SerializedTransferProtocol class. Since on-controller
  * testing is currently realized only through the broader AMC, this class is for all intends and purposes useless
  * for the Arduino-targeted version of this library. For the AMC codebase, see appropriate test suite functions for the
  * examples of how to use this class in custom testing.
