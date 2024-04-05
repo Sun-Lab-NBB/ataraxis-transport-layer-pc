@@ -22,12 +22,12 @@ class so that SerializedTransferProtocol can be tested without a properly config
 without trying to guess which specific COM port (if any) is available for each user running the tests). It has no
 practical use past that specific role.
 
-Also contains the ZeroMQSerial class. This class is a wrapper around the ZeroMQ communication protocol that allows
-interfacing with ZeroMQ sockets using the same commands as used to interface with pySerial's Serial class. This
-allows using ZeroMQSerial as a drop-in replacement for the Serial class at SerializedTransferProtocol class
-instantiation. ZeroMq is a widely available communication protocol that allows to use this class to connect to other
-clients running either the python or special C-version of this library intended for major devices (microcontrollers
-only support Serial communication).
+The ZeroMQSerial class is provided as an ongoing attempt to unify all communication methods under the same convenient
+abstraction offered through SerializedTransferProtocol class. ZeroMQ is a popular and, most importantly, lightweight,
+fast and flexible protocol implemented in more or less any popular programming language. This makes it a perfect
+candidate to serve both for inter-process and cross-machine communication. Overall, the idea is to have microcontrollers
+talk to PC via Serial, which is by far the most efficient protocol and the PC to talk to other PCs / processes via the
+ZeroMQ connection over TCP (or UDP, ZeroMQ can be flexibly configured to use any backbone).
 """
 
 import textwrap
@@ -35,6 +35,7 @@ import time as tm
 from typing import Any, Literal, Union
 import zmq
 import threading
+from collections import deque
 
 import numpy as np
 from numba import njit, uint8, uint16, uint32
@@ -151,7 +152,8 @@ class COBSProcessor:
         elif self.__processor.status == self.__processor.payload_too_small_error:
             error_message = (
                 f"The size of the input payload ({payload.size}) is too small to be encoded using COBS scheme. "
-                f"A minimum size of {self.__processor.min_payload_size} elements (bytes) is required."
+                f"A minimum size of {self.__processor.min_payload_size} elements (bytes) is required. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -159,7 +161,8 @@ class COBSProcessor:
         elif self.__processor.status == self.__processor.payload_too_large_error:
             error_message = (
                 f"The size of the input payload ({payload.size}) is too large to be encoded using COBS scheme. "
-                f"A maximum size of {self.__processor.max_payload_size} elements (bytes) is required."
+                f"A maximum size of {self.__processor.max_payload_size} elements (bytes) is required. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -167,7 +170,8 @@ class COBSProcessor:
         elif self.__processor.status == self.__processor.invalid_payload_datatype_error:
             error_message = (
                 f"The datatype of the input payload to be encoded using COBS scheme ({payload.dtype}) is not "
-                f"supported. Only uint8 (byte) numpy arrays are currently supported as payload inputs."
+                f"supported. Only uint8 (byte) numpy arrays are currently supported as payload inputs. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -175,7 +179,8 @@ class COBSProcessor:
         else:
             error_message = (
                 f"Unexpected inner _COBSProcessor class status code ({self.__processor.status}) encountered when "
-                f"attempting to COBS-encode the input payload."
+                f"attempting to COBS-encode the input payload. "
+                f"CODE: 0."
             )
             raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -260,7 +265,8 @@ class COBSProcessor:
         elif self.__processor.status == self.__processor.packet_too_small_error:
             error_message = (
                 f"The size of the input packet ({packet.size}) is too small to be decoded using COBS scheme. "
-                f"A minimum size of {self.__processor.min_packet_size} elements (bytes) is required."
+                f"A minimum size of {self.__processor.min_packet_size} elements (bytes) is required. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -268,7 +274,8 @@ class COBSProcessor:
         elif self.__processor.status == self.__processor.packet_too_large_error:
             error_message = (
                 f"The size of the input packet ({packet.size}) is too large to be decoded using COBS scheme. "
-                f"A maximum size of {self.__processor.max_packet_size} elements (bytes) is required."
+                f"A maximum size of {self.__processor.max_packet_size} elements (bytes) is required. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -276,7 +283,8 @@ class COBSProcessor:
         elif self.__processor.status == self.__processor.invalid_packet_datatype_error:
             error_message = (
                 f"The datatype of the input packet to be decoded using COBS scheme ({packet.dtype}) is not supported. "
-                f"Only uint8 (byte) numpy arrays are currently supported as packet inputs."
+                f"Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -287,7 +295,8 @@ class COBSProcessor:
                 f"Attempting to decode the packet using COBS scheme does not result in reaching the unencoded delimiter"
                 f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
                 f"because the traversal process does not point at the final index of the packet. Packet is likely "
-                f"corrupted."
+                f"corrupted. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -295,7 +304,8 @@ class COBSProcessor:
         elif self.__processor.status == self.__processor.delimiter_found_too_early_error:
             error_message = (
                 f"Unencoded delimiter found before reaching the end of the packet during COBS-decoding sequence. "
-                f"Packet is likely corrupted."
+                f"Packet is likely corrupted. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -303,7 +313,8 @@ class COBSProcessor:
         else:
             error_message = (
                 f"Unexpected inner _COBSProcessor class status code ({self.__processor.status}) encountered when "
-                f"attempting to COBS-decode the input packet."
+                f"attempting to COBS-decode the input packet. "
+                f"CODE: 0."
             )
             raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -460,9 +471,9 @@ class COBSProcessor:
                 # delimiter bytes (see COBS scheme for more details on why this is necessary).
                 packet = np.empty(size + 2, dtype=payload.dtype)
                 packet[-1] = delimiter  # Sets the last byte of the packet to the delimiter byte value
-                packet[1:-1] = (
-                    payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
-                )
+                packet[
+                    1:-1
+                ] = payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
 
                 # A tracker variable that is used to calculate the distance to the next delimiter value when an
                 # unencoded delimiter is required.
@@ -555,7 +566,6 @@ class COBSProcessor:
                 # packet or until it encounters an unencoded delimiter values. These two conditions should coincide for
                 # each well-formed packet.
                 while (read_index + next_index) < size:
-
                     # Increments the read_index via aggregation for each iteration of the loop
                     read_index += next_index
 
@@ -642,7 +652,6 @@ class CRCProcessor:
         initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
         final_xor_value: Union[np.uint8, np.uint16, np.uint32],
     ) -> None:
-
         # Ensures that all inputs use the same valid type. Note, uint64 is currently not supported primarily to maintain
         # implicit compatibility with older AVR boards that do not support uint64 type. That said, both the C++ and this
         # Python codebases are written in a way that will natively scale to uint 64 if this static guard is modified to
@@ -760,7 +769,8 @@ class CRCProcessor:
         elif self.__processor.status == self.__processor.calculate_checksum_buffer_datatype_error:
             error_message = (
                 f"The datatype of the input buffer to be CRC-checksummed ({buffer.dtype}) is not supported. "
-                f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs."
+                f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs. "
+                f"CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -768,7 +778,8 @@ class CRCProcessor:
         else:
             error_message = (
                 f"Unexpected inner _CRCProcessor class status code ({self.__processor.status}) encountered when "
-                f"attempting to calculate the CRC checksum for the input buffer."
+                f"attempting to calculate the CRC checksum for the input buffer. "
+                f"CODE: 0."
             )
             raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -821,7 +832,7 @@ class CRCProcessor:
         else:
             error_message = (
                 f"Unexpected inner _CRCProcessor class status code ({self.__processor.status}) encountered when "
-                f"converting the unsigned integer CRC checksum to an array of bytes."
+                f"converting the unsigned integer CRC checksum to an array of bytes. CODE: 0."
             )
             raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -902,7 +913,7 @@ class CRCProcessor:
             error_message = (
                 f"The datatype of the input buffer to be converted to the unsigned integer CRC checksum "
                 f"({buffer.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer "
-                f"inputs."
+                f"inputs. CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -911,7 +922,7 @@ class CRCProcessor:
             error_message = (
                 f"The byte-size of the input buffer to be converted to the unsigned integer CRC checksum "
                 f"({buffer.size}) does not match the size required to represent the specified checksum datatype "
-                f"({self.__processor.crc_byte_length})."
+                f"({self.__processor.crc_byte_length}). CODE: {self.__processor.status}."
             )
             raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -919,7 +930,7 @@ class CRCProcessor:
         else:
             error_message = (
                 f"Unexpected inner _CRCProcessor class status code ({self.__processor.status}) encountered when "
-                f"converting the array of CRC checksum bytes to the unsigned integer value."
+                f"converting the array of CRC checksum bytes to the unsigned integer value. CODE: 0."
             )
             raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
@@ -1153,7 +1164,6 @@ class CRCProcessor:
 
                 # Loops over each byte inside the buffer and iteratively calculates CRC checksum for the buffer
                 for byte in buffer:
-
                     # Calculates the index to retrieve from CRC table. To do so, combines the high byte of the CRC
                     # checksum with the (possibly) modified (corrupted) data_byte using bitwise XOR.
                     table_index = (crc_checksum >> (8 * (self.crc_byte_length - 1))) ^ byte
@@ -1235,7 +1245,6 @@ class CRCProcessor:
                 # the buffer is entirely filled with the checksum bytes and uses crc_byte_length to constrain processing
                 # to the exact number of bytes required.
                 for i in range(self.crc_byte_length):
-
                     # Constructs the CRC checksum from the buffer, starting from the most significant byte and moving
                     # towards the least significant byte. This matches the process of how it was converted to bytes by
                     # the convert_crc_checksum_to_bytes() or an equivalent microcontroller method.
@@ -1274,7 +1283,6 @@ class CRCProcessor:
 
                 # Iterates over each possible value of a byte variable
                 for byte in np.arange(256, dtype=np.uint8):
-
                     # Casts crc to the appropriate type based on the polynomial type
                     crc = self.make_polynomial_type(byte)
 
@@ -1285,10 +1293,8 @@ class CRCProcessor:
 
                     # Loops over each of the 8 bits making up the byte-value being processed
                     for _ in range(8):
-
                         # Checks if the top bit (MSB) is set
                         if crc & msb_mask:
-
                             # If the top bit is set, shifts the crc value left to bring the next bit into the top
                             # position, then XORs it with the polynomial. This simulates polynomial division where bits
                             # are checked from top to bottom.
@@ -1458,6 +1464,362 @@ class SerialMock:
         return len(self.tx_buffer)
 
 
+class ZeroMQSerial:
+    """Establishes and facilitates bidirectional communication with another local or remote process running a
+    compatible ZeroMQ binding.
+
+    This class mimics the pySerial's Serial class in purpose and application. It establishes an exclusive pairing with
+    another ZeroMQ instance using the input address and protocol (port). This allows bidirectionally communicating
+    with any process on the same local or remote machine. Anything that can run ZeroMQ (and most things can) will be
+    able to communicate with an instance of this class.
+
+    Notes:
+        This class is designed to be paired up with a pySerial Serial class communicating with microcontrollers. It
+        shares most of its bindings with how Serial class works, which allows SerializedTransferProtocol class to
+        use these communication backends interchangeably. This allows using the same high-level API across the library
+        to communicate with microcontrollers and other applications (for example Unity game-engine).
+
+    Args:
+        port: The protocol and full address of the port to connect to, eg: "tcp://127.0.0.1:5555".
+        connection_mode: The 'role' of the class instance. Available options are 'host' and 'client'. Since the class
+            uses the 'pair' socket mode, there can only be one host and one client for each unique address and port. The
+            socket that is instantiated first should be set as a host and the socket that is instantiated second should
+            be set as a 'client'. The only difference between 'host' and 'client' for this communication mode is the
+            order of instantiation.
+        timeout: The number of seconds(!) to wait for the requested number of bytes to become available, when reading
+            data from the class reception buffer. At minimum this can be set to 0 to completely disable waiting.
+            Defaults to 0.
+        buffer_size: The size of the circular reception buffer. The buffer is implemented as a deque object and, if
+            allowed to fill, will start discarding data from the beginning of the queue to accept more data. This size
+            determines the number of bytes that, at a maximum, can occupy the buffer before it starts discarding data.
+            Adjust this size to the minimum size appropriate for your use case. Defaults to 4096 (~4 kb).
+        auto_open; A boolean flag that determines whether the initialization method automatically calls open() method at
+            class initialization. If this flag is set to 'False', the user has to manually call the open() method prior
+            to using other class methods. Defaults to 'True'.
+
+    Attributes:
+        __port: The address used to establish the socket connection. Stores the input address provided by the user as
+            class initialization argument so that it can be used by the open() method.
+        __connection_mode: Stores the mode to be used by the thread when establishing connection. This is also used by
+            the open() method to establish the connection.
+        __timeout: Stores the timeout (in seconds) to be used when waiting for data to become available for reading.
+            This is used by the read() method.
+        __context: Initializes to a placeholder. Following open() method call, stores the context used to generate
+            sockets. Maintained until the close() method is used to terminate it.
+        __socket: Initializes to a placeholder. Following open() method call, the socket is used to send and receive
+            data over the provided port address. Maintained until the close() method is used to terminate it.
+        __timer: An instance of the ElapsedTimer class (configured to use second precision), used to time data
+            reading delays (if timeout is above 0).
+        __circular_buffer: An instance of the deque object, which is used as a temporary buffer to which the receiver
+            method continuously appends the data received from the connected socket. Uses 'buffer_size' class
+            initialization argument to determine the maximum number of bytes to store in buffer.
+        __is_open: A boolean flag that tracks whether the open() method has been used to establish the connection. If
+            this flag is set to 'False', read() and write() method cannot be used.
+        __stop_flag: A boolean flag used by the close() method to shut down the receiver thread. This allows using
+            close() method to gracefully shut down the connection without deleting the class.
+        __lock: A lock object used to synchronize the receiver thread with other class methods that need to access
+            the circular_buffer to prevent race_conditions and other synchronization issues of multithreaded execution.
+        __receiver_thread: A thread that continuously runs '__receiver' method until terminated via the __stop_flag
+            attribute. The thread is used to continuously monitor and fetch data transmitted by the connected socket,
+            which allows the class to function like a pySerial Serial binding does, where it constantly polls and moves
+            the received data to the local reception buffer.
+
+    Raises:
+        TypeError: If any of the class initialization arguments are not of a correct type.
+        ValueError: If any of the class initialization arguments are set to an incorrect value.
+    """
+
+    def __init__(
+        self,
+        port: str,
+        connection_mode: Literal["host", "client"],
+        timeout: int | float = 0,
+        buffer_size: int = 4096,
+        auto_open: bool = True,
+    ) -> None:
+        # Verifies that the arguments conform to allowed types and values
+        if not isinstance(port, str):
+            error_message = (
+                f"Invalid 'port' argument type ({type(port)}) encountered when initializing ZeroMQSerial class object. "
+                f"A string address and port in the format 'tcp://127.0.0.1:5555' is expected."
+            )
+            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif connection_mode.lower() not in ("host", "client"):
+            error_message = (
+                f"Invalid 'connection_mode' argument value ({connection_mode}) encountered when initializing "
+                f"ZeroMQSerial class object. Currently, only 'host' or 'client' are accepted as valid argument values."
+            )
+            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif not isinstance(timeout, (int, float)):
+            error_message = (
+                f"Invalid 'timeout' argument type ({type(timeout)}) encountered when initializing ZeroMQSerial class "
+                f"object. Only integer and float inputs are accepted as valid argument."
+            )
+            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif timeout < 0:
+            error_message = (
+                f"Invalid 'timeout' argument value ({timeout}) encountered when initializing ZeroMQSerial class "
+                f"object. Timeout has to be equal to or greater than 0."
+            )
+            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif not isinstance(buffer_size, int):
+            error_message = (
+                f"Invalid 'buffer_size' argument type ({type(buffer_size)}) encountered when initializing ZeroMQSerial "
+                f"class object. Only integer inputs are accepted as valid argument."
+            )
+            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif buffer_size < 1:
+            error_message = (
+                f"Invalid 'buffer_size' argument value ({buffer_size}) encountered when initializing ZeroMQSerial "
+                f"class object. Minimum allowed buffer size is 1."
+            )
+            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif not isinstance(auto_open, bool):
+            error_message = (
+                f"Invalid 'auto_open' argument type ({type(auto_open)}) encountered when initializing ZeroMQSerial "
+                f"class object. Only boolean inputs are accepted as valid argument."
+            )
+            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+
+        # Stores configuration parameters to class attributes
+        self.__port = port
+        self.__connection_mode = connection_mode
+        self.__timeout = timeout
+
+        # Initializes local attributes
+        self.__context = None
+        self.__socket = None
+        self.__timer = ElapsedTimer("s")
+        self.__circular_buffer = deque(maxlen=buffer_size)
+        self.__stop_flag = False
+        self.__is_open = False
+
+        # Initializes threads and control elements (to monitor and save received data)
+        self.__lock = threading.Lock()  # Lock object to synchronize _receiver thread with other class methods
+        self.__receiver_thread = threading.Thread(target=self.__receiver)  # Instantiates the receiver thread.
+        self.__receiver_thread.daemon = True  # Ensures the thread terminates with the main thread
+
+        # If the class is initialized with the auto_open flag, calls open() at the end of initialization. Otherwise,
+        # open() has to be called manually before using read() or write() methods of the class.
+        if auto_open:
+            self.open()
+
+    def __del__(self) -> None:
+        self.close()  # Ensures the connection is properly terminated before the class is deleted
+
+    def open(self) -> None:
+        """Connects to the requested port (address) using the requested mode (host or client).
+
+        This method has to be called prior to calling most other methods of the class, as it is required to actually
+        establish the socket connection to the provided address. This method allows instantiating the class without
+        immediately establishing the connection, which is advantageous in many contexts.
+
+        Raises:
+            ZMQError: Typically if the provided port is not valid or already has another host or client (depending on
+                the __connection_mode attribute) connected to it.
+        """
+        # Initializes connection socket
+        self.__context = zmq.Context()  # Instantiates a socket generator method
+        self.__socket = self.__context.socket(zmq.PAIR)  # Generates a socket
+
+        # Connects to the created socket depending on the connection mode. Note, since the socket is used in Pair mode,
+        # re-binding an already hosted address or connecting to an already connected host will trigger a ZeroMQ error.
+        # This makes the class behave exactly like an exclusive Serial port does.
+        if self.__connection_mode == "host":
+            # Hosts BIND to a socket and start listening for other connections
+            self.__socket.bind(self.__port)
+        else:
+            # Clients CONNECT to the host that has bound the socket
+            self.__socket.connect(self.__port)
+
+        # Initializes the receiver thread. From this point on the class will continuously receive the data.
+        self.__receiver_thread.start()
+
+        # Sets the __is_open flag to indicate that the connection has been opened, and it is safe to use other class
+        # methods.
+        self.__is_open = True
+
+    def close(self) -> None:
+        """Terminates the connection to the port (address).
+
+        This method can be used to disconnect from the port connected to by the open() call. Note, this method
+        terminates the socket and the receiver thread, and it is safe to garbage-collect the class afterward (in fact,
+        close() is used inside the __del__ method). Closing the connection renders most class methods unusable until the
+        connection is opened again.
+
+        Notes:
+            Calling this method clears any data currently stored inside the circular_buffer in addition to other
+            changes. Make sure all important data is consumed before close() is called.
+        """
+        # If the connection is not open in the first place, there is no need to close it
+        if not self.__is_open:
+            return
+
+        # Shuts down the connection by closing the socket and terminating the context
+        self.__socket.close()
+        self.__context.term()
+
+        # Also toggles the stop flag to terminate the receiver thread and waits until the thread joins
+        self.__stop_flag = True
+        self.__receiver_thread.join()
+
+        # Clears the circular buffer
+        self.clear_buffer()
+
+        # Sets the flag to indicate that the connection has been closed and needs to be re-opened before most other
+        # class methods can be used again
+        self.__is_open = False
+
+    @property
+    def in_waiting(self) -> int:
+        """Returns the number of bytes currently stored inside the class reception buffer."""
+        with self.__lock:  # Locks the reception thread before reading the array length
+            # Since the buffer is implemented as a deque object, it does not have to necessarily store bytes. That said,
+            # the class is explicitly designed to communicate with other class instances from these libraries which
+            # always communicated via byte-streams, so it is assumed that the buffer is a bytes buffer.
+            return len(self.__circular_buffer)
+
+    @property
+    def name(self) -> str:
+        """Returns the port name (address) of the ZeroMQ socket used by the class."""
+        return self.__port
+
+    def __receiver(self) -> None:
+        """Receives the data transmitted over the bundled class socket.
+
+        This method is designed to be executed via a thread. After initiation, it runs until terminated by stop_flag.
+        During runtime, it polls the state of the socket and if data is available to be received, writes it into the
+        class circular buffer (emulating hardware-interrupt-based serial data reader method).
+        """
+        event = threading.Event()  # This is used as a more accurate, GIL-releasing timer than sleep().
+        while not self.__stop_flag:  # Runs until stop flag is triggered by the close() or __del__ method.
+            # Attempts to receive data from the socket on each iteration
+            try:
+                # Attempts to receive the data. Using the NOBLOCK flag means that the method returns immediately: either
+                # with the received data OR with zmq.Again exception if no data is available for reception
+                data = self.__socket.recv(flags=zmq.NOBLOCK)
+
+                # If data was received, acquires the lock and writes the data to the end of the circular_buffer. Note,
+                # if the buffer is at full capacity, it will discard the data from the FRONT of the buffer to
+                # accommodate the incoming data.
+                with self.__lock:
+                    self.__circular_buffer.extend(data)
+
+            # If the recv method raised the Again exception, blocks for a short period of time (also releases GIL) and
+            # re-runs the loop.
+            except zmq.Again:
+                event.wait(timeout=20e-6)  # This ensures the socket is polled every 20 us.
+
+    def read(self, size: int = 1) -> bytes:
+        """Reads the requested number of bytes from the class circular buffer and returns them as 'bytes' object.
+
+        If the requested number of bytes is not available and timeout is above 0, waits for the requested timeout number
+        of seconds (using threading event sleep approach). Regardless of the timeout, the method will not read any bytes
+        unless the requested number of bytes is available after the timeout loop resolution.
+
+        Notes:
+            This method is analogous to the read() method of pySerial Serial class, although it behaves slightly
+            differently with respect to timeout.
+
+            The method will NOT work unless ZeroMQ connection was established by calling the open() method. If the class
+            is initialized with auto_open flag set to True, the connection has been opened during class initialization.
+            Otherwise, this needs to be done manually.
+
+        Args:
+            size: The number of bytes to read from the circular buffer.
+
+        Returns:
+            A 'bytes' python object that stored acquired bytes. When the class timeout is set to 0 and not enough
+            bytes are available, returns an empty 'bytes' object. When the class timeout is set to a number above 0, but
+            sufficient number of bytes does not become available before timeout, also returns an empty 'bytes' object.
+
+        Raises:
+            RuntimeError: If this method is called before the connection has been established by calling the open()
+                method.
+        """
+
+        # Prevents interfacing with a closed port.
+        if not self.__is_open:
+            error_message = (
+                f"Unable to read data from a closed connection. Use open() method to open the zmq connection prior "
+                f"to calling this method."
+            )
+            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+
+        event = threading.Event()  # This is used as a more accurate, GIL-releasing timer than sleep().
+        bytes_available = True  # Instantiates a flag used to track if enough bytes are available
+
+        # Blocks until enough bytes are available for reading. When timeout is disabled (set to 0), the method will
+        # return immediately. Otherwise, it will wait for that number of SECONDS to acquire the data.
+        self.__timer.reset()  # Resets the interval timer
+        while self.in_waiting < size:
+            if self.__timer.elapsed > self.__timeout:
+                bytes_available = False
+                break
+            # Sleeps 30 us every check cycle. The receiver thread runs at 20 us intervals, so this should be sufficient
+            # to de-stack the two and make it possible to receive data and execute this wait loop.
+            event.wait(timeout=30e-6)
+
+        if bytes_available:
+            # Acquires the lock and retrieves the data
+            with self.__lock:
+                # Inlines most data acquisition steps by using list comprehension. Specifically, this loops over the
+                # circular buffer and retrieves the requested number of bytes from the front of the buffer. The
+                # algorithm relies on the while loop above to ensure the requested bytes are available and will not
+                # try to retrieve anything if requested number of bytes is not available. Converts the formed list into
+                # a bytes object and returns to caller
+                return bytes([self.__circular_buffer.popleft() for _ in range(size)])
+
+        # If bytes are not available, returns an empty bytes object to indicate nothing was read as the requested
+        # quantity of bytes is not available
+        else:
+            return bytes()
+
+    def write(self, data: bytes) -> None:
+        """Sends the input data over the connected socket.
+
+        Notes:
+            The write method itself queues the zmq frame to be sent via an internal IO thread at a later time, much
+            like the pySerial write() method does not actually 'flush' the buffer. Since flushing in a ZMQ context is
+            more or less irrelevant (just like it is for Windows serial context), this method is not implemented.
+
+            The method will NOT work unless ZeroMQ connection was established by calling the open() method. If the class
+            is initialized with auto_open flag set to True, the connection has been opened during class initialization.
+            Otherwise, this needs to be done manually.
+
+        Args:
+            data: A python 'bytes' object that holds the binary data to be sent.
+
+        Raises:
+            RuntimeError: If this method is called before the connection has been established by calling the open()
+                method.
+            TypeError: If the input data is not a 'bytes' object.
+        """
+
+        # Prevents interfacing with a closed port.
+        if not self.__is_open:
+            error_message = (
+                f"Unable to write data to a closed connection. Use open() method to open the zmq connection prior "
+                f"to calling this method."
+            )
+            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+
+        # Prevents sending incorrectly typed data
+        elif not isinstance(data, bytes):
+            error_message = (
+                f"Invalid 'data' object ({type(data)}) encountered when writing data to the socket buffer. Data should "
+                f"be a python 'bytes' object."
+            )
+            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+
+        self.__socket.send(data)
+
+    def clear_buffer(self) -> None:
+        """A utility method that completely clears the reception circular buffer of the class."""
+        with self.__lock:
+            self.__circular_buffer.clear()
+
+
 class ElapsedTimer:
     """A simple nanosecond-precise interval-timer that is based on the perf_counter_ns() method from the base Python
     'time' library.
@@ -1486,7 +1848,6 @@ class ElapsedTimer:
     """
 
     def __init__(self, precision=Literal["ns", "us", "ms", "s"]) -> None:
-
         # Sets the clock divider based on the desired precision.
         if precision == "ns":
             self.__clock_divider = 1
@@ -1540,56 +1901,3 @@ class ElapsedTimer:
         numba to maximize method runtime speeds (totally an overkill, but oh well).
         """
         return np.round((current_time - baseline_time) / divider, 3)
-
-
-class ZeroMQSerial:
-    def __init__(self, port, baudrate=9600, timeout=1, mode:Literal['host', 'client'] = 'host'):
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.PAIR)
-        if mode == 'host':
-            self.socket.bind(f"tcp://127.0.0.1:{port}")
-        else:
-            self.socket.connect(f"tcp://127.0.0.1:{port}")
-        self.baudrate = baudrate
-        self.timeout = timeout
-        self.buffer = bytearray()
-        self.lock = threading.Lock()
-        self.receiver_thread = threading.Thread(target=self._receiver)
-        self.receiver_thread.daemon = True
-        self.receiver_thread.start()
-
-    def __del__(self):
-        self.socket.close()
-        self.context.term()
-
-    @property
-    def in_waiting(self):
-        with self.lock:
-            return len(self.buffer)
-
-    def _receiver(self):
-        while True:
-            try:
-                data = self.socket.recv(flags=zmq.NOBLOCK)
-                with self.lock:
-                    self.buffer.extend(data)
-            except zmq.Again:
-                tm.sleep(1 / self.baudrate)
-
-    def read(self, size=1):
-        start_time = tm.time()
-        while len(self.buffer) < size:
-            if tm.time() - start_time > self.timeout:
-                break
-            tm.sleep(0.001)
-        with self.lock:
-            data = self.buffer[:size]
-            self.buffer = self.buffer[size:]
-        return bytes(data)
-
-    def write(self, data):
-        self.socket.send(data)
-
-    def clear_buffer(self):
-        with self.lock:
-            self.buffer.clear()

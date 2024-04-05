@@ -69,7 +69,7 @@ def test_cobs_processor_errors():
     empty_payload = np.array([], dtype=np.uint8)
     error_message = (
         f"The size of the input payload ({empty_payload.size}) is too small to be encoded using COBS scheme. "
-        f"A minimum size of {1} elements (bytes) is required."
+        f"A minimum size of {1} elements (bytes) is required. CODE: 12."
     )
     with pytest.raises(
         ValueError,
@@ -81,7 +81,7 @@ def test_cobs_processor_errors():
     large_payload = np.ones(255, dtype=np.uint8)
     error_message = (
         f"The size of the input payload ({large_payload.size}) is too large to be encoded using COBS scheme. "
-        f"A maximum size of {254} elements (bytes) is required."
+        f"A maximum size of {254} elements (bytes) is required. CODE: 13."
     )
     with pytest.raises(
         ValueError,
@@ -93,7 +93,7 @@ def test_cobs_processor_errors():
     wrong_dtype_payload = np.array([1, 2, 3, 4, 5], dtype=np.uint16)
     error_message = (
         f"The datatype of the input payload to be encoded using COBS scheme ({wrong_dtype_payload.dtype}) is not "
-        f"supported. Only uint8 (byte) numpy arrays are currently supported as payload inputs."
+        f"supported. Only uint8 (byte) numpy arrays are currently supported as payload inputs. CODE: 14."
     )
     with pytest.raises(
         ValueError,
@@ -133,7 +133,7 @@ def test_cobs_processor_errors():
     small_packet = np.array([1, 2], dtype=np.uint8)
     error_message = (
         f"The size of the input packet ({small_packet.size}) is too small to be decoded using COBS scheme. "
-        f"A minimum size of {3} elements (bytes) is required."
+        f"A minimum size of {3} elements (bytes) is required. CODE: 16."
     )
     with pytest.raises(
         ValueError,
@@ -145,7 +145,7 @@ def test_cobs_processor_errors():
     large_packet = np.ones(257, dtype=np.uint8)
     error_message = (
         f"The size of the input packet ({large_packet.size}) is too large to be decoded using COBS scheme. "
-        f"A maximum size of {256} elements (bytes) is required."
+        f"A maximum size of {256} elements (bytes) is required. CODE: 17."
     )
     with pytest.raises(
         ValueError,
@@ -157,7 +157,7 @@ def test_cobs_processor_errors():
     wrong_dtype_packet = np.array([6, 1, 2, 3, 4, 5, 0], dtype=np.uint16)
     error_message = (
         f"The datatype of the input packet to be decoded using COBS scheme ({wrong_dtype_packet.dtype}) is not "
-        f"supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs."
+        f"supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs. CODE: 20."
     )
     with pytest.raises(
         ValueError,
@@ -170,7 +170,7 @@ def test_cobs_processor_errors():
     corrupted_packet = np.array([4, 1, 2, 3, 0, 5, 0], dtype=np.uint8)
     error_message = (
         f"Unencoded delimiter found before reaching the end of the packet during COBS-decoding sequence. "
-        f"Packet is likely corrupted."
+        f"Packet is likely corrupted. CODE: 19."
     )
     with pytest.raises(
         ValueError,
@@ -185,7 +185,7 @@ def test_cobs_processor_errors():
         f"Attempting to decode the packet using COBS scheme does not result in reaching the unencoded delimiter"
         f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
         f"because the traversal process does not point at the final index of the packet. Packet is likely "
-        f"corrupted."
+        f"corrupted. CODE: 18."
     )
     with pytest.raises(
         ValueError,
@@ -1139,7 +1139,7 @@ def test_crc_processor_errors():
     invalid_buffer_type = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint16)
     error_message = (
         f"The datatype of the input buffer to be CRC-checksummed ({invalid_buffer_type.dtype}) is not supported. "
-        f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs."
+        f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs. CODE: 52."
     )
     with pytest.raises(
         ValueError,
@@ -1179,7 +1179,7 @@ def test_crc_processor_errors():
     error_message = (
         f"The datatype of the input buffer to be converted to the unsigned integer CRC checksum "
         f"({invalid_buffer.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer "
-        f"inputs."
+        f"inputs. CODE: 55."
     )
     with pytest.raises(
         ValueError,
@@ -1193,7 +1193,7 @@ def test_crc_processor_errors():
     error_message = (
         f"The byte-size of the input buffer to be converted to the unsigned integer CRC checksum "
         f"({invalid_buffer.size}) does not match the size required to represent the specified checksum datatype "
-        f"({crc_processor.crc_byte_length})."
+        f"({crc_processor.crc_byte_length}). CODE: 56."
     )
     with pytest.raises(
         ValueError,
@@ -1318,46 +1318,40 @@ def test_elapsed_timer():
 
 def test_zeromq_serial_successful_cases():
     # Create ZeroMQSerial instance
-    zeromq_serial = ZeroMQSerial(port=5555)
+    zeromq_host = ZeroMQSerial(port="tcp://127.0.0.1:5555", connection_mode='host')
 
     # Create ZeroMQ socket
-    context = zmq.Context()
-    zeromq_socket = context.socket(zmq.PAIR)
-    zeromq_socket.connect("tcp://127.0.0.1:5555")
+    zeromq_client = ZeroMQSerial(port="tcp://127.0.0.1:5555", connection_mode='client')
 
     # Test writing data to ZeroMQSerial
-    zeromq_socket.send(b"Hello, ZeroMQSerial!")
+    zeromq_client.write(b"Hello, ZeroMQSerial!")
     tm.sleep(0.1)  # Wait for a short time to ensure the data is received
 
     # Test reading data from ZeroMQSerial
-    data = zeromq_serial.read(size=20)
+    data = zeromq_host.read(size=20)
     assert data == b"Hello, ZeroMQSerial!"
 
     # Test writing data from ZeroMQSerial
-    zeromq_serial.write(b"Hello, client!")
+    zeromq_host.write(b"Hello, client!")
     tm.sleep(0.1)  # Wait for a short time to ensure the data is sent
 
     # Test reading data written by ZeroMQSerial
-    data = zeromq_socket.recv()
+    data = zeromq_client.read(size=14)
     assert data == b"Hello, client!"
 
     # Test checking the number of bytes in the buffer
-    zeromq_socket.send(b"Hello, ZeroMQSerial!")
+    zeromq_client.write(b"Hello, ZeroMQSerial!")
     tm.sleep(0.1)  # Wait for a short time to ensure the data is received
-    assert zeromq_serial.in_waiting == 20
+    assert zeromq_host.in_waiting == 20
 
-    # Close ZeroMQ socket and context
-    zeromq_socket.close()
-    context.term()
-
-    # Close ZeroMQSerial instance
-    zeromq_serial.socket.close()
-    zeromq_serial.context.term()
+    # Closes the client (first) and the host (last)
+    zeromq_client.close()
+    zeromq_host.close()
 
 
 def test_zeromq_serial_error_cases():
     # Create ZeroMQSerial instance
-    zeromq_serial = ZeroMQSerial(port=5556)
+    zeromq_serial = ZeroMQSerial(port="tcp://127.0.0.1:5555", timeout=1, connection_mode='host')
 
     zeromq_serial.clear_buffer()
 
@@ -1370,8 +1364,7 @@ def test_zeromq_serial_error_cases():
     data = zeromq_serial.read(size=10)
     end_time = tm.time()
     assert data == b""  # Expected empty bytes due to timeout
-    assert end_time - start_time >= zeromq_serial.timeout  # Check if timeout occurred
+    assert end_time - start_time >= 1  # Check if timeout occurred
 
     # Close ZeroMQSerial instance
-    zeromq_serial.socket.close()
-    zeromq_serial.context.term()
+    del zeromq_serial
