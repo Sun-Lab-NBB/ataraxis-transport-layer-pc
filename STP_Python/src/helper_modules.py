@@ -1540,7 +1540,7 @@ class ElapsedTimer:
         self.__elapsed_reference = tm.perf_counter_ns()
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def convert_time(baseline_time: int, current_time: int, divider: int) -> float:
         """Converts the input time in nanoseconds to the requested time units, rounding to 3 decimal points. Uses
         numba to maximize method runtime speeds (totally an overkill, but oh well).
@@ -1736,7 +1736,7 @@ class SerializedConnection:
             return np.empty(0, dtype=uint8)
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def __add_to_buffer(buffer: np.ndarray, data: np.ndarray, occupied_buffer_size: int):
         """Appends input data to the end of the input circular buffer.
 

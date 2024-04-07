@@ -500,7 +500,7 @@ class SerializedTransferProtocol:
             raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def __write_scalar_data(
             target_buffer: np.ndarray,
             data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_],
@@ -545,7 +545,7 @@ class SerializedTransferProtocol:
         return required_size
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def __write_array_data(
             target_buffer: np.ndarray,
             array_object: np.ndarray,
@@ -753,7 +753,7 @@ class SerializedTransferProtocol:
             raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def __read_array_data(
             source_buffer: np.ndarray,
             array_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray],
@@ -878,7 +878,7 @@ class SerializedTransferProtocol:
         raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def __construct_packet(
             payload_buffer: np.ndarray,
             cobs_processor: COBSProcessor.processor,
@@ -1381,7 +1381,7 @@ class SerializedTransferProtocol:
         raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def __parse_packet(
             read_bytes: bytes,
             start_byte: np.uint8,
@@ -1583,7 +1583,7 @@ class SerializedTransferProtocol:
         return status_code, packet_size, remaining_bytes, packet_bytes
 
     @staticmethod
-    @njit
+    @njit(nogil=True, cache=True)
     def __validate_packet(
             reception_buffer: np.ndarray,
             packet_size: int,

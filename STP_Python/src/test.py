@@ -8,7 +8,7 @@ from helper_modules import ElapsedTimer
 import time as tm
 from numba import njit
 
-@njit
+@njit(nogil=True, cache=True)
 def long_calculation():
     array = np.zeros(10000, dtype=np.uint32)
     for i in range(10000,):
