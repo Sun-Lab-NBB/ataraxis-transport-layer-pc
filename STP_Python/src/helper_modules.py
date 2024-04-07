@@ -32,10 +32,11 @@ ZeroMQ connection over TCP (or UDP, ZeroMQ can be flexibly configured to use any
 
 import textwrap
 import time as tm
-from typing import Any, Literal, Union
+from typing import Any, Literal, Union, Optional
 import zmq
 import threading
 from collections import deque
+from serial import Serial
 
 import numpy as np
 from numba import njit, uint8, uint16, uint32
@@ -1464,211 +1465,337 @@ class SerialMock:
         return len(self.tx_buffer)
 
 
-class ZeroMQSerial:
-    """Establishes and facilitates bidirectional communication with another local or remote process running a
-    compatible ZeroMQ binding.
+class ElapsedTimer:
+    """A simple nanosecond-precise interval-timer that is based on the perf_counter_ns() method from the base Python
+    'time' library.
 
-    This class mimics the pySerial's Serial class in purpose and application. It establishes an exclusive pairing with
-    another ZeroMQ instance using the input address and protocol (port). This allows bidirectionally communicating
-    with any process on the same local or remote machine. Anything that can run ZeroMQ (and most things can) will be
-    able to communicate with an instance of this class.
+    This timer is modeled on the elapsedMillis library used in the microcontroller-targeted version of this library. It
+    wraps multiple perf_counter_ns() method calls to provide a convenient timer interface that can be called in one line
+    to obtain the number of nanoseconds passed since the last timer checkpoint. Timer checkpoints are either calls to
+    the reset() method or class instantiation (which contains a call to the reset() method).
 
     Notes:
-        This class is designed to be paired up with a pySerial Serial class communicating with microcontrollers. It
-        shares most of its bindings with how Serial class works, which allows SerializedTransferProtocol class to
-        use these communication backends interchangeably. This allows using the same high-level API across the library
-        to communicate with microcontrollers and other applications (for example Unity game-engine).
-
-    Args:
-        port: The protocol and full address of the port to connect to, eg: "tcp://127.0.0.1:5555".
-        connection_mode: The 'role' of the class instance. Available options are 'host' and 'client'. Since the class
-            uses the 'pair' socket mode, there can only be one host and one client for each unique address and port. The
-            socket that is instantiated first should be set as a host and the socket that is instantiated second should
-            be set as a 'client'. The only difference between 'host' and 'client' for this communication mode is the
-            order of instantiation.
-        timeout: The number of seconds(!) to wait for the requested number of bytes to become available, when reading
-            data from the class reception buffer. At minimum this can be set to 0 to completely disable waiting.
-            Defaults to 0.
-        buffer_size: The size of the circular reception buffer. The buffer is implemented as a deque object and, if
-            allowed to fill, will start discarding data from the beginning of the queue to accept more data. This size
-            determines the number of bytes that, at a maximum, can occupy the buffer before it starts discarding data.
-            Adjust this size to the minimum size appropriate for your use case. Defaults to 4096 (~4 kb).
-        auto_open; A boolean flag that determines whether the initialization method automatically calls open() method at
-            class initialization. If this flag is set to 'False', the user has to manually call the open() method prior
-            to using other class methods. Defaults to 'True'.
+        Since the class is based on perf_counter_ns(), the actual clock precision depends on the precision and frequency
+        of the system CPU clock that runs this code. The time is always counted in nanoseconds, and any conversion that
+        uses non-nanosecond precision is obtained by using numpy round() operation to round the converted values to 3
+        decimal points before they are returned to the caller.
 
     Attributes:
-        __port: The address used to establish the socket connection. Stores the input address provided by the user as
-            class initialization argument so that it can be used by the open() method.
-        __connection_mode: Stores the mode to be used by the thread when establishing connection. This is also used by
-            the open() method to establish the connection.
-        __timeout: Stores the timeout (in seconds) to be used when waiting for data to become available for reading.
-            This is used by the read() method.
-        __context: Initializes to a placeholder. Following open() method call, stores the context used to generate
-            sockets. Maintained until the close() method is used to terminate it.
-        __socket: Initializes to a placeholder. Following open() method call, the socket is used to send and receive
-            data over the provided port address. Maintained until the close() method is used to terminate it.
-        __timer: An instance of the ElapsedTimer class (configured to use second precision), used to time data
-            reading delays (if timeout is above 0).
-        __circular_buffer: An instance of the deque object, which is used as a temporary buffer to which the receiver
-            method continuously appends the data received from the connected socket. Uses 'buffer_size' class
-            initialization argument to determine the maximum number of bytes to store in buffer.
-        __is_open: A boolean flag that tracks whether the open() method has been used to establish the connection. If
-            this flag is set to 'False', read() and write() method cannot be used.
-        __stop_flag: A boolean flag used by the close() method to shut down the receiver thread. This allows using
-            close() method to gracefully shut down the connection without deleting the class.
-        __lock: A lock object used to synchronize the receiver thread with other class methods that need to access
-            the circular_buffer to prevent race_conditions and other synchronization issues of multithreaded execution.
-        __receiver_thread: A thread that continuously runs '__receiver' method until terminated via the __stop_flag
-            attribute. The thread is used to continuously monitor and fetch data transmitted by the connected socket,
-            which allows the class to function like a pySerial Serial binding does, where it constantly polls and moves
-            the received data to the local reception buffer.
+        __elapsed_reference: The reference time value used to convert the timer readouts to elapsed durations. Updated
+            each time reset() method is called.
+        __clock_divider: The conversion factor applied to the time in nanoseconds before it is returned to
+            caller. Used to support different time units despite using nanosecond-precision timer.
+        __precision: The string that represents the precision of the timer.
 
-    Raises:
-        TypeError: If any of the class initialization arguments are not of a correct type.
-        ValueError: If any of the class initialization arguments are set to an incorrect value.
+    Args:
+        precision: The desired precision of the timer. Accepted values are 'ns' (nanoseconds), 'us' (microseconds),
+            'ms' (milliseconds) and 's' (seconds).
     """
 
+    def __init__(self, precision=Literal["ns", "us", "ms", "s"]) -> None:
+        # Sets the clock divider based on the desired precision.
+        if precision == "ns":
+            self.__clock_divider = 1
+            self.__precision = "Nanoseconds"
+        elif precision == "us":
+            self.__clock_divider = 1000
+            self.__precision = "Microseconds"
+        elif precision == "ms":
+            self.__clock_divider = 1000000
+            self.__precision = "Milliseconds"
+        elif precision == "s":
+            self.__clock_divider = 1000000000
+            self.__precision = "Seconds"
+        else:
+            error_message = (
+                f"Unsupported timer precision: {precision} encountered when instantiating ElapsedTimer class. At this "
+                f"time, only 'ns', 'us','ms' and 's' precision inputs are supported."
+            )
+
+            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+
+        self.__elapsed_reference = tm.perf_counter_ns()  # Baselines the timer at instantiation
+
+        # Since elapsed property uses convert_time() and convert_time() is an nit method, it is beneficial to call the
+        # method once to force JIT compilation. All further calls will be made without the compilation overhead.
+        _ = self.elapsed
+
+        # Re-bases the time to discount the time spent compiling the JIT method. This is helpful when class is used
+        # right after instantiation without manually calling reset as it minimizes the delay between the end of
+        # instantiation and running the code for which the timer is called.
+        self.reset()
+
+    def __repr__(self) -> str:
+        repr_message = f"ElapsedTimer(precision='{self.__precision}', elapsed={self.elapsed})"
+        return repr_message
+
+    @property
+    def elapsed(self):
+        """Returns the time passed since the last timer checkpoint (instantiation or reset() call), converted to the
+        requested time units, rounding to 3 decimal points."""
+        return self.convert_time(self.__elapsed_reference, tm.perf_counter_ns(), self.__clock_divider)
+
+    def reset(self):
+        """Resets the timer by re-basing it to count time relative to the call time of the reset() method."""
+        self.__elapsed_reference = tm.perf_counter_ns()
+
+    @staticmethod
+    @njit
+    def convert_time(baseline_time: int, current_time: int, divider: int) -> float:
+        """Converts the input time in nanoseconds to the requested time units, rounding to 3 decimal points. Uses
+        numba to maximize method runtime speeds (totally an overkill, but oh well).
+        """
+        return np.round((current_time - baseline_time) / divider, 3)
+
+
+class SerializedConnection:
     def __init__(
         self,
-        port: str,
-        connection_mode: Literal["host", "client"],
-        timeout: int | float = 0,
-        buffer_size: int = 4096,
+        address_or_port: str,
+        backend: Literal["pyserial", "zeromq", "mock"],
+        baudrate: Optional[int] = None,
+        connection_mode: Optional[Literal["host", "client"]] = None,
+        timeout: Optional[int | float] = 0,
+        local_buffer_size: int = 4096,
+        force_open: bool = True,
         auto_open: bool = True,
     ) -> None:
-        # Verifies that the arguments conform to allowed types and values
-        if not isinstance(port, str):
+        # Ensures the backend argument type is valid
+        if not isinstance(backend, str):
             error_message = (
-                f"Invalid 'port' argument type ({type(port)}) encountered when initializing ZeroMQSerial class object. "
-                f"A string address and port in the format 'tcp://127.0.0.1:5555' is expected."
-            )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif connection_mode.lower() not in ("host", "client"):
-            error_message = (
-                f"Invalid 'connection_mode' argument value ({connection_mode}) encountered when initializing "
-                f"ZeroMQSerial class object. Currently, only 'host' or 'client' are accepted as valid argument values."
-            )
-            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif not isinstance(timeout, (int, float)):
-            error_message = (
-                f"Invalid 'timeout' argument type ({type(timeout)}) encountered when initializing ZeroMQSerial class "
-                f"object. Only integer and float inputs are accepted as valid argument."
-            )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif timeout < 0:
-            error_message = (
-                f"Invalid 'timeout' argument value ({timeout}) encountered when initializing ZeroMQSerial class "
-                f"object. Timeout has to be equal to or greater than 0."
-            )
-            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif not isinstance(buffer_size, int):
-            error_message = (
-                f"Invalid 'buffer_size' argument type ({type(buffer_size)}) encountered when initializing ZeroMQSerial "
-                f"class object. Only integer inputs are accepted as valid argument."
-            )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif buffer_size < 1:
-            error_message = (
-                f"Invalid 'buffer_size' argument value ({buffer_size}) encountered when initializing ZeroMQSerial "
-                f"class object. Minimum allowed buffer size is 1."
-            )
-            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif not isinstance(auto_open, bool):
-            error_message = (
-                f"Invalid 'auto_open' argument type ({type(auto_open)}) encountered when initializing ZeroMQSerial "
-                f"class object. Only boolean inputs are accepted as valid argument."
+                f"Invalid 'backend' argument type ({type(backend)}) encountered when initializing SerialConnection "
+                f"class object. A string option is expected. Supported options are: 'pyserial', 'zeromq' and 'mock'."
             )
             raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
+        # Resolves backend. This is by far the most important step of the initialization as it solely determine the
+        # connection type
+        if backend.lower() == "pyserial":
+            self.__backend_code = self.pyserial_backend_code
+            self.__backend = Serial(port=address_or_port, baudrate=baudrate, timeout=timeout)
+
+        elif backend.lower == "zeromq":
+            self.__backend_code = self.zeromq_backend_code
+            self.__backend = ZeroMQSerial(address=address_or_port, connection_mode=connection_mode, timeout=timeout)
+            if auto_open:
+                self.__backend.open()
+
+        elif backend.lower() == "mock":
+            self.__backend_code = self.mock_backend_code
+            self.__backend = SerialMock()
+
+        # If the backend could not be resolved, this means an unsupported option was provided, so issues an error
+        else:
+            error_message = (
+                f"Unsupported 'backend' argument value ({backend}) encountered when initializing SerialConnection "
+                f"class object. Supported options are: 'pyserial', 'zeromq' and 'mock'."
+            )
+            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+
         # Stores configuration parameters to class attributes
-        self.__port = port
+        self.__address = address_or_port
+        self.__baudrate = baudrate
         self.__connection_mode = connection_mode
         self.__timeout = timeout
 
         # Initializes local attributes
-        self.__context = None
-        self.__socket = None
+        # noinspection PyTypeChecker
         self.__timer = ElapsedTimer("s")
-        self.__circular_buffer = deque(maxlen=buffer_size)
+        self.__circular_buffer = np.zeros(local_buffer_size, dtype=np.uint8)
+        self.__occupied_buffer_size = 0
         self.__stop_flag = False
         self.__is_open = False
 
-        # Initializes threads and control elements (to monitor and save received data)
+        # Initializes the necessary threading elements to control data reception
         self.__lock = threading.Lock()  # Lock object to synchronize _receiver thread with other class methods
         self.__receiver_thread = threading.Thread(target=self.__receiver)  # Instantiates the receiver thread.
         self.__receiver_thread.daemon = True  # Ensures the thread terminates with the main thread
+
+        self.pyserial_backend_code = 1
+        self.zeromq_backend_code = 2
+        self.mock_backend_code = 3
+
+        # If the class is initialized with force_open flag, ensures the port is closed before re-establishing
+        # connection. This forces anything connected to the port to be ungracefully terminated, emptying the connection
+        # slot for the client to connect. This option is very helpful on Windows which in testing has been found to be
+        # somewhat unresponsive to graceful port release requests. Note, this only applies to Serial class, as
+        # ZeroMQSerial currently does not have a mechanism (and neither it really needs one) to force connections.
+        if force_open:
+            self.__backend.close()
 
         # If the class is initialized with the auto_open flag, calls open() at the end of initialization. Otherwise,
         # open() has to be called manually before using read() or write() methods of the class.
         if auto_open:
             self.open()
 
-    def __del__(self) -> None:
-        self.close()  # Ensures the connection is properly terminated before the class is deleted
+    def __repr__(self):
+        pass
 
-    def open(self) -> None:
-        """Connects to the requested port (address) using the requested mode (host or client).
+    def __del__(self):
+        pass
 
-        This method has to be called prior to calling most other methods of the class, as it is required to actually
-        establish the socket connection to the provided address. This method allows instantiating the class without
-        immediately establishing the connection, which is advantageous in many contexts.
+    def __receiver(self):
+        """Extracts (receives) the data from the bundled backend reception buffer.
 
-        Raises:
-            ZMQError: Typically if the provided port is not valid or already has another host or client (depending on
-                the __connection_mode attribute) connected to it.
-        """
-        # Initializes connection socket
-        self.__context = zmq.Context()  # Instantiates a socket generator method
-        self.__socket = self.__context.socket(zmq.PAIR)  # Generates a socket
-
-        # Connects to the created socket depending on the connection mode. Note, since the socket is used in Pair mode,
-        # re-binding an already hosted address or connecting to an already connected host will trigger a ZeroMQ error.
-        # This makes the class behave exactly like an exclusive Serial port does.
-        if self.__connection_mode == "host":
-            # Hosts BIND to a socket and start listening for other connections
-            self.__socket.bind(self.__port)
-        else:
-            # Clients CONNECT to the host that has bound the socket
-            self.__socket.connect(self.__port)
-
-        # Initializes the receiver thread. From this point on the class will continuously receive the data.
-        self.__receiver_thread.start()
-
-        # Sets the __is_open flag to indicate that the connection has been opened, and it is safe to use other class
-        # methods.
-        self.__is_open = True
-
-    def close(self) -> None:
-        """Terminates the connection to the port (address).
-
-        This method can be used to disconnect from the port connected to by the open() call. Note, this method
-        terminates the socket and the receiver thread, and it is safe to garbage-collect the class afterward (in fact,
-        close() is used inside the __del__ method). Closing the connection renders most class methods unusable until the
-        connection is opened again.
+        This method is designed to be executed via a thread. After initiation, it runs until terminated by stop_flag.
+        During runtime, it polls the state of the backend and if data is available to be received, writes it into the
+        class circular buffer.
 
         Notes:
-            Calling this method clears any data currently stored inside the circular_buffer in addition to other
-            changes. Make sure all important data is consumed before close() is called.
+            This implementation is notably more complex and probably slower than a 'need-based' access, but it allows
+            for runtime amortization when used as part of a pipeline. Since this library uses a lot of C-code linking
+            (via Numba and other libraries), using a thread to continuously transfer data from the backend buffer to
+            a local buffer allows to efficiently move data when the main thread is busy doing other C-operations. For
+            complex pipelines, this is likely to result in better overall execution speeds. Also, using a centralized
+            access approach allows standardizing backend access API, which is always fairly desirable.
         """
-        # If the connection is not open in the first place, there is no need to close it
-        if not self.__is_open:
-            return
+        event = threading.Event()  # This is used as a more accurate, GIL-releasing timer than sleep().
 
-        # Shuts down the connection by closing the socket and terminating the context
-        self.__socket.close()
-        self.__context.term()
+        # Runs until stop flag is triggered by the close() or __del__ method.
+        while not self.__stop_flag:
+            # Uses the same method to receive pySerial and SerialMock data as they have an identical API.
+            if self.__backend_code == self.pyserial_backend_code or self.__backend_code == self.mock_backend_code:
+                data = self.__receive_serial()
 
-        # Also toggles the stop flag to terminate the receiver thread and waits until the thread joins
-        self.__stop_flag = True
-        self.__receiver_thread.join()
+            # Uses a different interface for ZeroMQSerial backbone.
+            elif self.__backend_code == self.zeromq_backend_code:
+                data = self.__receive_serial()
 
-        # Clears the circular buffer
-        self.clear_buffer()
+            # Static guard against unknown backend codes. Should not really happen as this is explicitly controller
+            # during initialization, but may be helpful for developers adding new backends
+            else:
+                error_message = (
+                    f"Unexpected __backend_code ({self.__backend_code}) encountered while attempting to receive "
+                    f"serialized data from connection backend. Manual intervention is required to resolve the error."
+                )
+                raise RuntimeError(error_message)
 
-        # Sets the flag to indicate that the connection has been closed and needs to be re-opened before most other
-        # class methods can be used again
-        self.__is_open = False
+            # If data was received, as indicated by the size of the returned data array being above 0, adds it to the
+            # end of the circular buffer. If the buffer does not have space to appends the data, discards elements from
+            # the beginning of the buffer to make space.
+            if data.size != 0:
+                # Acquires the lock to ensure the buffer is not being accessed by another method (such as buffer reader
+                # method).
+                with self.__lock:
+                    self.__occupied_buffer_size = self.__add_to_buffer(
+                        self.__circular_buffer, data, self.__occupied_buffer_size
+                    )
+
+            # Blocks between 5 and 11 us. This is way more precise than the sleep() (that cannot resolve anything
+            # shorter than 16 ms on Windows) and releases GIL, but not as good as the busy-wait using nanosecond timers.
+            # That said, it's main goal is to ensure this method is delayed enough to let other threads acquire the GIL,
+            # so this small floating delay works for this purpose. Note, slower systems may experience slower refresh
+            # times here!
+            event.wait(timeout=1e-6)
+
+    def __receive_serial(self) -> np.ndarray:
+        """Extracts the data stored in the reception buffer of a pySerial or SerialMock backend.
+
+        Since SerialMock is implemented with identical bindings to the pySerial's Serial class, the data received by
+        these classes can be accessed using the same API. Therefore, this method can be used to access the real and
+        'mock' serial ports as a universal binding. This method is designed to be executed perpetually via a
+        continuously running __receiver thread.
+
+        Returns:
+            A numpy array view generated using the received bytes object buffer, if there were bytes to receive. An
+            empty numpy array if there were no bytes to receive.
+        """
+        available_bytes = self.__backend.in_waiting  # Checks if bytes are available
+        if available_bytes:
+            # If bytes are available, reads all available bytes
+            read_bytes = self.__backend.read(available_bytes)
+
+            # Converts the read bytes from 'bytes' to numpy as this is the format used by the rest of the library. Note,
+            # this conversion generates a 'readonly' representation as it uses a memory view of the original buffer,
+            # which makes it relatively fast
+            return np.frombuffer(buffer=read_bytes, dtype=np.uint8)
+        else:
+            # If no bytes are available, returns an empty representation to indicate no bytes were read
+            return np.empty(0, dtype=uint8)
+
+    def __receive_zeromq(self) -> np.ndarray:
+        """Extracts the data stored in the reception buffer of a ZeroMQSerial backend.
+
+        This method uses the recv() method of the ZeroMQ backend to access the reception buffer. Uses an error-based
+        mechanism which either returns the available bytes or raises an error that is suppressed locally (transformed
+        into 'no available bytes' return value). This method is designed to be executed perpetually via a continuously
+        running __receiver thread.
+
+        Returns:
+            A numpy array view generated using the received bytes object buffer, if there were bytes to receive. An
+            empty numpy array if there were no bytes to receive.
+        """
+        try:
+            # Attempts to receive the data. Using the NOBLOCK flag means that the method returns immediately: either
+            # with the received data OR with zmq.Again exception if no data is available for reception
+            message = self.__socket.recv(flags=zmq.NOBLOCK)
+            return np.frombuffer(buffer=message, dtype=np.uint8)
+
+        except zmq.Again:
+            # If no bytes were available, returns an empty representation to indicate no bytes were read
+            return np.empty(0, dtype=uint8)
+
+    @staticmethod
+    @njit
+    def __add_to_buffer(buffer: np.ndarray, data: np.ndarray, occupied_buffer_size: int):
+        """Appends input data to the end of the input circular buffer.
+
+        This method simulates the behavior of the circular buffers found in many low-end Serial port controllers. It
+        adds incoming data in a FIFO fashion to the buffer, discarding the oldest data in the case of an overflow.
+
+        Notes:
+            If the method runs out of space at the end of the buffer, it discards the necessary amount of elements from
+            the beginning of the buffer (oldest elements), until enough space is made to accommodate the data. If the
+            size of the input data array is larger than the size of the buffer, the buffer is replaced with the end
+            portion of the data buffer (with the size that fits inside the buffer). This latter case is NOT an intended
+            use case, and, due to JIT compilation, may require additional compilation time if encountered during
+            runtime.
+
+        Args:
+            buffer: The buffer to which the data will be appended. This should be the class circular_buffer instance.
+            data: The numpy array that stores the data to be appended. This should be the uint8 array generated using
+                the received 'bytes' object as buffer.
+            occupied_buffer_size: The portion of the buffer (relative to index 0) currently occupied with buffer.
+
+        Returns:
+            The size of the buffer that is occupied with data following the addition of the input data.
+
+        """
+        # The intended inputs to this method are generated using np.frombuffer, which makes them read-only. Copying the
+        # data into a new numpy object before running the operations below prevents potential 'readonly access denied'
+        # errors. Doing the copying inside the jit-compiled method saves execution time.
+        local_data = data.copy()
+
+        # If the buffer is not fully occupied and the available space is sufficeint to accommodate the input data,
+        # simply appends the data to the end of the buffer. This is expected to be the most common case and, as such, it
+        # is evaluated first
+        if data.size + occupied_buffer_size <= buffer.size:
+            buffer[occupied_buffer_size : occupied_buffer_size + data.size] = data
+            occupied_buffer_size += data.size
+
+        # The next likely case: if the buffer does not have sufficeint unoccupied space to accommodate the data, but
+        # the size of the data is less than the size of the buffer, discards the oldest data (from the beginning of the
+        # buffer) until sufficient amount of space is freed up.
+        elif data.size < buffer.size:
+            required_space = (data.size + occupied_buffer_size) - buffer.size  # Calculates extra space requirement
+
+            # Shifts the buffer by the required space to the left. This moves the 'excessive' data from the front of the
+            # buffer to the end of the buffer, where it will be overwritten with new data (and, therefore, discarded).
+            buffer[:] = np.roll(buffer, -required_space)
+
+            # Overwrites the tail end of the buffer with data
+            buffer[-data.size :] = data
+            occupied_buffer_size = buffer.size
+
+        # The most unlikely case: If data size is larger than or equal to buffer size, keeps only the most recent data
+        # that fits into the buffer. This effectively replaces the contents of the buffer with the end portion of the
+        # data array (or the whole data array).
+        else:
+            buffer[:] = data[-buffer.size :]
+            occupied_buffer_size = buffer.size
+
+        # Returns the recalculated occupied size tracker so that it can be used in future calls of this method
+        return occupied_buffer_size
 
     @property
     def in_waiting(self) -> int:
@@ -1683,32 +1810,6 @@ class ZeroMQSerial:
     def name(self) -> str:
         """Returns the port name (address) of the ZeroMQ socket used by the class."""
         return self.__port
-
-    def __receiver(self) -> None:
-        """Receives the data transmitted over the bundled class socket.
-
-        This method is designed to be executed via a thread. After initiation, it runs until terminated by stop_flag.
-        During runtime, it polls the state of the socket and if data is available to be received, writes it into the
-        class circular buffer (emulating hardware-interrupt-based serial data reader method).
-        """
-        event = threading.Event()  # This is used as a more accurate, GIL-releasing timer than sleep().
-        while not self.__stop_flag:  # Runs until stop flag is triggered by the close() or __del__ method.
-            # Attempts to receive data from the socket on each iteration
-            try:
-                # Attempts to receive the data. Using the NOBLOCK flag means that the method returns immediately: either
-                # with the received data OR with zmq.Again exception if no data is available for reception
-                data = self.__socket.recv(flags=zmq.NOBLOCK)
-
-                # If data was received, acquires the lock and writes the data to the end of the circular_buffer. Note,
-                # if the buffer is at full capacity, it will discard the data from the FRONT of the buffer to
-                # accommodate the incoming data.
-                with self.__lock:
-                    self.__circular_buffer.extend(data)
-
-            # If the recv method raised the Again exception, blocks for a short period of time (also releases GIL) and
-            # re-runs the loop.
-            except zmq.Again:
-                event.wait(timeout=20e-6)  # This ensures the socket is polled every 20 us.
 
     def read(self, size: int = 1) -> bytes:
         """Reads the requested number of bytes from the class circular buffer and returns them as 'bytes' object.
@@ -1820,84 +1921,169 @@ class ZeroMQSerial:
             self.__circular_buffer.clear()
 
 
-class ElapsedTimer:
-    """A simple nanosecond-precise interval-timer that is based on the perf_counter_ns() method from the base Python
-    'time' library.
+class ZeroMQSerial:
+    """Establishes and facilitates bidirectional communication with another local or remote process running a
+    compatible ZeroMQ binding.
 
-    This timer is modeled on the elapsedMillis library used in the microcontroller-targeted version of this library. It
-    wraps multiple perf_counter_ns() method calls to provide a convenient timer interface that can be called in one line
-    to obtain the number of nanoseconds passed since the last timer checkpoint. Timer checkpoints are either calls to
-    the reset() method or class instantiation (which contains a call to the reset() method).
+    This class mimics the pySerial's Serial class in purpose and application. It establishes an exclusive pairing with
+    another ZeroMQ instance using the input address and protocol (port). This allows bidirectionally communicating
+    with any process on the same local or remote machine. Anything that can run ZeroMQ (and most things can) will be
+    able to communicate with an instance of this class.
 
     Notes:
-        Since the class is based on perf_counter_ns(), the actual clock precision depends on the precision and frequency
-        of the system CPU clock that runs this code. The time is always counted in nanoseconds, and any conversion that
-        uses non-nanosecond precision is obtained by using numpy round() operation to round the converted values to 3
-        decimal points before they are returned to the caller.
-
-    Attributes:
-        __elapsed_reference: The reference time value used to convert the timer readouts to elapsed durations. Updated
-            each time reset() method is called.
-        __clock_divider: The conversion factor applied to the time in nanoseconds before it is returned to
-            caller. Used to support different time units despite using nanosecond-precision timer.
-        __precision: The string that represents the precision of the timer.
+        This class is designed to be paired up with a pySerial Serial class communicating with microcontrollers. It
+        shares most of its bindings with how Serial class works, which allows SerializedTransferProtocol class to
+        use these communication backends interchangeably. This allows using the same high-level API across the library
+        to communicate with microcontrollers and other applications (for example Unity game-engine).
 
     Args:
-        precision: The desired precision of the timer. Accepted values are 'ns' (nanoseconds), 'us' (microseconds),
-            'ms' (milliseconds) and 's' (seconds).
+        address: The protocol and full address of the port to connect to, eg: "tcp://127.0.0.1:5555".
+        connection_mode: The 'role' of the class instance. Available options are 'host' and 'client'. Since the class
+            uses the 'pair' socket mode, there can only be one host and one client for each unique address and port. The
+            socket that is instantiated first should be set as a host and the socket that is instantiated second should
+            be set as a 'client'. The only difference between 'host' and 'client' for this communication mode is the
+            order of instantiation.
+        timeout: The number of seconds(!) to wait for the requested number of bytes to become available, when reading
+            data from the class reception buffer. At minimum this can be set to 0 to completely disable waiting.
+            Defaults to 0.
+        buffer_size: The size of the circular reception buffer. The buffer is implemented as a deque object and, if
+            allowed to fill, will start discarding data from the beginning of the queue to accept more data. This size
+            determines the number of bytes that, at a maximum, can occupy the buffer before it starts discarding data.
+            Adjust this size to the minimum size appropriate for your use case. Defaults to 4096 (~4 kb).
+
+    Attributes:
+        __port: The address used to establish the socket connection. Stores the input address provided by the user as
+            class initialization argument so that it can be used by the open() method.
+        __connection_mode: Stores the mode to be used by the thread when establishing connection. This is also used by
+            the open() method to establish the connection.
+        __timeout: Stores the timeout (in seconds) to be used when waiting for data to become available for reading.
+            This is used by the read() method.
+        __context: Initializes to a placeholder. Following open() method call, stores the context used to generate
+            sockets. Maintained until the close() method is used to terminate it.
+        __socket: Initializes to a placeholder. Following open() method call, the socket is used to send and receive
+            data over the provided port address. Maintained until the close() method is used to terminate it.
+        __timer: An instance of the ElapsedTimer class (configured to use second precision), used to time data
+            reading delays (if timeout is above 0).
+        __circular_buffer: An instance of the deque object, which is used as a temporary buffer to which the receiver
+            method continuously appends the data received from the connected socket. Uses 'buffer_size' class
+            initialization argument to determine the maximum number of bytes to store in buffer.
+        __is_open: A boolean flag that tracks whether the open() method has been used to establish the connection. If
+            this flag is set to 'False', read() and write() method cannot be used.
+        __stop_flag: A boolean flag used by the close() method to shut down the receiver thread. This allows using
+            close() method to gracefully shut down the connection without deleting the class.
+        __lock: A lock object used to synchronize the receiver thread with other class methods that need to access
+            the circular_buffer to prevent race_conditions and other synchronization issues of multithreaded execution.
+        __receiver_thread: A thread that continuously runs '__receiver' method until terminated via the __stop_flag
+            attribute. The thread is used to continuously monitor and fetch data transmitted by the connected socket,
+            which allows the class to function like a pySerial Serial binding does, where it constantly polls and moves
+            the received data to the local reception buffer.
+
+    Raises:
+        TypeError: If any of the class initialization arguments are not of a correct type.
+        ValueError: If any of the class initialization arguments are set to an incorrect value.
     """
 
-    def __init__(self, precision=Literal["ns", "us", "ms", "s"]) -> None:
-        # Sets the clock divider based on the desired precision.
-        if precision == "ns":
-            self.__clock_divider = 1
-            self.__precision = "Nanoseconds"
-        elif precision == "us":
-            self.__clock_divider = 1000
-            self.__precision = "Microseconds"
-        elif precision == "ms":
-            self.__clock_divider = 1000000
-            self.__precision = "Milliseconds"
-        elif precision == "s":
-            self.__clock_divider = 1000000000
-            self.__precision = "Seconds"
-        else:
+    def __init__(
+        self,
+        address: str,
+        connection_mode: Literal["host", "client"],
+        timeout: int | float = 0,
+    ) -> None:
+        # Verifies that the arguments conform to allowed types and values
+        if not isinstance(address, str):
             error_message = (
-                f"Unsupported timer precision: {precision} encountered when instantiating ElapsedTimer class. At this "
-                f"time, only 'ns', 'us','ms' and 's' precision inputs are supported."
+                f"Invalid 'address' argument type ({type(address)}) encountered when initializing ZeroMQSerial class "
+                f"object. A string address and port in the format 'tcp://127.0.0.1:5555' is expected."
             )
+            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif connection_mode.lower() not in ("host", "client"):
+            error_message = (
+                f"Invalid 'connection_mode' argument value ({connection_mode}) encountered when initializing "
+                f"ZeroMQSerial class object. Currently, only 'host' or 'client' are accepted as valid argument values."
+            )
+            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif not isinstance(timeout, (int, float)):
+            error_message = (
+                f"Invalid 'timeout' argument type ({type(timeout)}) encountered when initializing ZeroMQSerial class "
+                f"object. Only integer and float inputs are accepted as valid argument."
+            )
+            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        elif timeout < 0:
+            error_message = (
+                f"Invalid 'timeout' argument value ({timeout}) encountered when initializing ZeroMQSerial class "
+                f"object. Timeout has to be equal to or greater than 0."
+            )
+            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        # Stores configuration parameters to class attributes
+        self.__port = address
+        self.__connection_mode = connection_mode
+        self.__timeout = timeout
 
-        self.__elapsed_reference = tm.perf_counter_ns()  # Baselines the timer at instantiation
+        # Initializes local attributes
+        self.__context = None
+        self.__socket = None
+        self.__is_open = False
 
-        # Since elapsed property uses convert_time() and convert_time() is an nit method, it is beneficial to call the
-        # method once to force JIT compilation. All further calls will be made without the compilation overhead.
-        _ = self.elapsed
+    def __del__(self) -> None:
+        self.close()  # Ensures the connection is properly terminated before the class is deleted
 
-        # Re-bases the time to discount the time spent compiling the JIT method. This is helpful when class is used
-        # right after instantiation without manually calling reset as it minimizes the delay between the end of
-        # instantiation and running the code for which the timer is called.
-        self.reset()
+    def open(self) -> None:
+        """Connects to the requested port (address) using the requested mode (host or client).
 
-    def __repr__(self) -> str:
-        repr_message = f"ElapsedTimer(precision='{self.__precision}', elapsed={self.elapsed})"
-        return repr_message
+        This method has to be called prior to calling most other methods of the class, as it is required to actually
+        establish the socket connection to the provided address. This method allows instantiating the class without
+        immediately establishing the connection, which is advantageous in many contexts.
 
-    @property
-    def elapsed(self):
-        """Returns the time passed since the last timer checkpoint (instantiation or reset() call), converted to the
-        requested time units, rounding to 3 decimal points."""
-        return self.convert_time(self.__elapsed_reference, tm.perf_counter_ns(), self.__clock_divider)
-
-    def reset(self):
-        """Resets the timer by re-basing it to count time relative to the call time of the reset() method."""
-        self.__elapsed_reference = tm.perf_counter_ns()
-
-    @staticmethod
-    @njit
-    def convert_time(baseline_time: int, current_time: int, divider: int) -> float:
-        """Converts the input time in nanoseconds to the requested time units, rounding to 3 decimal points. Uses
-        numba to maximize method runtime speeds (totally an overkill, but oh well).
+        Raises:
+            ZMQError: Typically if the provided port is not valid or already has another host or client (depending on
+                the __connection_mode attribute) connected to it.
         """
-        return np.round((current_time - baseline_time) / divider, 3)
+        # Initializes connection socket
+        self.__context = zmq.Context()  # Instantiates a socket generator method
+        self.__socket = self.__context.socket(zmq.PAIR)  # Generates a socket
+
+        # Connects to the created socket depending on the connection mode. Note, since the socket is used in Pair mode,
+        # re-binding an already hosted address or connecting to an already connected host will trigger a ZeroMQ error.
+        # This makes the class behave exactly like an exclusive Serial port does.
+        if self.__connection_mode == "host":
+            # Hosts BIND to a socket and start listening for other connections
+            self.__socket.bind(self.__port)
+        else:
+            # Clients CONNECT to the host that has bound the socket
+            self.__socket.connect(self.__port)
+
+        # Sets the __is_open flag to indicate that the connection has been opened, and it is safe to use other class
+        # methods.
+        self.__is_open = True
+
+    def close(self) -> None:
+        """Terminates the connection to the port (address).
+
+        This method can be used to disconnect from the port connected to by the open() call. Note, this method
+        terminates the socket and the receiver thread, and it is safe to garbage-collect the class afterward (in fact,
+        close() is used inside the __del__ method). Closing the connection renders most class methods unusable until the
+        connection is opened again.
+
+        Notes:
+            Calling this method clears any data currently stored inside the circular_buffer in addition to other
+            changes. Make sure all important data is consumed before close() is called.
+        """
+        # If the connection is not open in the first place, there is no need to close it
+        if not self.__is_open:
+            return
+
+        # Shuts down the connection by closing the socket and terminating the context
+        self.__socket.close()
+        self.__context.term()
+
+        # Also toggles the stop flag to terminate the receiver thread and waits until the thread joins
+        self.__stop_flag = True
+        self.__receiver_thread.join()
+
+        # Clears the circular buffer
+        self.clear_buffer()
+
+        # Sets the flag to indicate that the connection has been closed and needs to be re-opened before most other
+        # class methods can be used again
+        self.__is_open = False
