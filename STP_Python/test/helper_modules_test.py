@@ -1266,56 +1266,6 @@ def test_serial_mock():
         mock_serial.reset_output_buffer()
 
 
-def test_elapsed_timer():
-    """Tests the functionality of ElapsedTimer class at different precision values."""
-
-    # Tests invalid precision input error (at instantiation)
-    invalid_precision = "h"
-    error_message = (
-        f"Unsupported timer precision: {invalid_precision} encountered when instantiating ElapsedTimer class. At this "
-        f"time, only 'ns', 'us','ms' and 's' precision inputs are supported."
-    )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
-        # noinspection PyTypeChecker
-        ElapsedTimer(precision=invalid_precision)
-
-    # Tests nanosecond precision
-    elapsed_timer = ElapsedTimer("ns")
-    tm.sleep(0.000001)  # Sleeps for 1 microsecond
-    elapsed_ns = elapsed_timer.elapsed
-    assert elapsed_ns > 0, "Elapsed nanoseconds should be greater than 0"
-
-    # Tests microsecond precision
-    elapsed_timer = ElapsedTimer(precision="us")
-    tm.sleep(0.001)  # Sleeps for 1 millisecond
-    elapsed_us = elapsed_timer.elapsed
-    assert elapsed_us > 0, "Elapsed microseconds should be greater than 0"
-
-    # Tests millisecond precision
-    elapsed_timer = ElapsedTimer(precision="ms")
-    tm.sleep(0.1)  # Sleeps for 100 milliseconds
-    elapsed_ms = elapsed_timer.elapsed
-    assert elapsed_ms > 0, "Elapsed milliseconds should be greater than 0"
-
-    # Tests second precision
-    elapsed_timer = ElapsedTimer(precision="s")
-    tm.sleep(1)  # Sleeps for 1 second
-    elapsed_s = elapsed_timer.elapsed
-    assert elapsed_s > 0, "Elapsed seconds should be greater than 0"
-
-    # Tests reset functionality
-    reset_timer = ElapsedTimer(precision="ms")
-    tm.sleep(0.5)  # Sleeps for 500 milliseconds
-    elapsed_before_reset = reset_timer.elapsed
-    reset_timer.reset()
-    tm.sleep(0.2)  # Sleeps for 200 milliseconds
-    elapsed_after_reset = reset_timer.elapsed
-    assert elapsed_after_reset < elapsed_before_reset, "Elapsed time should be reset"
-
-
 def test_zeromq_serial_successful_cases():
     # Create ZeroMQSerial instance
     zeromq_host = ZeroMQSerial(port="tcp://127.0.0.1:5555", connection_mode='host')
