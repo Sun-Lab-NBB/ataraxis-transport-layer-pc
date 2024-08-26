@@ -1,46 +1,26 @@
-"""This file stores low-level helper modules that are used by the main SerializedTransferProtocol class to support its
-runtime.
+"""This module contains the low-level helper classes that support TransportLayer class runtime.
 
-At this time, this file includes the following classes:
-- COBSProcessor and CRCProcessor modules that are used to process the transferred data before and after transmission.
-- SerialMock class used to test SerializedTransferProtocol's transmission and reception behavior.
-- ElapsedTimer class, which is a custom perf_counter_ns-based implementation of elapsedMillis C++ library, used to time
-serial packet reception delays.
-- ZeroMQSerial class, which is a wrapper around the ZeroMQ communication protocol that allows interfacing with
-non-microcontroller devices running the Python or C# version of this library.
+This includes the CRCProcessor and COBSProcessor classes used to serialize and deserialize transmitted payloads and
+SerialMock class used to test the TransportLayer class.
 
 All methods of CRCProcessor and COBSProcessor classes are implemented using Numba and Numpy to optimize runtime
-execution speed. This allows compiling the classes to machine-code (via first translating them to C under-the-hood)
-whenever they are first called by the main class and achieves execution speeds that are at least 5 times as fast as
-the equivalent pure-python implementation. As a downside, many python features are not supported by numba optimized
-classes and, to improve user experience, the compiled classes are wrapped into equally named pure-python classes to
-provide a more standard python API. The API is primarily intended for unit testing and users who want to use any of
-the helper modules without using the main SerializedTransferProtocol class.
+execution speed. This allows compiling the classes to machine-code whenever they are first called by the TransportLayer
+class and achieves execution speeds that are at least 5 times as fast as the equivalent pure-python implementation.
+For user convenience, these classes are wrapped into pure-python API, which adds a minor overhead, but simplifies
+working with the wrapped classes.
 
 The SerialMock class is a pure-python class whose main job is to 'overload' the methods of the pySerial's Serial
-class so that SerializedTransferProtocol can be tested without a properly configured microcontroller (and also
-without trying to guess which specific COM port (if any) is available for each user running the tests). It has no
-practical use past that specific role.
-
-The ZeroMQSerial class is provided as an ongoing attempt to unify all communication methods under the same convenient
-abstraction offered through SerializedTransferProtocol class. ZeroMQ is a popular and, most importantly, lightweight,
-fast and flexible protocol implemented in more or less any popular programming language. This makes it a perfect
-candidate to serve both for inter-process and cross-machine communication. Overall, the idea is to have microcontrollers
-talk to PC via Serial, which is by far the most efficient protocol and the PC to talk to other PCs / processes via the
-ZeroMQ connection over TCP (or UDP, ZeroMQ can be flexibly configured to use any backbone).
+class, so that TransportLayer can be tested without a properly configured Microcontroller. It has no
+practical use outside of this specific role.
 """
 
 import textwrap
-import time as tm
-from typing import Any, Literal, Union, Optional
-import zmq
-import threading
-from collections import deque
-from serial import Serial
+from typing import Any, Union
 
 import numpy as np
-from numba import njit, uint8, uint16, uint32
+from numba import uint8, uint16, uint32
 from numba.experimental import jitclass
+from ataraxis_base_utilities import console
 
 
 class COBSProcessor:
@@ -57,27 +37,27 @@ class COBSProcessor:
         automatically converts internal class runtime status codes into exception error messages where appropriate to
         notify users about runtime errors.
 
-        For the maximum execution speed, you can access the private methods directly (see SerializedTransferProtocol
+        For the maximum execution speed, you can access the private methods directly (see TransportLayer
         class), although this is highly discouraged.
 
     Attributes:
-        __processor: The private instance of the jit-compiled _COBSProcessor class which actually does all the required
-            computations. Private by design and should never be accessed directly.
+        _processor: Stores the jit-compiled _COBSProcessor class, which carries out all computations.
     """
 
     def __init__(self) -> None:
         # Instantiates the inner COBS class using the proper spec template
-        self.__processor = self.__make_cobs_processor_class()
+        self._processor = self._make_cobs_processor_class()
 
     def __repr__(self) -> str:
-        repr_message = (
-            f"COBSProcessor(inner_status={self.__processor.status}, "
-            f"max_payload_size={self.__processor.max_payload_size}, "
-            f"min_payload_size={self.__processor.min_payload_size}, "
-            f"max_packet_size={self.__processor.max_packet_size}, "
-            f"min_packet_size={self.__processor.min_packet_size})"
+        """Returns a string representation of the COBSProcessor class instance."""
+        representation_string = (
+            f"COBSProcessor(inner_status={self._processor.status}, "
+            f"max_payload_size={self._processor.max_payload_size}, "
+            f"min_payload_size={self._processor.min_payload_size}, "
+            f"max_packet_size={self._processor.max_packet_size}, "
+            f"min_packet_size={self._processor.min_packet_size})"
         )
-        return repr_message
+        return representation_string
 
     def encode_payload(self, payload: np.ndarray, delimiter: np.uint8 = 0) -> np.ndarray:
         """Encodes the input payload into a transmittable packet using COBS scheme.
@@ -109,25 +89,39 @@ class COBSProcessor:
                 f"A numpy ndarray payload expected, but instead encountered '{type(payload)}' when encoding payload "
                 f"using COBS scheme."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
         elif not isinstance(delimiter, np.uint8):
             error_message = (
                 f"A scalar numpy uint8 (byte) delimiter expected, but instead encountered '{type(delimiter)}' when "
                 f"encoding payload using COBS scheme."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Calls the encoding method
-        packet = self.__processor.encode_payload(payload, delimiter)
+        packet = self._processor.encode_payload(payload, delimiter)
 
         # Resolves method runtime status to see if an error exception needs to be raised or the packet has been encoded
         # and can be returned to caller
-        self.__verify_encoding_outcome(payload)
+        self._verify_encoding_outcome(payload)
 
         # If runtime was successful, returns the packet
         return packet
 
-    def __verify_encoding_outcome(self, payload: np.ndarray) -> None:
+    def _verify_encoding_outcome(self, payload: np.ndarray) -> None:
         """Verifies that encode_payload() method runtime was successful. If not, raises the appropriate exception.
 
         Notes:
@@ -146,44 +140,72 @@ class COBSProcessor:
         """
 
         # Success code, verification is complete
-        if self.__processor.status == self.__processor.payload_encoded:
+        if self._processor.status == self._processor.payload_encoded:
             pass
 
         # Payload too small
-        elif self.__processor.status == self.__processor.payload_too_small_error:
+        elif self._processor.status == self._processor.payload_too_small_error:
             error_message = (
                 f"The size of the input payload ({payload.size}) is too small to be encoded using COBS scheme. "
-                f"A minimum size of {self.__processor.min_payload_size} elements (bytes) is required. "
-                f"CODE: {self.__processor.status}."
+                f"A minimum size of {self._processor.min_payload_size} elements (bytes) is required. "
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Payload too large
-        elif self.__processor.status == self.__processor.payload_too_large_error:
+        elif self._processor.status == self._processor.payload_too_large_error:
             error_message = (
                 f"The size of the input payload ({payload.size}) is too large to be encoded using COBS scheme. "
-                f"A maximum size of {self.__processor.max_payload_size} elements (bytes) is required. "
-                f"CODE: {self.__processor.status}."
+                f"A maximum size of {self._processor.max_payload_size} elements (bytes) is required. "
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Invalid payload datatype
-        elif self.__processor.status == self.__processor.invalid_payload_datatype_error:
+        elif self._processor.status == self._processor.invalid_payload_datatype_error:
             error_message = (
                 f"The datatype of the input payload to be encoded using COBS scheme ({payload.dtype}) is not "
                 f"supported. Only uint8 (byte) numpy arrays are currently supported as payload inputs. "
-                f"CODE: {self.__processor.status}."
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Unknown status code
         else:
             error_message = (
-                f"Unexpected inner _COBSProcessor class status code ({self.__processor.status}) encountered when "
+                f"Unexpected inner _COBSProcessor class status code ({self._processor.status}) encountered when "
                 f"attempting to COBS-encode the input payload. "
                 f"CODE: 0."
             )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise RuntimeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
     def decode_payload(self, packet: np.ndarray, delimiter: np.uint8 = 0) -> np.ndarray:
         """Decodes the COBS-encoded payload from the input packet.
@@ -222,24 +244,38 @@ class COBSProcessor:
                 f"A numpy ndarray packet expected, but instead encountered '{type(packet)}' when decoding packet "
                 f"using COBS scheme."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
         elif not isinstance(delimiter, np.uint8):
             error_message = (
                 f"A scalar numpy uint8 (byte) delimiter expected, but instead encountered '{type(delimiter)}' when "
                 f"decoding packet using COBS scheme."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Calls decoding method
-        payload = self.__processor.decode_payload(packet, delimiter)
+        payload = self._processor.decode_payload(packet, delimiter)
 
         # Verifies the outcome of decoding method runtime
-        self.__verify_decoding_outcome(packet)
+        self._verify_decoding_outcome(packet)
 
         # Returns the decoded payload to caller if verification was successful
         return payload
 
-    def __verify_decoding_outcome(self, packet: np.ndarray) -> None:
+    def _verify_decoding_outcome(self, packet: np.ndarray) -> None:
         """Verifies that decode_payload() method runtime was successful. If not, raises the appropriate exception.
 
         Notes:
@@ -259,65 +295,107 @@ class COBSProcessor:
         """
 
         # Runtime successful, verification is complete
-        if self.__processor.status == self.__processor.payload_decoded:
+        if self._processor.status == self._processor.payload_decoded:
             pass
 
         # Packet too small
-        elif self.__processor.status == self.__processor.packet_too_small_error:
+        elif self._processor.status == self._processor.packet_too_small_error:
             error_message = (
                 f"The size of the input packet ({packet.size}) is too small to be decoded using COBS scheme. "
-                f"A minimum size of {self.__processor.min_packet_size} elements (bytes) is required. "
-                f"CODE: {self.__processor.status}."
+                f"A minimum size of {self._processor.min_packet_size} elements (bytes) is required. "
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Packet too large
-        elif self.__processor.status == self.__processor.packet_too_large_error:
+        elif self._processor.status == self._processor.packet_too_large_error:
             error_message = (
                 f"The size of the input packet ({packet.size}) is too large to be decoded using COBS scheme. "
-                f"A maximum size of {self.__processor.max_packet_size} elements (bytes) is required. "
-                f"CODE: {self.__processor.status}."
+                f"A maximum size of {self._processor.max_packet_size} elements (bytes) is required. "
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Invalid packet datatype
-        elif self.__processor.status == self.__processor.invalid_packet_datatype_error:
+        elif self._processor.status == self._processor.invalid_packet_datatype_error:
             error_message = (
                 f"The datatype of the input packet to be decoded using COBS scheme ({packet.dtype}) is not supported. "
                 f"Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
-                f"CODE: {self.__processor.status}."
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Delimiter isn't found at the end of the packet or 'jumping' does not point at the end of teh packet. Indicates
         # packet corruption.
-        elif self.__processor.status == self.__processor.delimiter_not_found_error:
+        elif self._processor.status == self._processor.delimiter_not_found_error:
             error_message = (
                 f"Attempting to decode the packet using COBS scheme does not result in reaching the unencoded delimiter"
                 f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
                 f"because the traversal process does not point at the final index of the packet. Packet is likely "
                 f"corrupted. "
-                f"CODE: {self.__processor.status}."
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Delimiter encountered before reaching the end of the packet. Indicates packet corruption.
-        elif self.__processor.status == self.__processor.delimiter_found_too_early_error:
+        elif self._processor.status == self._processor.delimiter_found_too_early_error:
             error_message = (
                 f"Unencoded delimiter found before reaching the end of the packet during COBS-decoding sequence. "
                 f"Packet is likely corrupted. "
-                f"CODE: {self.__processor.status}."
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Unknown code
         else:
             error_message = (
-                f"Unexpected inner _COBSProcessor class status code ({self.__processor.status}) encountered when "
+                f"Unexpected inner _COBSProcessor class status code ({self._processor.status}) encountered when "
                 f"attempting to COBS-decode the input packet. "
                 f"CODE: 0."
             )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise RuntimeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
     @property
     def processor(self):
@@ -325,11 +403,11 @@ class COBSProcessor:
         unwrapping the jit-compiled class, so that the fast methods can be used directly (helpful when you want to use
         them from another jit-method).
         """
-        return self.__processor
+        return self._processor
 
     @staticmethod
-    def __make_cobs_processor_class():
-        """A template-like private method that instantiates and returns jit-compiled _COBSProcessor class object.
+    def _make_cobs_processor_class():
+        """A template-like private method that instantiates and returns a jit-compiled _COBSProcessor class object.
 
         Notes:
             Since COBSProcessor does not use any 'template' parameters, this function only exists to maintain
@@ -343,7 +421,7 @@ class COBSProcessor:
         """
 
         # The template for the numba compiler to assign specific datatypes to variables used by the COBSProcessor class.
-        # This is needed for Numba to properly compile the class to C.
+        # This is necessary for Numba to properly compile the class to C.
         cobs_spec = [
             ("status", uint8),
             ("max_payload_size", uint8),
@@ -472,9 +550,9 @@ class COBSProcessor:
                 # delimiter bytes (see COBS scheme for more details on why this is necessary).
                 packet = np.empty(size + 2, dtype=payload.dtype)
                 packet[-1] = delimiter  # Sets the last byte of the packet to the delimiter byte value
-                packet[
-                    1:-1
-                ] = payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
+                packet[1:-1] = (
+                    payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
+                )
 
                 # A tracker variable that is used to calculate the distance to the next delimiter value when an
                 # unencoded delimiter is required.
@@ -531,7 +609,7 @@ class COBSProcessor:
                 # noinspection DuplicatedCode
                 size = packet.size  # Extracts packet size for the checks below
 
-                # This is needed due to how this method is used by the main class, where the input to this method
+                # This is necessary due to how this method is used by the main class, where the input to this method
                 # happens to be a 'readonly' array. Copying the array removes the readonly flag.
                 packet = packet.copy()
 
@@ -564,7 +642,7 @@ class COBSProcessor:
 
                 # Loops over the payload and iteratively jumps over all encoded values, restoring (decoding) them back
                 # to the delimiter value in the process. Carries on with the process until it reaches the end of the
-                # packet or until it encounters an unencoded delimiter values. These two conditions should coincide for
+                # packet or until it encounters an unencoded delimiter value. These two conditions should coincide for
                 # each well-formed packet.
                 while (read_index + next_index) < size:
                     # Increments the read_index via aggregation for each iteration of the loop
@@ -616,11 +694,11 @@ class CRCProcessor:
         automatically converts internal class runtime status codes into exception error messages where appropriate to
         notify users about runtime errors.
 
-        For the maximum execution speed, you can access the private methods directly (see SerializedTransferProtocol
+        For the maximum execution speed, you can access the private methods directly (see TransportLayer
         class), although this is highly discouraged.
 
         To increase runtime speed, this class generates a static CRC lookup table using the input polynomial, which is
-        subsequently used to calculate CRC checksums. This statically reserves 256, 512 or 1024 bytes of RAM to store
+        subsequently used to calculate CRC checksums. This statically reserves 256, 512, or 1024 bytes of RAM to store
         the table, which is more or less irrelevant for all modern systems.
 
         In addition to providing CRC checksum calculation methods, this class also provides methods for converting the
@@ -628,7 +706,7 @@ class CRCProcessor:
         during transmission.
 
     Attributes:
-        __processor: The private instance of the jit-compiled _CRCProcessor class which actually does all the required
+        _processor: The private instance of the jit-compiled _CRCProcessor class which actually does all the required
             computations. Private by design and should never be accessed directly.
 
     Args:
@@ -655,44 +733,72 @@ class CRCProcessor:
     ) -> None:
         # Ensures that all inputs use the same valid type. Note, uint64 is currently not supported primarily to maintain
         # implicit compatibility with older AVR boards that do not support uint64 type. That said, both the C++ and this
-        # Python codebases are written in a way that will natively scale to uint 64 if this static guard is modified to
+        # Python codebase are written in a way that will natively scale to uint 64 if this static guard is modified to
         # allow it.
         if not isinstance(polynomial, (np.uint8, np.uint16, np.uint32)):
             error_message = (
                 f"Unsupported 'polynomial' argument type '{type(polynomial)}' encountered when instantiating "
                 f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
         elif not isinstance(initial_crc_value, (np.uint8, np.uint16, np.uint32)):
             error_message = (
                 f"Unsupported 'initial_crc_value' argument type {type(initial_crc_value)} encountered when "
                 f"instantiating CRCProcessor class. Use numpy uint8, uint16, or uint32."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
         elif not isinstance(final_xor_value, (np.uint8, np.uint16, np.uint32)):
             error_message = (
                 f"Unsupported 'final_xor_value' argument type {type(final_xor_value)} encountered when instantiating "
                 f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
         elif not (polynomial.dtype == initial_crc_value.dtype == final_xor_value.dtype):
             error_message = (
                 "All arguments ('polynomial', 'initial_crc_value', 'final_xor_value') must have the same type when "
                 "instantiating CRCProcessor class."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Initializes and compiles the internal _CRCProcessor class. This automatically generates the static CRC lookup
         # table
-        self.__processor = self.__make_crc_processor_class(polynomial, initial_crc_value, final_xor_value)
+        self._processor = self._make_crc_processor_class(polynomial, initial_crc_value, final_xor_value)
 
     def __repr__(self) -> str:
         repr_message = (
-            f"CRCProcessor(inner_status={self.__processor.status}, "
-            f"polynomial={hex(self.__processor.polynomial)}, "
-            f"initial_crc_value={hex(self.__processor.initial_crc_value)}, "
-            f"final_xor_value={hex(self.__processor.final_xor_value)}, "
-            f"crc_byte_length={self.__processor.crc_byte_length})"
+            f"CRCProcessor(inner_status={self._processor.status}, "
+            f"polynomial={hex(self._processor.polynomial)}, "
+            f"initial_crc_value={hex(self._processor.initial_crc_value)}, "
+            f"final_xor_value={hex(self._processor.final_xor_value)}, "
+            f"crc_byte_length={self._processor.crc_byte_length})"
         )
         return repr_message
 
@@ -706,7 +812,7 @@ class CRCProcessor:
             buffer: The uint8 numpy array that stores the data to be checksummed.
 
         Returns:
-            A numpy uint8, uint16 or uint32 integer (depends on the polynomial datatype that was used during class
+            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during class
             initialization) that stores the calculated CRC checksum value.
 
         Raises:
@@ -722,31 +828,45 @@ class CRCProcessor:
                 f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(buffer)}' when calculating the "
                 f"CRC checksum for the input buffer."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Calls the appropriate _CRCProcessor method to calculate the crc checksum
-        checksum = self.__processor.calculate_packet_crc_checksum(buffer)
+        checksum = self._processor.calculate_packet_crc_checksum(buffer)
 
         # Verifies that checksum calculation was successful
-        self.__verify_checksum_calculation_outcome(buffer)
+        self._verify_checksum_calculation_outcome(buffer)
 
         # Since other methods expect numpy values, the checksum is explicitly cast to the correct type here. Numba has a
         # limitation, where it prefers python types and casts all outputs to them regardless of the type assigned during
         # numba runtime. This is why the types need to be resolved explicitly at the level of the wrapper.
-        if self.__processor.crc_byte_length == 1:
+        if self._processor.crc_byte_length == 1:
             return np.uint8(checksum)
-        elif self.__processor.crc_byte_length == 2:
+        elif self._processor.crc_byte_length == 2:
             return np.uint16(checksum)
-        elif self.__processor.crc_byte_length == 4:
+        elif self._processor.crc_byte_length == 4:
             return np.uint32(checksum)
         else:
             error_message = (
-                f"Unsupported 'crc_byte_length' value ({self.__processor.crc_byte_length}) encountered when "
+                f"Unsupported 'crc_byte_length' value ({self._processor.crc_byte_length}) encountered when "
                 f"calculating the CRC checksum for the input buffer."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
-    def __verify_checksum_calculation_outcome(self, buffer: np.ndarray) -> None:
+    def _verify_checksum_calculation_outcome(self, buffer: np.ndarray) -> None:
         """Verifies that calculate_packet_crc_checksum() method runtime was successful. If not, raises the appropriate
         exception.
 
@@ -763,26 +883,40 @@ class CRCProcessor:
             RuntimeError: If the status code returned by the crc calculator method is not one of the expected values.
         """
         # Success code, verification successful
-        if self.__processor.status == self.__processor.checksum_calculated:
+        if self._processor.status == self._processor.checksum_calculated:
             pass
 
         # Incorrect buffer datatype
-        elif self.__processor.status == self.__processor.calculate_checksum_buffer_datatype_error:
+        elif self._processor.status == self._processor.calculate_checksum_buffer_datatype_error:
             error_message = (
                 f"The datatype of the input buffer to be CRC-checksummed ({buffer.dtype}) is not supported. "
                 f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs. "
-                f"CODE: {self.__processor.status}."
+                f"CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Unexpected status code
         else:
             error_message = (
-                f"Unexpected inner _CRCProcessor class status code ({self.__processor.status}) encountered when "
+                f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
                 f"attempting to calculate the CRC checksum for the input buffer. "
                 f"CODE: 0."
             )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise RuntimeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
     def convert_crc_checksum_to_bytes(self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]) -> np.ndarray:
         """Converts the input numpy integer checksum into a byte numpy array.
@@ -794,7 +928,7 @@ class CRCProcessor:
             A uint8 numpy array entirely filled with the CRC checksum bytes.
 
         Raises:
-            TypeError: If the input crc_checksum is not a numpy uint8, uint16 or uint32 integer.
+            TypeError: If the input crc_checksum is not a numpy uint8, uint16, or uint32 integer.
         """
         # Prevents using the method for unsupported input types
         if not isinstance(crc_checksum, (np.uint8, np.uint16, np.uint32)):
@@ -802,17 +936,24 @@ class CRCProcessor:
                 f"A uint8, uint16 or uint32 crc_checksum expected, but instead encountered '{type(crc_checksum)}', "
                 f"when converting the unsigned integer CRC checksum to an array of bytes."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Calls the appropriate _CRCProcessor method to convert the crc checksum to an array of bytes
-        checksum_bytes = self.__processor.convert_crc_checksum_to_bytes(crc_checksum)
+        checksum_bytes = self._processor.convert_crc_checksum_to_bytes(crc_checksum)
 
         # At the time of writing this method cannot fail, and this is more or less a static check that the returned
         # code matches the success code in case something changes in the future.
-        self.__verify_crc_to_bytes_conversion()
+        self._verify_crc_to_bytes_conversion()
         return checksum_bytes
 
-    def __verify_crc_to_bytes_conversion(self) -> None:
+    def _verify_crc_to_bytes_conversion(self) -> None:
         """Verifies that convert_crc_checksum_to_bytes() method runtime was successful. If not, raises the appropriate
         exception.
 
@@ -826,16 +967,23 @@ class CRCProcessor:
         """
 
         # Success code, verification successful
-        if self.__processor.status == self.__processor.checksum_converted_to_bytes:
+        if self._processor.status == self._processor.checksum_converted_to_bytes:
             pass
 
         # Unknown status code
         else:
             error_message = (
-                f"Unexpected inner _CRCProcessor class status code ({self.__processor.status}) encountered when "
+                f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
                 f"converting the unsigned integer CRC checksum to an array of bytes. CODE: 0."
             )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise RuntimeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
     def convert_crc_checksum_to_integer(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
         """Converts the input buffer that stores crc checksum bytes to an unsigned numpy integer value.
@@ -845,7 +993,7 @@ class CRCProcessor:
         the buffer is entirely filled with the checksum bytes.
 
         Returns:
-            A numpy uint8, uint16 or uint32 integer (depends on the polynomial datatype that was used during class
+            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during class
             initialization) that stores the converted CRC checksum value.
 
         Raises:
@@ -861,31 +1009,45 @@ class CRCProcessor:
                 f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(buffer)}' type when converting "
                 f"the array of CRC checksum bytes to the unsigned integer value."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Calls the appropriate _CRCProcessor method to convert the aray of crc checksum bytes to an integer value
-        checksum = self.__processor.convert_crc_checksum_to_integer(buffer)
+        checksum = self._processor.convert_crc_checksum_to_integer(buffer)
 
         # Verifies method runtime status
-        self.__verify_crc_to_integer_conversion(buffer)
+        self._verify_crc_to_integer_conversion(buffer)
 
         # Since other methods expect numpy values, the checksum is explicitly cast to the correct type here. Numba has a
         # limitation, where it prefers python types and casts all outputs to them regardless of the type assigned during
         # numba runtime. This is why the types need to be resolved explicitly at the level of the wrapper.
-        if self.__processor.crc_byte_length == 1:
+        if self._processor.crc_byte_length == 1:
             return np.uint8(checksum)
-        elif self.__processor.crc_byte_length == 2:
+        elif self._processor.crc_byte_length == 2:
             return np.uint16(checksum)
-        elif self.__processor.crc_byte_length == 4:
+        elif self._processor.crc_byte_length == 4:
             return np.uint32(checksum)
         else:
             error_message = (
-                f"Unsupported 'crc_byte_length' value ({self.__processor.crc_byte_length}) encountered when "
+                f"Unsupported 'crc_byte_length' value ({self._processor.crc_byte_length}) encountered when "
                 f"calculating the CRC checksum for the input buffer."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
-    def __verify_crc_to_integer_conversion(self, buffer: np.ndarray) -> None:
+    def _verify_crc_to_integer_conversion(self, buffer: np.ndarray) -> None:
         """Verifies that convert_crc_checksum_to_integer() method runtime was successful. If not, raises the appropriate
         exception.
 
@@ -906,44 +1068,65 @@ class CRCProcessor:
         """
 
         # Success code, verification successful
-        if self.__processor.status == self.__processor.checksum_converted_to_integer:
+        if self._processor.status == self._processor.checksum_converted_to_integer:
             pass
 
         # Invalid buffer datatype
-        elif self.__processor.status == self.__processor.convert_checksum_invalid_buffer_datatype_error:
+        elif self._processor.status == self._processor.convert_checksum_invalid_buffer_datatype_error:
             error_message = (
                 f"The datatype of the input buffer to be converted to the unsigned integer CRC checksum "
                 f"({buffer.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer "
-                f"inputs. CODE: {self.__processor.status}."
+                f"inputs. CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # The size of the buffer does not match the number of bytes required to represent the checksum datatype
-        elif self.__processor.status == self.__processor.convert_checksum_invalid_buffer_size_error:
+        elif self._processor.status == self._processor.convert_checksum_invalid_buffer_size_error:
             error_message = (
                 f"The byte-size of the input buffer to be converted to the unsigned integer CRC checksum "
                 f"({buffer.size}) does not match the size required to represent the specified checksum datatype "
-                f"({self.__processor.crc_byte_length}). CODE: {self.__processor.status}."
+                f"({self._processor.crc_byte_length}). CODE: {self._processor.status}."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Unknown status code
         else:
             error_message = (
-                f"Unexpected inner _CRCProcessor class status code ({self.__processor.status}) encountered when "
+                f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
                 f"converting the array of CRC checksum bytes to the unsigned integer value. CODE: 0."
             )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise RuntimeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
     @property
     def crc_byte_length(self) -> np.uint8:
         """Returns the variable byte-size used by the class instance to store CRC checksums."""
-        return self.__processor.crc_byte_length
+        return self._processor.crc_byte_length
 
     @property
     def crc_table(self) -> np.ndarray:
         """Returns the CRC lookup table used by the class instance during checksum calculation."""
-        return self.__processor.crc_table
+        return self._processor.crc_table
 
     @property
     def processor(self):
@@ -951,25 +1134,25 @@ class CRCProcessor:
         unwrapping the jit-compiled class, so that the fast methods can be used directly (helpful when you want to use
         them from another jit-method).
         """
-        return self.__processor
+        return self._processor
 
     @property
     def polynomial(self) -> Union[np.uint8, np.uint16, np.uint32]:
         """Returns the polynomial used by the class instance during checksum calculation."""
-        return self.__processor.polynomial
+        return self._processor.polynomial
 
     @property
     def initial_crc_value(self) -> Union[np.uint8, np.uint16, np.uint32]:
         """Returns the initial value used by the class instance during checksum calculation."""
-        return self.__processor.initial_crc_value
+        return self._processor.initial_crc_value
 
     @property
     def final_xor_value(self) -> Union[np.uint8, np.uint16, np.uint32]:
         """Returns the final XOR value used by the class instance during checksum calculation."""
-        return self.__processor.final_xor_value
+        return self._processor.final_xor_value
 
     @staticmethod
-    def __make_crc_processor_class(
+    def _make_crc_processor_class(
         polynomial: Union[np.uint8, np.uint16, np.uint32],
         initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
         final_xor_value: Union[np.uint8, np.uint16, np.uint32],
@@ -991,7 +1174,7 @@ class CRCProcessor:
         Args:
             polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
                 appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials of numpy
-                uint8, uint16 and uint32 datatype are supported.
+                uint8, uint16, and uint32 datatype are supported.
             initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
                 This value depends on the chosen polynomial algorithm ('polynomial' argument) and, as such, should use
                 the same datatype as the polynomial argument. It can be provided as an appropriately sized HEX number
@@ -1022,7 +1205,14 @@ class CRCProcessor:
                 f"Unsupported 'polynomial' type ({polynomial.dtype}) encountered when resolving the inner "
                 f"_CRCProcessor jit-compiled class specification."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # The template for the numba compiler to assign specific datatypes to variables used by CRCProcessor class.
         crc_spec = [
@@ -1074,7 +1264,7 @@ class CRCProcessor:
                 crc_table: The array that stores the CRC lookup table. The lookup table is used to speed up CRC checksum
                     calculation by pre-computing the checksum value for each possible byte-value (from 0 through 255:
                     256 values total). The table is filled automatically during class instantiation and reserves 256,
-                    512 or 1024 bytes of RAM for the entire lifetime of the class, depending on the numpy datatype of
+                    512, or 1024 bytes of RAM for the entire lifetime of the class, depending on the numpy datatype of
                     the polynomial.
                 standby: The integer code used during class initialization (before any method is called).
                 calculate_checksum_buffer_datatype_error: The buffer provided to the calculate_packet_crc_checksum()
@@ -1086,7 +1276,7 @@ class CRCProcessor:
                 convert_checksum_invalid_buffer_size_error: The buffer provided to the convert_crc_checksum_to_integer()
                     method was not of the byte-size required to store the byte-converted crc checksum value.
                 checksum_converted_to_integer: The CRC checksum has been successfully converted from an uint8 numpy
-                    array of bytes to an appropriate numpy unsigned integer (uint8, uint16 or uint32).
+                    array of bytes to an appropriate numpy unsigned integer (uint8, uint16, or uint32).
 
             Args:
                 _polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
@@ -1148,7 +1338,7 @@ class CRCProcessor:
                     buffer: The uint8 numpy array that stores the data to be checksummed.
 
                 Returns:
-                    A numpy uint8, uint16 or uint32 integer (depends on the polynomial datatype that was used during
+                    A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
                     class initialization) that represents the calculated CRC checksum value. Also sets the 'status'
                     class attribute to communicate the status of the method's runtime.
                 """
@@ -1174,7 +1364,7 @@ class CRCProcessor:
                     # original position to generate an updated checksum.
                     crc_checksum = self.make_polynomial_type((crc_checksum << 8) ^ self.crc_table[table_index])
 
-                # The Final XOR operation may or may not actually be used (depending on the polynomial). The default
+                # The Final XOR operation may or may not be used (depending on the polynomial). The default
                 # polynomial 0x1021 has it set to 0x0000 (0), so it is actually not used. Other polynomials may require
                 # this step, so it is kept here for compatibility reasons. The exact algorithmic purpose of the XOR
                 # depends on the specific polynomial used.
@@ -1221,7 +1411,7 @@ class CRCProcessor:
                     The returned value is not meaningful until it is verified using the status code!
 
                 Returns:
-                    A numpy uint8, uint16 or uint32 integer (depends on the polynomial datatype that was used during
+                    A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
                     class initialization) that represents the converted CRC checksum value. Also sets the 'status' class
                     attribute to communicate method runtime status.
                 """
@@ -1239,7 +1429,7 @@ class CRCProcessor:
                     self.status = self.convert_checksum_invalid_buffer_size_error
                     return np.uint8(0)
 
-                # Precreates the variable tos tore the extracted checksum and initializes it to zero
+                # Precreates the variable to store the extracted checksum and initializes it to zero
                 extracted_crc = self.make_polynomial_type(0)
 
                 # Loops over the input buffer and extracts the CRC checksum from the bytes inside the buffer. Assumes
@@ -1266,7 +1456,7 @@ class CRCProcessor:
                 the class initialization method. Do not use this method outside the class initialization context!
 
                 Notes:
-                    While the PC is sufficiently fast to work without a pregenerated table, this method is used to
+                    While the PC is fast enough to work without a pregenerated table, this method is used to
                     maintain algorithmic similarity to the version of the library used for microcontrollers. Also, using
                     a static table is still faster even for PCs.
 
@@ -1320,7 +1510,7 @@ class CRCProcessor:
 
                 Notes:
                     The datatype of the polynomial is inferred based on the byte-length of the polynomial as either
-                    uint8, uint16 or uint32 (uses 'crc_byte_length' attribute of the class).
+                    uint8, uint16, or uint32 (uses 'crc_byte_length' attribute of the class).
 
                 Args:
                     value: The value to convert to the appropriate type.
@@ -1350,11 +1540,11 @@ class CRCProcessor:
 
 
 class SerialMock:
-    """Simulates the methods of pySerial.Serial class used by SerializedTransferProtocol class to support unit-testing.
+    """Simulates the methods of pySerial.Serial class used by TransportLayer class to support unit-testing.
 
     This class only provides the methods that are either helpful for testing (like resetting the Mock class buffers)
-    or are directly used by the SerializedTransferProtocol class (reading and writing data, opening / closing the port,
-    etc.). For example, since SerializedTransferProtocol class does not use readlines() method, this class does not
+    or are directly used by the TransportLayer class (reading and writing data, opening / closing the port,
+    etc.). For example, since TransportLayer class does not use readlines() method, this class does not
     offer its mock implementation.
 
     Notes:
@@ -1365,7 +1555,7 @@ class SerialMock:
 
         Also, unlike its prototype, this class exposes the rx_ and tx_ buffers while using similar logic for adding data
         to the buffers as the real Serial class. This allows using this class to fully test and verify all
-        SerializedTransferProtocol class methods and expect them to behave identically during real runtime.
+        TransportLayer class methods and expect them to behave identically during real runtime.
 
         Since all communication protocols share the same interface, this class is also perfectly adequate for imitating
         the functioning of the ZeroMQSerial class.
@@ -1463,543 +1653,3 @@ class SerialMock:
     def out_waiting(self) -> int:
         """Returns the number of bytes currently stored in the tx_buffer."""
         return len(self.tx_buffer)
-
-class SerializedConnection:
-    def __init__(
-        self,
-        address_or_port: str,
-        backend: Literal["pyserial", "zeromq", "mock"],
-        baudrate: Optional[int] = None,
-        connection_mode: Optional[Literal["host", "client"]] = None,
-        timeout: Optional[int | float] = 0,
-        local_buffer_size: int = 4096,
-        force_open: bool = True,
-        auto_open: bool = True,
-    ) -> None:
-        # Ensures the backend argument type is valid
-        if not isinstance(backend, str):
-            error_message = (
-                f"Invalid 'backend' argument type ({type(backend)}) encountered when initializing SerialConnection "
-                f"class object. A string option is expected. Supported options are: 'pyserial', 'zeromq' and 'mock'."
-            )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-
-        # Resolves backend. This is by far the most important step of the initialization as it solely determine the
-        # connection type
-        if backend.lower() == "pyserial":
-            self.__backend_code = self.pyserial_backend_code
-            self.__backend = Serial(port=address_or_port, baudrate=baudrate, timeout=timeout)
-
-        elif backend.lower == "zeromq":
-            self.__backend_code = self.zeromq_backend_code
-            self.__backend = ZeroMQSerial(address=address_or_port, connection_mode=connection_mode, timeout=timeout)
-            if auto_open:
-                self.__backend.open()
-
-        elif backend.lower() == "mock":
-            self.__backend_code = self.mock_backend_code
-            self.__backend = SerialMock()
-
-        # If the backend could not be resolved, this means an unsupported option was provided, so issues an error
-        else:
-            error_message = (
-                f"Unsupported 'backend' argument value ({backend}) encountered when initializing SerialConnection "
-                f"class object. Supported options are: 'pyserial', 'zeromq' and 'mock'."
-            )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-
-        # Stores configuration parameters to class attributes
-        self.__address = address_or_port
-        self.__baudrate = baudrate
-        self.__connection_mode = connection_mode
-        self.__timeout = timeout
-
-        # Initializes local attributes
-        # noinspection PyTypeChecker
-        self.__timer = ElapsedTimer("s")
-        self.__circular_buffer = np.zeros(local_buffer_size, dtype=np.uint8)
-        self.__occupied_buffer_size = 0
-        self.__stop_flag = False
-        self.__is_open = False
-
-        # Initializes the necessary threading elements to control data reception
-        self.__lock = threading.Lock()  # Lock object to synchronize _receiver thread with other class methods
-        self.__receiver_thread = threading.Thread(target=self.__receiver)  # Instantiates the receiver thread.
-        self.__receiver_thread.daemon = True  # Ensures the thread terminates with the main thread
-
-        self.pyserial_backend_code = 1
-        self.zeromq_backend_code = 2
-        self.mock_backend_code = 3
-
-        # If the class is initialized with force_open flag, ensures the port is closed before re-establishing
-        # connection. This forces anything connected to the port to be ungracefully terminated, emptying the connection
-        # slot for the client to connect. This option is very helpful on Windows which in testing has been found to be
-        # somewhat unresponsive to graceful port release requests. Note, this only applies to Serial class, as
-        # ZeroMQSerial currently does not have a mechanism (and neither it really needs one) to force connections.
-        if force_open:
-            self.__backend.close()
-
-        # If the class is initialized with the auto_open flag, calls open() at the end of initialization. Otherwise,
-        # open() has to be called manually before using read() or write() methods of the class.
-        if auto_open:
-            self.open()
-
-    def __repr__(self):
-        pass
-
-    def __del__(self):
-        pass
-
-    def __receiver(self):
-        """Extracts (receives) the data from the bundled backend reception buffer.
-
-        This method is designed to be executed via a thread. After initiation, it runs until terminated by stop_flag.
-        During runtime, it polls the state of the backend and if data is available to be received, writes it into the
-        class circular buffer.
-
-        Notes:
-            This implementation is notably more complex and probably slower than a 'need-based' access, but it allows
-            for runtime amortization when used as part of a pipeline. Since this library uses a lot of C-code linking
-            (via Numba and other libraries), using a thread to continuously transfer data from the backend buffer to
-            a local buffer allows to efficiently move data when the main thread is busy doing other C-operations. For
-            complex pipelines, this is likely to result in better overall execution speeds. Also, using a centralized
-            access approach allows standardizing backend access API, which is always fairly desirable.
-        """
-        event = threading.Event()  # This is used as a more accurate, GIL-releasing timer than sleep().
-
-        # Runs until stop flag is triggered by the close() or __del__ method.
-        while not self.__stop_flag:
-            # Uses the same method to receive pySerial and SerialMock data as they have an identical API.
-            if self.__backend_code == self.pyserial_backend_code or self.__backend_code == self.mock_backend_code:
-                data = self.__receive_serial()
-
-            # Uses a different interface for ZeroMQSerial backbone.
-            elif self.__backend_code == self.zeromq_backend_code:
-                data = self.__receive_serial()
-
-            # Static guard against unknown backend codes. Should not really happen as this is explicitly controller
-            # during initialization, but may be helpful for developers adding new backends
-            else:
-                error_message = (
-                    f"Unexpected __backend_code ({self.__backend_code}) encountered while attempting to receive "
-                    f"serialized data from connection backend. Manual intervention is required to resolve the error."
-                )
-                raise RuntimeError(error_message)
-
-            # If data was received, as indicated by the size of the returned data array being above 0, adds it to the
-            # end of the circular buffer. If the buffer does not have space to appends the data, discards elements from
-            # the beginning of the buffer to make space.
-            if data.size != 0:
-                # Acquires the lock to ensure the buffer is not being accessed by another method (such as buffer reader
-                # method).
-                with self.__lock:
-                    self.__occupied_buffer_size = self.__add_to_buffer(
-                        self.__circular_buffer, data, self.__occupied_buffer_size
-                    )
-
-            # Blocks between 5 and 11 us. This is way more precise than the sleep() (that cannot resolve anything
-            # shorter than 16 ms on Windows) and releases GIL, but not as good as the busy-wait using nanosecond timers.
-            # That said, it's main goal is to ensure this method is delayed enough to let other threads acquire the GIL,
-            # so this small floating delay works for this purpose. Note, slower systems may experience slower refresh
-            # times here!
-            event.wait(timeout=1e-6)
-
-    def __receive_serial(self) -> np.ndarray:
-        """Extracts the data stored in the reception buffer of a pySerial or SerialMock backend.
-
-        Since SerialMock is implemented with identical bindings to the pySerial's Serial class, the data received by
-        these classes can be accessed using the same API. Therefore, this method can be used to access the real and
-        'mock' serial ports as a universal binding. This method is designed to be executed perpetually via a
-        continuously running __receiver thread.
-
-        Returns:
-            A numpy array view generated using the received bytes object buffer, if there were bytes to receive. An
-            empty numpy array if there were no bytes to receive.
-        """
-        available_bytes = self.__backend.in_waiting  # Checks if bytes are available
-        if available_bytes:
-            # If bytes are available, reads all available bytes
-            read_bytes = self.__backend.read(available_bytes)
-
-            # Converts the read bytes from 'bytes' to numpy as this is the format used by the rest of the library. Note,
-            # this conversion generates a 'readonly' representation as it uses a memory view of the original buffer,
-            # which makes it relatively fast
-            return np.frombuffer(buffer=read_bytes, dtype=np.uint8)
-        else:
-            # If no bytes are available, returns an empty representation to indicate no bytes were read
-            return np.empty(0, dtype=uint8)
-
-    def __receive_zeromq(self) -> np.ndarray:
-        """Extracts the data stored in the reception buffer of a ZeroMQSerial backend.
-
-        This method uses the recv() method of the ZeroMQ backend to access the reception buffer. Uses an error-based
-        mechanism which either returns the available bytes or raises an error that is suppressed locally (transformed
-        into 'no available bytes' return value). This method is designed to be executed perpetually via a continuously
-        running __receiver thread.
-
-        Returns:
-            A numpy array view generated using the received bytes object buffer, if there were bytes to receive. An
-            empty numpy array if there were no bytes to receive.
-        """
-        try:
-            # Attempts to receive the data. Using the NOBLOCK flag means that the method returns immediately: either
-            # with the received data OR with zmq.Again exception if no data is available for reception
-            message = self.__socket.recv(flags=zmq.NOBLOCK)
-            return np.frombuffer(buffer=message, dtype=np.uint8)
-
-        except zmq.Again:
-            # If no bytes were available, returns an empty representation to indicate no bytes were read
-            return np.empty(0, dtype=uint8)
-
-    @staticmethod
-    @njit(nogil=True, cache=True)
-    def __add_to_buffer(buffer: np.ndarray, data: np.ndarray, occupied_buffer_size: int):
-        """Appends input data to the end of the input circular buffer.
-
-        This method simulates the behavior of the circular buffers found in many low-end Serial port controllers. It
-        adds incoming data in a FIFO fashion to the buffer, discarding the oldest data in the case of an overflow.
-
-        Notes:
-            If the method runs out of space at the end of the buffer, it discards the necessary amount of elements from
-            the beginning of the buffer (oldest elements), until enough space is made to accommodate the data. If the
-            size of the input data array is larger than the size of the buffer, the buffer is replaced with the end
-            portion of the data buffer (with the size that fits inside the buffer). This latter case is NOT an intended
-            use case, and, due to JIT compilation, may require additional compilation time if encountered during
-            runtime.
-
-        Args:
-            buffer: The buffer to which the data will be appended. This should be the class circular_buffer instance.
-            data: The numpy array that stores the data to be appended. This should be the uint8 array generated using
-                the received 'bytes' object as buffer.
-            occupied_buffer_size: The portion of the buffer (relative to index 0) currently occupied with buffer.
-
-        Returns:
-            The size of the buffer that is occupied with data following the addition of the input data.
-
-        """
-        # The intended inputs to this method are generated using np.frombuffer, which makes them read-only. Copying the
-        # data into a new numpy object before running the operations below prevents potential 'readonly access denied'
-        # errors. Doing the copying inside the jit-compiled method saves execution time.
-        local_data = data.copy()
-
-        # If the buffer is not fully occupied and the available space is sufficeint to accommodate the input data,
-        # simply appends the data to the end of the buffer. This is expected to be the most common case and, as such, it
-        # is evaluated first
-        if data.size + occupied_buffer_size <= buffer.size:
-            buffer[occupied_buffer_size : occupied_buffer_size + data.size] = data
-            occupied_buffer_size += data.size
-
-        # The next likely case: if the buffer does not have sufficeint unoccupied space to accommodate the data, but
-        # the size of the data is less than the size of the buffer, discards the oldest data (from the beginning of the
-        # buffer) until sufficient amount of space is freed up.
-        elif data.size < buffer.size:
-            required_space = (data.size + occupied_buffer_size) - buffer.size  # Calculates extra space requirement
-
-            # Shifts the buffer by the required space to the left. This moves the 'excessive' data from the front of the
-            # buffer to the end of the buffer, where it will be overwritten with new data (and, therefore, discarded).
-            buffer[:] = np.roll(buffer, -required_space)
-
-            # Overwrites the tail end of the buffer with data
-            buffer[-data.size :] = data
-            occupied_buffer_size = buffer.size
-
-        # The most unlikely case: If data size is larger than or equal to buffer size, keeps only the most recent data
-        # that fits into the buffer. This effectively replaces the contents of the buffer with the end portion of the
-        # data array (or the whole data array).
-        else:
-            buffer[:] = data[-buffer.size :]
-            occupied_buffer_size = buffer.size
-
-        # Returns the recalculated occupied size tracker so that it can be used in future calls of this method
-        return occupied_buffer_size
-
-    @property
-    def in_waiting(self) -> int:
-        """Returns the number of bytes currently stored inside the class reception buffer."""
-        with self.__lock:  # Locks the reception thread before reading the array length
-            # Since the buffer is implemented as a deque object, it does not have to necessarily store bytes. That said,
-            # the class is explicitly designed to communicate with other class instances from these libraries which
-            # always communicated via byte-streams, so it is assumed that the buffer is a bytes buffer.
-            return len(self.__circular_buffer)
-
-    @property
-    def name(self) -> str:
-        """Returns the port name (address) of the ZeroMQ socket used by the class."""
-        return self.__port
-
-    def read(self, size: int = 1) -> bytes:
-        """Reads the requested number of bytes from the class circular buffer and returns them as 'bytes' object.
-
-        If the requested number of bytes is not available and timeout is above 0, waits for the requested timeout number
-        of seconds (using threading event sleep approach). Regardless of the timeout, the method will not read any bytes
-        unless the requested number of bytes is available after the timeout loop resolution.
-
-        Notes:
-            This method is analogous to the read() method of pySerial Serial class, although it behaves slightly
-            differently with respect to timeout.
-
-            The method will NOT work unless ZeroMQ connection was established by calling the open() method. If the class
-            is initialized with auto_open flag set to True, the connection has been opened during class initialization.
-            Otherwise, this needs to be done manually.
-
-        Args:
-            size: The number of bytes to read from the circular buffer.
-
-        Returns:
-            A 'bytes' python object that stored acquired bytes. When the class timeout is set to 0 and not enough
-            bytes are available, returns an empty 'bytes' object. When the class timeout is set to a number above 0, but
-            sufficient number of bytes does not become available before timeout, also returns an empty 'bytes' object.
-
-        Raises:
-            RuntimeError: If this method is called before the connection has been established by calling the open()
-                method.
-        """
-
-        # Prevents interfacing with a closed port.
-        if not self.__is_open:
-            error_message = (
-                f"Unable to read data from a closed connection. Use open() method to open the zmq connection prior "
-                f"to calling this method."
-            )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-
-        event = threading.Event()  # This is used as a more accurate, GIL-releasing timer than sleep().
-        bytes_available = True  # Instantiates a flag used to track if enough bytes are available
-
-        # Blocks until enough bytes are available for reading. When timeout is disabled (set to 0), the method will
-        # return immediately. Otherwise, it will wait for that number of SECONDS to acquire the data.
-        self.__timer.reset()  # Resets the interval timer
-        while self.in_waiting < size:
-            if self.__timer.elapsed > self.__timeout:
-                bytes_available = False
-                break
-            # Sleeps 30 us every check cycle. The receiver thread runs at 20 us intervals, so this should be sufficient
-            # to de-stack the two and make it possible to receive data and execute this wait loop.
-            event.wait(timeout=30e-6)
-
-        if bytes_available:
-            # Acquires the lock and retrieves the data
-            with self.__lock:
-                # Inlines most data acquisition steps by using list comprehension. Specifically, this loops over the
-                # circular buffer and retrieves the requested number of bytes from the front of the buffer. The
-                # algorithm relies on the while loop above to ensure the requested bytes are available and will not
-                # try to retrieve anything if requested number of bytes is not available. Converts the formed list into
-                # a bytes object and returns to caller
-                return bytes([self.__circular_buffer.popleft() for _ in range(size)])
-
-        # If bytes are not available, returns an empty bytes object to indicate nothing was read as the requested
-        # quantity of bytes is not available
-        else:
-            return bytes()
-
-    def write(self, data: bytes) -> None:
-        """Sends the input data over the connected socket.
-
-        Notes:
-            The write method itself queues the zmq frame to be sent via an internal IO thread at a later time, much
-            like the pySerial write() method does not actually 'flush' the buffer. Since flushing in a ZMQ context is
-            more or less irrelevant (just like it is for Windows serial context), this method is not implemented.
-
-            The method will NOT work unless ZeroMQ connection was established by calling the open() method. If the class
-            is initialized with auto_open flag set to True, the connection has been opened during class initialization.
-            Otherwise, this needs to be done manually.
-
-        Args:
-            data: A python 'bytes' object that holds the binary data to be sent.
-
-        Raises:
-            RuntimeError: If this method is called before the connection has been established by calling the open()
-                method.
-            TypeError: If the input data is not a 'bytes' object.
-        """
-
-        # Prevents interfacing with a closed port.
-        if not self.__is_open:
-            error_message = (
-                f"Unable to write data to a closed connection. Use open() method to open the zmq connection prior "
-                f"to calling this method."
-            )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-
-        # Prevents sending incorrectly typed data
-        elif not isinstance(data, bytes):
-            error_message = (
-                f"Invalid 'data' object ({type(data)}) encountered when writing data to the socket buffer. Data should "
-                f"be a python 'bytes' object."
-            )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-
-        self.__socket.send(data)
-
-    def clear_buffer(self) -> None:
-        """A utility method that completely clears the reception circular buffer of the class."""
-        with self.__lock:
-            self.__circular_buffer.clear()
-
-
-class ZeroMQSerial:
-    """Establishes and facilitates bidirectional communication with another local or remote process running a
-    compatible ZeroMQ binding.
-
-    This class mimics the pySerial's Serial class in purpose and application. It establishes an exclusive pairing with
-    another ZeroMQ instance using the input address and protocol (port). This allows bidirectionally communicating
-    with any process on the same local or remote machine. Anything that can run ZeroMQ (and most things can) will be
-    able to communicate with an instance of this class.
-
-    Notes:
-        This class is designed to be paired up with a pySerial Serial class communicating with microcontrollers. It
-        shares most of its bindings with how Serial class works, which allows SerializedTransferProtocol class to
-        use these communication backends interchangeably. This allows using the same high-level API across the library
-        to communicate with microcontrollers and other applications (for example Unity game-engine).
-
-    Args:
-        address: The protocol and full address of the port to connect to, eg: "tcp://127.0.0.1:5555".
-        connection_mode: The 'role' of the class instance. Available options are 'host' and 'client'. Since the class
-            uses the 'pair' socket mode, there can only be one host and one client for each unique address and port. The
-            socket that is instantiated first should be set as a host and the socket that is instantiated second should
-            be set as a 'client'. The only difference between 'host' and 'client' for this communication mode is the
-            order of instantiation.
-        timeout: The number of seconds(!) to wait for the requested number of bytes to become available, when reading
-            data from the class reception buffer. At minimum this can be set to 0 to completely disable waiting.
-            Defaults to 0.
-        buffer_size: The size of the circular reception buffer. The buffer is implemented as a deque object and, if
-            allowed to fill, will start discarding data from the beginning of the queue to accept more data. This size
-            determines the number of bytes that, at a maximum, can occupy the buffer before it starts discarding data.
-            Adjust this size to the minimum size appropriate for your use case. Defaults to 4096 (~4 kb).
-
-    Attributes:
-        __port: The address used to establish the socket connection. Stores the input address provided by the user as
-            class initialization argument so that it can be used by the open() method.
-        __connection_mode: Stores the mode to be used by the thread when establishing connection. This is also used by
-            the open() method to establish the connection.
-        __timeout: Stores the timeout (in seconds) to be used when waiting for data to become available for reading.
-            This is used by the read() method.
-        __context: Initializes to a placeholder. Following open() method call, stores the context used to generate
-            sockets. Maintained until the close() method is used to terminate it.
-        __socket: Initializes to a placeholder. Following open() method call, the socket is used to send and receive
-            data over the provided port address. Maintained until the close() method is used to terminate it.
-        __timer: An instance of the ElapsedTimer class (configured to use second precision), used to time data
-            reading delays (if timeout is above 0).
-        __circular_buffer: An instance of the deque object, which is used as a temporary buffer to which the receiver
-            method continuously appends the data received from the connected socket. Uses 'buffer_size' class
-            initialization argument to determine the maximum number of bytes to store in buffer.
-        __is_open: A boolean flag that tracks whether the open() method has been used to establish the connection. If
-            this flag is set to 'False', read() and write() method cannot be used.
-        __stop_flag: A boolean flag used by the close() method to shut down the receiver thread. This allows using
-            close() method to gracefully shut down the connection without deleting the class.
-        __lock: A lock object used to synchronize the receiver thread with other class methods that need to access
-            the circular_buffer to prevent race_conditions and other synchronization issues of multithreaded execution.
-        __receiver_thread: A thread that continuously runs '__receiver' method until terminated via the __stop_flag
-            attribute. The thread is used to continuously monitor and fetch data transmitted by the connected socket,
-            which allows the class to function like a pySerial Serial binding does, where it constantly polls and moves
-            the received data to the local reception buffer.
-
-    Raises:
-        TypeError: If any of the class initialization arguments are not of a correct type.
-        ValueError: If any of the class initialization arguments are set to an incorrect value.
-    """
-
-    def __init__(
-        self,
-        address: str,
-        connection_mode: Literal["host", "client"],
-        timeout: int | float = 0,
-    ) -> None:
-        # Verifies that the arguments conform to allowed types and values
-        if not isinstance(address, str):
-            error_message = (
-                f"Invalid 'address' argument type ({type(address)}) encountered when initializing ZeroMQSerial class "
-                f"object. A string address and port in the format 'tcp://127.0.0.1:5555' is expected."
-            )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif connection_mode.lower() not in ("host", "client"):
-            error_message = (
-                f"Invalid 'connection_mode' argument value ({connection_mode}) encountered when initializing "
-                f"ZeroMQSerial class object. Currently, only 'host' or 'client' are accepted as valid argument values."
-            )
-            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif not isinstance(timeout, (int, float)):
-            error_message = (
-                f"Invalid 'timeout' argument type ({type(timeout)}) encountered when initializing ZeroMQSerial class "
-                f"object. Only integer and float inputs are accepted as valid argument."
-            )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif timeout < 0:
-            error_message = (
-                f"Invalid 'timeout' argument value ({timeout}) encountered when initializing ZeroMQSerial class "
-                f"object. Timeout has to be equal to or greater than 0."
-            )
-            ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-
-        # Stores configuration parameters to class attributes
-        self.__port = address
-        self.__connection_mode = connection_mode
-        self.__timeout = timeout
-
-        # Initializes local attributes
-        self.__context = None
-        self.__socket = None
-        self.__is_open = False
-
-    def __del__(self) -> None:
-        self.close()  # Ensures the connection is properly terminated before the class is deleted
-
-    def open(self) -> None:
-        """Connects to the requested port (address) using the requested mode (host or client).
-
-        This method has to be called prior to calling most other methods of the class, as it is required to actually
-        establish the socket connection to the provided address. This method allows instantiating the class without
-        immediately establishing the connection, which is advantageous in many contexts.
-
-        Raises:
-            ZMQError: Typically if the provided port is not valid or already has another host or client (depending on
-                the __connection_mode attribute) connected to it.
-        """
-        # Initializes connection socket
-        self.__context = zmq.Context()  # Instantiates a socket generator method
-        self.__socket = self.__context.socket(zmq.PAIR)  # Generates a socket
-
-        # Connects to the created socket depending on the connection mode. Note, since the socket is used in Pair mode,
-        # re-binding an already hosted address or connecting to an already connected host will trigger a ZeroMQ error.
-        # This makes the class behave exactly like an exclusive Serial port does.
-        if self.__connection_mode == "host":
-            # Hosts BIND to a socket and start listening for other connections
-            self.__socket.bind(self.__port)
-        else:
-            # Clients CONNECT to the host that has bound the socket
-            self.__socket.connect(self.__port)
-
-        # Sets the __is_open flag to indicate that the connection has been opened, and it is safe to use other class
-        # methods.
-        self.__is_open = True
-
-    def close(self) -> None:
-        """Terminates the connection to the port (address).
-
-        This method can be used to disconnect from the port connected to by the open() call. Note, this method
-        terminates the socket and the receiver thread, and it is safe to garbage-collect the class afterward (in fact,
-        close() is used inside the __del__ method). Closing the connection renders most class methods unusable until the
-        connection is opened again.
-
-        Notes:
-            Calling this method clears any data currently stored inside the circular_buffer in addition to other
-            changes. Make sure all important data is consumed before close() is called.
-        """
-        # If the connection is not open in the first place, there is no need to close it
-        if not self.__is_open:
-            return
-
-        # Shuts down the connection by closing the socket and terminating the context
-        self.__socket.close()
-        self.__context.term()
-
-        # Also toggles the stop flag to terminate the receiver thread and waits until the thread joins
-        self.__stop_flag = True
-        self.__receiver_thread.join()
-
-        # Clears the circular buffer
-        self.clear_buffer()
-
-        # Sets the flag to indicate that the connection has been closed and needs to be re-opened before most other
-        # class methods can be used again
-        self.__is_open = False

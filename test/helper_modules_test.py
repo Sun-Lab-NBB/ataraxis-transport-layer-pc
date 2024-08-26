@@ -5,13 +5,11 @@ methods.
 
 import re
 import textwrap
-import time as tm
 
 import numpy as np
 import pytest
-import zmq
 
-from src.helper_modules import COBSProcessor, CRCProcessor, ElapsedTimer, SerialMock, ZeroMQSerial
+from src.ataraxis_transport_layer.helper_modules import COBSProcessor, CRCProcessor, SerialMock
 
 
 def test_cobs_processor():
@@ -1017,8 +1015,8 @@ def test_crc_processor_generate_table_crc_32():
 
 
 def test_crc_processor():
-    """Tests the functioning of the calculate_packet_crc_checksum(), convert_crc_checksum_to_bytes() and
-    convert_crc_checksum_to_integer() methods of the CRCProcessor class. All tests are using CRC16 polynomial."""
+    """Tests the functioning of the CRCProcessor class calculate_packet_crc_checksum(), convert_crc_checksum_to_bytes()
+    and convert_crc_checksum_to_integer() methods. All tests are using CRC16 polynomial."""
 
     # Define test data
     test_data_1 = np.array([0x01, 0x02, 0x03, 0x04, 0x05, 0x15], dtype=np.uint8)
@@ -1045,13 +1043,13 @@ def test_crc_processor():
     assert checksum == np.uint16(0xBA4F)
     assert isinstance(checksum, np.uint16)
 
-    # Tests checksum integer to byte array conversion
+    # Tests checksum integer-to-byte array conversion
     checksum = crc_processor.calculate_packet_crc_checksum(test_data_1)
     checksum_buffer = crc_processor.convert_crc_checksum_to_bytes(checksum)
     assert np.array_equal(checksum_buffer, np.array([245, 78], dtype=np.uint8))
     assert isinstance(checksum_buffer, np.ndarray)
 
-    # Tests checksum byte array to integer conversion (extraction from buffer)
+    # Tests the checksum byte array to integer conversion (extraction from buffer)
     checksum = crc_processor.convert_crc_checksum_to_integer(checksum_buffer)
     assert checksum == np.uint16(0xF54E)
     assert isinstance(checksum, np.uint16)
@@ -1264,57 +1262,3 @@ def test_serial_mock():
         mock_serial.reset_input_buffer()
     with pytest.raises(Exception):
         mock_serial.reset_output_buffer()
-
-
-def test_zeromq_serial_successful_cases():
-    # Create ZeroMQSerial instance
-    zeromq_host = ZeroMQSerial(port="tcp://127.0.0.1:5555", connection_mode='host')
-
-    # Create ZeroMQ socket
-    zeromq_client = ZeroMQSerial(port="tcp://127.0.0.1:5555", connection_mode='client')
-
-    # Test writing data to ZeroMQSerial
-    zeromq_client.write(b"Hello, ZeroMQSerial!")
-    tm.sleep(0.1)  # Wait for a short time to ensure the data is received
-
-    # Test reading data from ZeroMQSerial
-    data = zeromq_host.read(size=20)
-    assert data == b"Hello, ZeroMQSerial!"
-
-    # Test writing data from ZeroMQSerial
-    zeromq_host.write(b"Hello, client!")
-    tm.sleep(0.1)  # Wait for a short time to ensure the data is sent
-
-    # Test reading data written by ZeroMQSerial
-    data = zeromq_client.read(size=14)
-    assert data == b"Hello, client!"
-
-    # Test checking the number of bytes in the buffer
-    zeromq_client.write(b"Hello, ZeroMQSerial!")
-    tm.sleep(0.1)  # Wait for a short time to ensure the data is received
-    assert zeromq_host.in_waiting == 20
-
-    # Closes the client (first) and the host (last)
-    zeromq_client.close()
-    zeromq_host.close()
-
-
-def test_zeromq_serial_error_cases():
-    # Create ZeroMQSerial instance
-    zeromq_serial = ZeroMQSerial(port="tcp://127.0.0.1:5555", timeout=1, connection_mode='host')
-
-    zeromq_serial.clear_buffer()
-
-    # Test reading data with insufficient data in the buffer
-    data = zeromq_serial.read(size=10)
-    assert data == b""  # Expected empty bytes since no data is available
-
-    # Test reading data with a timeout
-    start_time = tm.time()
-    data = zeromq_serial.read(size=10)
-    end_time = tm.time()
-    assert data == b""  # Expected empty bytes due to timeout
-    assert end_time - start_time >= 1  # Check if timeout occurred
-
-    # Close ZeroMQSerial instance
-    del zeromq_serial

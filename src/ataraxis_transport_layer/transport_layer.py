@@ -1,6 +1,6 @@
 """This file stores the SerializedTransferProtocol class, which provides the high-level API that encapsulates all
 methods necessary to bidirectionally communicate with microcontroller devices running the C-version of this library.
-Recently, teh class has been updated to also support ZeroMQ-based communication with non-microcontroller devices
+Recently, the class has been updated to also support ZeroMQ-based communication with non-microcontroller devices
 running the C- or Python - version of this library, making it a universal communication protocol that can connect most
 devices frequently used in science applications. All features of the class are available through 4 main methods:
 write_data(), send_data(), receive_data() and read_data(). See method and class docstrings for more information.
@@ -8,23 +8,29 @@ write_data(), send_data(), receive_data() and read_data(). See method and class 
 
 import textwrap
 from dataclasses import fields, is_dataclass
-from typing import Optional, Type, Union
+from typing import Optional, Type, Union, Any
 
 import numpy as np
 import serial
 from numba import njit
+from numpy import unsignedinteger
 from serial.tools import list_ports
 
-from src.helper_modules import COBSProcessor, CRCProcessor, ElapsedTimer, SerialMock
+from src.ataraxis_transport_layer.helper_modules import (
+    COBSProcessor,
+    CRCProcessor,
+    SerialMock,
+)
+from ataraxis_time import PrecisionTimer
 
 
-class SerializedTransferProtocol:
+class TransportLayer:
     """Provides the high-level API that encapsulates all methods necessary to bidirectionally communicate with
     microcontrollers running the C-version of the SerializedTransferProtocol library.
 
     This class functions as a central hub that calls various internal and external helper methods and fully encapsulates
     the serial port interface (via pySerial third-party library). Most of this class is hidden behind private attributes
-    and methods, and any part of the class that is publicly exposed is generally safe to use and should be sufficient
+    and methods, and any part of the class that is publicly exposed is generally safe to use and should be enough
     to realize the full functionality of the library.
 
     Notes:
@@ -44,83 +50,83 @@ class SerializedTransferProtocol:
         the library or use library assets in their own projects. Users can safely ignore that entire section.
 
     Attributes:
-        __port: Depending on the test_mode flag, this is either a SerialMock object or a pySerial Serial object. During
+        _port: Depending on the test_mode flag, this is either a SerialMock object or a pySerial Serial object. During
             'production' runtime, this object provides low-level access to USB / UART ports using OS-specific APIs.
-        __crc_processor: CRCProcessor class object that provides the methods to manipulate (calculate and serialize)
+        _crc_processor: CRCProcessor class object that provides the methods to manipulate (calculate and serialize)
             CRC checksums for the transmitted and received data packets.
-        __cobs_processor: COBSProcessor class object that provides the methods to encode and decode the payloads to and
+        _cobs_processor: COBSProcessor class object that provides the methods to encode and decode the payloads to and
             from the transmitted and received packets.
-        __timer: ElapsedTimer class object that provides an easy-to-use interface to measure time intervals, most
+        _timer: PrecisionTimer class object that provides an easy-to-use interface to measure time intervals, most
             notably used to detect and escape staled packet reception sequences.
-        __start_byte: The value that marks the beginning of all transmitted and received packets. Encountering this
+        _start_byte: The value that marks the beginning of all transmitted and received packets. Encountering this
             value is the only condition for entering packet reception mode.
-        __delimiter_byte: The value that marks the end of all transmitted and received packets. This value is necessary
+        _delimiter_byte: The value that marks the end of all transmitted and received packets. This value is necessary
             for the proper functioning of the microcontroller's packet reception sequence, and it's presence at the end
             of the packet is used as the packet integrity marker.
-        __timeout: The number of microseconds to wait between receiving any two consecutive bytes of the packet. Note,
+        _timeout: The number of microseconds to wait between receiving any two consecutive bytes of the packet. Note,
             this value specifically concerns the interval between two bytes of the packet, not the whole packet.
-        __allow_start_byte_errors: A boolean flag that determines whether to raise errors when the start byte is not
+        _allow_start_byte_errors: A boolean flag that determines whether to raise errors when the start byte is not
             found among the available bytes when receive_data() method is called. The default behavior is to ignore
             such errors as communication line noise can create 'fake' data bytes that are routinely cleared by the
             reception method. However, enabling this option may be helpful in certain debugging scenarios.
-        __max_tx_payload_size: The maximum number of bytes that are expected to be transmitted as a single payload. This
+        _max_tx_payload_size: The maximum number of bytes that are expected to be transmitted as a single payload. This
             number is statically capped at 254 bytes due to COBS encoding. The value of this attribute should always
             match the value of the similar attribute used in the microcontroller library, which is why it is
             user-addressable through initialization arguments.
-        __max_rx_payload_size: The maximum number of bytes expected to be received from the microcontroller as a single
-            payload. Similar restrictions and considerations apply as with the __max_tx_payload_size. Since PCs do not
+        _max_rx_payload_size: The maximum number of bytes expected to be received from the microcontroller as a single
+            payload. Similar restrictions and considerations apply as with the _max_tx_payload_size. Since PCs do not
             have the same memory restrictions as controllers, this is always statically set to 254 (maximum possible
             size).
-        __postamble_size: The byte-size of the CRC checksum. Calculated automatically based on the number of bytes used
+        _postamble_size: The byte-size of the CRC checksum. Calculated automatically based on the number of bytes used
             by the polynomial argument. This attribute is used to optimize packet reception and data buffering and
             de-buffering.
-        __transmission_buffer: The private buffer used to stage the data to be sent to the microcontroller.
+        _transmission_buffer: The private buffer used to stage the data to be sent to the microcontroller.
             Specifically, the write_data() method adds input data to this buffer as a sequence of bytes. When
             send_data() method is called, the contents of the buffer are packaged and sent to the microcontroller.
-            The buffer is statically allocated at instantiation and relies on the __bytes_in_transmission_buffer tracker
+            The buffer is statically allocated at instantiation and relies on the _bytes_in_transmission_buffer tracker
             to specify which portion of the buffer is filled with payload bytes any given time.
-        __reception_buffer: The private buffer that stores the decoded data received from the microcontroller. The
+        _reception_buffer: The private buffer that stores the decoded data received from the microcontroller. The
             buffer is filled by calling receive_data() method, and the received payload can then be read into objects by
-            calling read_data() method. Like __transmission_buffer, the __reception buffer is statically allocated at
-            instantiation and relies on the __bytes_in_reception_buffer tracker to specify which portion of the buffer
+            calling read_data() method. Like _transmission_buffer, the _reception buffer is statically allocated at
+            instantiation and relies on the _bytes_in_reception_buffer tracker to specify which portion of the buffer
             is used at any given time to store the received payload.
-        __bytes_in_transmission_buffer: Tracks how many bytes (relative to index 0) of the __transmission_buffer are
+        _bytes_in_transmission_buffer: Tracks how many bytes (relative to index 0) of the _transmission_buffer are
             currently used to store the payload to be transmitted. This allows efficient data buffering by overwriting
-            and working with the minimal number of bytes necessary to store the payload. When the __transmission_buffer
+            and working with the minimal number of bytes necessary to store the payload. When the _transmission_buffer
             is 'reset' the buffer itself is not changed in any way, but this tracker is set to 0. The tracker is
             conditionally incremented by each write_data() method call and reset by send_data() method calls. This
             attribute can also be reset using reset_transmission_buffer() method.
-        __bytes_in_reception_buffer: Same as __bytes_in_transmission_buffer, but for the __reception_buffer. However,
+        _bytes_in_reception_buffer: Same as _bytes_in_transmission_buffer, but for the _reception_buffer. However,
             read_data() method calls do not modify the value of this attribute. Only receive_data() or
             reset_reception_buffer() methods can modify this attribute.
-        __leftover_bytes: A private buffer used to preserve any 'unconsumed' bytes that were read from the serial port
+        _leftover_bytes: A private buffer used to preserve any 'unconsumed' bytes that were read from the serial port
             but not used to reconstruct the payload sent from the microcontroller. Since pySerial read() method calls
             are very costly, to improve runtime speed, this class does everything it can to minimize the number of
             such calls. Part of this strategy involves always reading as many bytes as available and 'stashing' any
             'excessive' bytes to be re-used by the next receive_data() calls.
-        __accepted_numpy_scalars: A tuple of numpy types (classes) that can be used as scalar inputs or as 'dtype'
+        _accepted_numpy_scalars: A tuple of numpy types (classes) that can be used as scalar inputs or as 'dtype'
             fields of the numpy arrays that are provided to the read_data() and write_data() methods. This class only
             works with these datatypes and will raise errors if it encounters any other input. The only exceptions to
             this rule are dataclasses made up entirely of supported numpy scalars or arrays (Python's equivalent for
             C-structures), such dataclasses are also valid inputs and will be processed correctly.
-        __minimum_packet_size: The minimum number of bytes that can represent a valid packet. This number is statically
+        _minimum_packet_size: The minimum number of bytes that can represent a valid packet. This number is statically
             determined at class initialization and is subsequently used to optimize packet reception logic (minimizes
             wasting time by calling 'expensive' methods that evaluate the state of the communication hardware (reception
-            buffers, etc.). The user can optionally overwrite this number (via minimum_received_payload_size argument)
+            buffers, etc.). The user can optionally overwrite this number (via minimum_received_payload_size argument),
             instead of using the baseline calculation to further minimize the time wasted on running futile serial port
-            operations, but the minimum value this can take is 5 + postamble_size (1 payload byte, 2 preamble bytes,
-            2 COBS bytes and however many bytes are needed to store the CRC postamble). Note, when user overwrites the
+            operations. The minimum value this can take is 5 + postamble_size: 1 payload byte, 2 preamble bytes,
+            2 COBS bytes and however many bytes are needed to store the CRC postamble. Note, when user overwrites the
             minimum_received_payload_size, specifically the '1' payload value is changed, keeping the other values the
             same.
 
         Args:
             port: The name of the serial port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. You can use the
-                list_available_ports() class method to obtain a list of discoverable serial port names.
+                list_available_ports() class method to get a list of discoverable serial port names.
             baudrate: The baudrate to be used to communicate with the microcontroller. Should match the value used by
                 the microcontroller for UART ports, ignored for USB ports. Defaults to 115200, which is
                 a fairly fast rate supported by most microcontroller boards (many can use faster rates!).
             polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as a HEX
-                number (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16 and uint32
+                number (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32
                 datatype are supported. Defaults to 0x1021 (CRC-16 CCITT-FALSE).
             initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
                 This value depends on the chosen polynomial algorithm ('polynomial' argument) and should use the same
@@ -133,7 +139,7 @@ class SerializedTransferProtocol:
             maximum_transmitted_payload_size: The maximum number of bytes that are expected to be transmitted to the
                 microcontroller as a single payload. This HAS to match the maximum_received_payload_size value used by
                 the microcontroller to ensure that it has the buffer space to accept all payloads. In fact, the only
-                reason this parameter is used-addressable is precisely so that the user ensures it matches the
+                reason this parameter is user-addressable is so that the user ensures it matches the
                 microcontroller settings. Defaults to 254.
             minimum_received_payload_size: The minimum number of bytes that can be expected to be received from the
                 microcontroller as a single payload. This number is used to calculate the threshold for entering
@@ -169,19 +175,19 @@ class SerializedTransferProtocol:
     """
 
     def __init__(
-            self,
-            port: str,
-            baudrate: int = 115200,
-            polynomial: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x1021),
-            initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
-            final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
-            maximum_transmitted_payload_size: int = 254,
-            minimum_received_payload_size: int = 1,
-            start_byte: int = 129,
-            delimiter_byte: int = 0,
-            timeout: int = 20000,
-            test_mode: bool = False,
-            allow_start_byte_errors: bool = False,
+        self,
+        port: str,
+        baudrate: int = 115200,
+        polynomial: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x1021),
+        initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
+        final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
+        maximum_transmitted_payload_size: int = 254,
+        minimum_received_payload_size: int = 1,
+        start_byte: int = 129,
+        delimiter_byte: int = 0,
+        timeout: int = 20000,
+        test_mode: bool = False,
+        allow_start_byte_errors: bool = False,
     ) -> None:
         # Ensures that the class is initialized properly by catching possible class configuration argument errors.
         if start_byte == delimiter_byte:
@@ -189,47 +195,73 @@ class SerializedTransferProtocol:
                 f"Unable to initialize SerializedTransferProtocol class. 'start_byte' and 'delimiter_byte' arguments "
                 f"cannot be set to the same value ({start_byte})."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif maximum_transmitted_payload_size > 254:
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
+
+        if maximum_transmitted_payload_size > 254:
             error_message = (
                 f"Unable to initialize SerializedTransferProtocol class. 'maximum_transmitted_payload_size' argument "
                 f"value ({maximum_transmitted_payload_size}) cannot exceed 254."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
-        elif not (1 <= minimum_received_payload_size <= 254):
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
+
+        if not (1 <= minimum_received_payload_size <= 254):
             error_message = (
                 f"Unable to initialize SerializedTransferProtocol class. 'minimum_received_payload_size' argument "
                 f"value ({minimum_received_payload_size}) must be between 1 and 254 (inclusive)."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # Initializes subclasses
         if not test_mode:
-            self.__port = serial.Serial(port, baudrate, timeout=0)
+            self._port = serial.Serial(port, baudrate, timeout=0)
         else:
-            self.__port = SerialMock()
-        self.__crc_processor = CRCProcessor(polynomial, initial_crc_value, final_crc_xor_value)
-        self.__cobs_processor = COBSProcessor()
-        self.__timer = ElapsedTimer("us")  # Times various packet reception steps to timeout if packet reception stales
+            self._port = SerialMock()
+
+        self._crc_processor = CRCProcessor(polynomial, initial_crc_value, final_crc_xor_value)
+        self._cobs_processor = COBSProcessor()
+        self._timer = PrecisionTimer("us")  # Times packet reception steps to timeout if packet reception stales
 
         # Initializes user-defined attributes
-        self.__start_byte = np.uint8(start_byte)
-        self.__delimiter_byte = np.uint8(delimiter_byte)
-        self.__timeout = np.uint64(timeout)
-        self.__allow_start_byte_errors = allow_start_byte_errors
+        self._start_byte = np.uint8(start_byte)
+        self._delimiter_byte = np.uint8(delimiter_byte)
+        self._timeout = np.uint64(timeout)
+        self._allow_start_byte_errors = allow_start_byte_errors
+        self._postamble_size = self._crc_processor.crc_byte_length
 
         # Initializes automatically calculated and static attributes
-        self.__max_tx_payload_size = maximum_transmitted_payload_size  # Capped at 254 due to COBS encoding
-        self.__max_rx_payload_size = 254  # Capped at 254 due to COBS encoding
-        self.__postamble_size = self.__crc_processor.crc_byte_length
+        self._max_tx_payload_size: int = maximum_transmitted_payload_size  # Capped at 254 due to COBS encoding
+        self._max_rx_payload_size: int = 254  # Capped at 254 due to COBS encoding
+        buffer_size: int = self._max_tx_payload_size + self._postamble_size
+
         # The buffers are always set to maximum payload size + 2 + postamble to be large enough to store packets. This
-        # is needed to support __parse_packet() method functioning.
-        self.__transmission_buffer = np.empty(self.__max_tx_payload_size + 2 + self.__postamble_size, dtype=np.uint8)
-        self.__reception_buffer = np.empty(self.__max_rx_payload_size + 2 + self.__postamble_size, dtype=np.uint8)
-        self.__bytes_in_transmission_buffer = 0
-        self.__bytes_in_reception_buffer = 0
-        self.__leftover_bytes = bytes()  # Placeholder
-        self.__accepted_numpy_scalars = (
+        # is necessary to support _parse_packet() method functioning.
+        self._transmission_buffer = np.zeros(shape=buffer_size, dtype=np.uint8)
+        self._reception_buffer = np.empty(self._max_rx_payload_size + 2 + self._postamble_size, dtype=np.uint8)
+        self._bytes_in_transmission_buffer = 0
+        self._bytes_in_reception_buffer = 0
+        self._leftover_bytes = bytes()  # Placeholder
+        self._accepted_numpy_scalars = (
             np.uint8,
             np.uint16,
             np.uint32,
@@ -242,40 +274,40 @@ class SerializedTransferProtocol:
             np.float64,
             np.bool_,
         )  # Used to verify scalar and numpy array input datatypes and for error messages
-        self.__minimum_packet_size = max(1, minimum_received_payload_size) + 4 + self.__postamble_size
+        self._minimum_packet_size = max(1, minimum_received_payload_size) + 4 + self._postamble_size
 
         # Opens (connects to) the serial port. Cycles closing and opening to ensure the port is opened if it exists at
         # the cost of potentially non-graciously replacing whatever is using the port at the time of instantiating
         # SerializedTransferProtocol class. This may not be required on all platforms, but the original developer used
-        # the combination fo platformio and Windows which was notoriously bad at releasing the port ownership after
+        # the combination of platformio and Windows which was notoriously bad at releasing the port ownership after
         # uploading controller firmware.
-        self.__port.close()
-        self.__port.open()
+        self._port.close()
+        self._port.open()
 
     def __del__(self) -> None:
         # Closes the port before deleting the class instance. Not strictly required, but seeing how unreliable Windows
         # is about releasing port handles it doesn't hurt, to say the least.
-        self.__port.close()
+        self._port.close()
 
     def __repr__(self) -> str:
-        if isinstance(self.__port, serial.Serial):
+        if isinstance(self._port, serial.Serial):
             repr_message = (
-                f"SerializedTransferProtocol(port='{self.__port.name}', baudrate={self.__port.baudrate}, polynomial="
-                f"{self.__crc_processor.polynomial}, initial_crc_value={self.__crc_processor.initial_crc_value}, "
-                f"final_xor_value={self.__crc_processor.final_xor_value}, crc_byte_length="
-                f"{self.__crc_processor.crc_byte_length} start_byte={self.__start_byte}, delimiter_byte="
-                f"{self.__delimiter_byte}, timeout={self.__timeout} us, allow_start_byte_errors="
-                f"{self.__allow_start_byte_errors}, maximum_tx_payload_size = {self.__max_tx_payload_size}, "
-                f"maximum_rx_payload_size={self.__max_rx_payload_size})"
+                f"SerializedTransferProtocol(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
+                f"{self._crc_processor.polynomial}, initial_crc_value={self._crc_processor.initial_crc_value}, "
+                f"final_xor_value={self._crc_processor.final_xor_value}, crc_byte_length="
+                f"{self._crc_processor.crc_byte_length} start_byte={self._start_byte}, delimiter_byte="
+                f"{self._delimiter_byte}, timeout={self._timeout} us, allow_start_byte_errors="
+                f"{self._allow_start_byte_errors}, maximum_tx_payload_size = {self._max_tx_payload_size}, "
+                f"maximum_rx_payload_size={self._max_rx_payload_size})"
             )
         else:
             repr_message = (
-                f"SerializedTransferProtocol(port & baudrate=MOCKED, polynomial={self.__crc_processor.polynomial}, "
-                f"initial_crc_value={self.__crc_processor.initial_crc_value}, final_xor_value="
-                f"{self.__crc_processor.final_xor_value}, crc_byte_length={self.__crc_processor.crc_byte_length}, "
-                f"start_byte={self.__start_byte}, delimiter_byte={self.__delimiter_byte}, timeout={self.__timeout} us, "
-                f"allow_start_byte_errors={self.__allow_start_byte_errors}, maximum_tx_payload_size="
-                f"{self.__max_tx_payload_size}, maximum_rx_payload_size={self.__max_rx_payload_size})"
+                f"SerializedTransferProtocol(port & baudrate=MOCKED, polynomial={self._crc_processor.polynomial}, "
+                f"initial_crc_value={self._crc_processor.initial_crc_value}, final_xor_value="
+                f"{self._crc_processor.final_xor_value}, crc_byte_length={self._crc_processor.crc_byte_length}, "
+                f"start_byte={self._start_byte}, delimiter_byte={self._delimiter_byte}, timeout={self._timeout} us, "
+                f"allow_start_byte_errors={self._allow_start_byte_errors}, maximum_tx_payload_size="
+                f"{self._max_tx_payload_size}, maximum_rx_payload_size={self._max_rx_payload_size})"
             )
         return textwrap.fill(repr_message, width=120, break_long_words=False, break_on_hyphens=False)
 
@@ -286,7 +318,7 @@ class SerializedTransferProtocol:
         Notes:
             You can use the 'name' of any such port as the 'port' argument for the initializer function of this class.
         """
-        # Obtains the list of port objects visible to the pySerial library.
+        # Gets the list of port objects visible to the pySerial library.
         available_ports = list_ports.comports()
 
         # Prints the information about each port using terminal.
@@ -305,44 +337,51 @@ class SerializedTransferProtocol:
         # packet size to minimize the chance of having to call read() more than once. It also factors in any
         # leftover bytes to ensure there is no stalling when more data than necessary, so this will reliably return
         # 'true' when there is a high-0enough chance to receive a packet.
-        return self.__port.in_waiting + len(self.__leftover_bytes) > self.__minimum_packet_size
+        return self._port.in_waiting + len(self._leftover_bytes) > self._minimum_packet_size
 
     @property
     def transmission_buffer(self) -> np.ndarray:
-        """Returns a copy of the private __transmission_buffer numpy array."""
-        return self.__transmission_buffer.copy()
+        """Returns a copy of the private _transmission_buffer numpy array."""
+        return self._transmission_buffer.copy()
 
     @property
     def reception_buffer(self) -> np.ndarray:
-        """Returns a copy of the private __reception_buffer numpy array."""
-        return self.__reception_buffer.copy()
+        """Returns a copy of the private _reception_buffer numpy array."""
+        return self._reception_buffer.copy()
 
     @property
     def bytes_in_transmission_buffer(self) -> int:
-        """Returns the number of payload bytes stored inside the private __transmission_buffer array."""
-        return self.__bytes_in_transmission_buffer
+        """Returns the number of payload bytes stored inside the private _transmission_buffer array."""
+        return self._bytes_in_transmission_buffer
 
     @property
     def bytes_in_reception_buffer(self) -> int:
-        """Returns the number of payload bytes stored inside the private __reception_buffer array."""
-        return self.__bytes_in_reception_buffer
+        """Returns the number of payload bytes stored inside the private _reception_buffer array."""
+        return self._bytes_in_reception_buffer
 
     def reset_transmission_buffer(self):
-        """Resets the __bytes_in_transmission_buffer to 0. Note, does not physically alter the buffer in any way and
-        only resets the __bytes_in_transmission_buffer tracker."""
-        self.__bytes_in_transmission_buffer = 0
+        """Resets the _bytes_in_transmission_buffer to 0. Note, does not physically alter the buffer in any way and
+        only resets the _bytes_in_transmission_buffer tracker."""
+        self._bytes_in_transmission_buffer = 0
 
     def reset_reception_buffer(self):
-        """Resets the __bytes_in_reception_buffer to 0. Note, does not physically alter the buffer in any way and
-        only resets the __bytes_in_reception_buffer tracker."""
-        self.__bytes_in_reception_buffer = 0
+        """Resets the _bytes_in_reception_buffer to 0. Note, does not physically alter the buffer in any way and
+        only resets the _bytes_in_reception_buffer tracker."""
+        self._bytes_in_reception_buffer = 0
 
     def write_data(
-            self,
-            data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray, Type],
-            start_index: Optional[int] = None,
+        self,
+        data_object: Union[
+            np.unsignedinteger,
+            np.signedinteger,
+            np.floating,
+            np.bool_,
+            np.ndarray,
+            Type,
+        ],
+        start_index: Optional[int] = None,
     ) -> int:
-        """Writes the input data_object to the __transmission_buffer, starting at the specified start_index.
+        """Writes the input data_object to the _transmission_buffer, starting at the specified start_index.
 
         This method acts as a wrapper for specific private methods that are called depending on the input data_object
         type. If the object is valid and the buffer has enough space to accommodate the object, it will be translated to
@@ -355,7 +394,7 @@ class SerializedTransferProtocol:
             speed (when combined with other optimization steps) and enforces strict typing (critical for microcontroller
             communication, as most controllers use strictly typed C++ / C languages).
 
-            The method automatically updates the local __bytes_in_transmission_buffer tracker if the write operation
+            The method automatically updates the local _bytes_in_transmission_buffer tracker if the write operation
             increases the total number of payload bytes stored inside the buffer. If the method is used (via a specific
             start_index input) to overwrite already counted data, it will not update the tracker variable. The only way
             to reduce the value of the tracker is to call the reset_transmission_buffer() method to reset it to 0 or to
@@ -373,19 +412,19 @@ class SerializedTransferProtocol:
             data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
                 Supported numpy types are: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float32, float64,
                 and bool_. Additionally, arrays have to be 1-dimensional and not empty to be supported.
-            start_index: Optional. The index inside the __transmission_buffer (0 to 253) at which to start writing the
-                data. If set to None, the method will automatically use the __bytes_in_transmission_buffer tracker value
+            start_index: Optional. The index inside the _transmission_buffer (0 to 253) at which to start writing the
+                data. If set to None, the method will automatically use the _bytes_in_transmission_buffer tracker value
                 to append the data to the end of the already written payload. Defaults to None.
 
         Returns:
-            The index inside the __transmission buffer that immediately follows the last index of the buffer to
+            The index inside the _transmission buffer that immediately follows the last index of the buffer to
             which the data was written. This index can be used as the start_index input for chained write operation
             calls to iteratively and continuously write data to the buffer.
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
             ValueError: Raised if writing the input object is not possible as that would require writing outside the
-                __transmission_buffer boundaries. Also raised when multidimensional or empty numpy arrays are
+                _transmission_buffer boundaries. Also raised when multidimensional or empty numpy arrays are
                 encountered.
             RuntimeError: If the error-resolving mechanism based on the value of the end_index is not able to
                 resolve the error code. This should not really occur, so this is more of a static guard to aid
@@ -399,19 +438,17 @@ class SerializedTransferProtocol:
         # Resolves the start_index input, ensuring it is a valid integer value if start_index is left at the default
         # None value
         if start_index is None:
-            start_index = self.__bytes_in_transmission_buffer
+            start_index = self._bytes_in_transmission_buffer
 
         # If the input object is a supported numpy scalar, calls the scalar data writing method.
-        if isinstance(data_object, self.__accepted_numpy_scalars):
-            end_index = self.__write_scalar_data(
-                self.__transmission_buffer, data_object, data_object.nbytes, start_index
-            )
+        if isinstance(data_object, self._accepted_numpy_scalars):
+            end_index = self._write_scalar_data(self._transmission_buffer, data_object, data_object.nbytes, start_index)
 
         # If the input object is a numpy array, first ensures that it's datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data writing method.
         elif isinstance(data_object, np.ndarray):
-            if data_object.dtype in self.__accepted_numpy_scalars:
-                end_index = self.__write_array_data(self.__transmission_buffer, data_object, start_index)
+            if data_object.dtype in self._accepted_numpy_scalars:
+                end_index = self._write_array_data(self._transmission_buffer, data_object, start_index)
 
         # If the input object is a python dataclass, iteratively loops over each field of the class and recursively
         # calls write_data() to write each attribute of the class to the buffer. This should support nested dataclasses
@@ -441,22 +478,29 @@ class SerializedTransferProtocol:
         else:
             error_message = (
                 f"Unsupported input data_object type ({type(data_object)}) encountered when writing data "
-                f"to __transmission_buffer. At this time, only the following numpy scalar or array types are "
-                f"supported: {self.__accepted_numpy_scalars}. Alternatively, a dataclass with all attributes set to "
+                f"to _transmission_buffer. At this time, only the following numpy scalar or array types are "
+                f"supported: {self._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes set to "
                 f"supported numpy scalar or array types is also supported."
             )
 
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If the end_index exceeds the start_index, that means that an appropriate write operation was executed
-        # successfully. In that case, updates the __bytes_in_transmission_buffer tracker if necessary and returns the
+        # successfully. In that case, updates the _bytes_in_transmission_buffer tracker if necessary and returns the
         # end index to caller to indicate runtime success.
         if end_index > start_index:
-            # Sets the __bytes_in_transmission_buffer tracker variable to the maximum of its current value and the
+            # Sets the _bytes_in_transmission_buffer tracker variable to the maximum of its current value and the
             # index that immediately follows the final index of the buffer that was overwritten with he input data.
             # This only increases the tracker value if write operation increased the size of the payload and also
             # prevents the tracker value from decreasing.
-            self.__bytes_in_transmission_buffer = max(self.__bytes_in_transmission_buffer, end_index)
+            self._bytes_in_transmission_buffer = max(self._bytes_in_transmission_buffer, end_index)
 
             return end_index  # Returns the end_index and not the payload size to support chained overwrite operations
 
@@ -464,21 +508,35 @@ class SerializedTransferProtocol:
         # starting at the start_index.
         elif end_index == 0:
             error_message = (
-                f"Insufficient buffer space to write the data to the __transmission_buffer starting at the index "
+                f"Insufficient buffer space to write the data to the _transmission_buffer starting at the index "
                 f"'{start_index}'. Specifically, given the data size of '{data_object.nbytes}' bytes, the required "
                 f"buffer size is '{start_index + data_object.nbytes}' bytes, but the available size is "
-                f"'{self.__transmission_buffer.size}' bytes."
+                f"'{self._transmission_buffer.size}' bytes."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If the index is set to code -1, that indicates that a multidimensional numpy array was provided as input,
         # but only flat arrays are allowed
         elif end_index == -1:
             error_message = (
                 f"A multidimensional numpy array with {data_object.ndim} dimensions encountered when writing "
-                f"data to __transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
+                f"data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If the index is set to code -2, that indicates that an empty numpy array was provided as input, which does
         # not make sense and therefore is likely an error. Also, empty arrays are explicitly not valid in C/C++, so
@@ -486,44 +544,58 @@ class SerializedTransferProtocol:
         # running C.
         elif end_index == -2:
             error_message = (
-                f"An empty (size 0) numpy array encountered when writing data to __transmission_buffer. Writing empty "
+                f"An empty (size 0) numpy array encountered when writing data to _transmission_buffer. Writing empty "
                 f"arrays is not supported."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If the end_index is not resolved properly, catches and raises a runtime error
         else:
             error_message = (
                 f"Unknown end_index-communicated error code ({end_index}) encountered when writing data "
-                f"to __transmission_buffer."
+                f"to _transmission_buffer."
             )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise RuntimeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
     @staticmethod
     @njit(nogil=True, cache=True)
-    def __write_scalar_data(
-            target_buffer: np.ndarray,
-            data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_],
-            object_size: int,
-            start_index: int,
+    def _write_scalar_data(
+        target_buffer: np.ndarray,
+        data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_],
+        object_size: int,
+        start_index: int,
     ) -> int:
-        """Converts input numpy scalars to byte-sequences and writes them to the __transmission_buffer.
+        """Converts input numpy scalars to byte-sequences and writes them to the _transmission_buffer.
 
         Notes:
             Uses static integer codes to indicate runtime errors.
 
         Args:
             target_buffer: The buffer to which the data will be written. This should be the class-specific private
-                __transmission_buffer array.
-            data_object: The scalar numpy object to be written to the __transmission_buffer. Can be any supported numpy
+                _transmission_buffer array.
+            data_object: The scalar numpy object to be written to the _transmission_buffer. Can be any supported numpy
                 scalar type.
             object_size: The byte-size of the data object to be written. It should be calculated by the wrapper as numba
                 does not know how to use .size attributes of numpy scalar types (see write_data() documentation for more
                 details).
-            start_index: The index inside the __transmission_buffer (0 to 253) at which to start writing the data.
+            start_index: The index inside the _transmission_buffer (0 to 253) at which to start writing the data.
 
         Returns:
-            The positive index inside the __transmission_buffer that immediately follows the last index of the buffer to
+            The positive index inside the _transmission_buffer that immediately follows the last index of the buffer to
             which the data was written. Returns 0 if the buffer does not have enough space to accommodate the data
             written at the start_index.
         """
@@ -546,26 +618,26 @@ class SerializedTransferProtocol:
 
     @staticmethod
     @njit(nogil=True, cache=True)
-    def __write_array_data(
-            target_buffer: np.ndarray,
-            array_object: np.ndarray,
-            start_index: int,
+    def _write_array_data(
+        target_buffer: np.ndarray,
+        array_object: np.ndarray,
+        start_index: int,
     ) -> int:
-        """Converts input numpy arrays to byte-sequences and writes them to the __transmission_buffer.
+        """Converts input numpy arrays to byte-sequences and writes them to the _transmission_buffer.
 
         Notes:
             Uses static integer codes to indicate runtime errors.
 
         Args:
             target_buffer: The buffer to which the data will be written. This should be the class-specific
-                __transmission_buffer array.
+                _transmission_buffer array.
             array_object: The numpy array to be written to the transmission buffer. Currently, the method is designed to
                 only work with one-dimensional arrays with a minimal size of 1 element. The array should be using one
                 of the supported numpy scalar datatypes (see write_data() documentation for more details).
-            start_index: The index inside the __transmission_buffer (0 to 253) at which to start writing the data.
+            start_index: The index inside the _transmission_buffer (0 to 253) at which to start writing the data.
 
         Returns:
-            The positive index inside the __transmission_buffer that immediately follows the last index of the buffer to
+            The positive index inside the _transmission_buffer that immediately follows the last index of the buffer to
             which the data was written. Returns 0 if the buffer does not have enough space to accommodate the data
             written at the start_index. Returns -1 if the input array is not one-dimensional. Returns -2 if the input
             array is empty.
@@ -592,11 +664,28 @@ class SerializedTransferProtocol:
         return required_size
 
     def read_data(
-            self,
-            data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray, Type],
-            start_index: int = 0,
-    ) -> tuple[Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray, Type], int]:
-        """Recreates the input data_object using the data read from the payloads stored inside __reception_buffer.
+        self,
+        data_object: Union[
+            np.unsignedinteger,
+            np.signedinteger,
+            np.floating,
+            np.bool_,
+            np.ndarray,
+            Type,
+        ],
+        start_index: int = 0,
+    ) -> tuple[
+        Union[
+            np.unsignedinteger,
+            np.signedinteger,
+            np.floating,
+            np.bool_,
+            np.ndarray,
+            Type,
+        ],
+        int,
+    ]:
+        """Recreates the input data_object using the data read from the payloads stored inside _reception_buffer.
 
         This method acts as a wrapper for the private jit-compiled method called to actually read the data. This method
         uses the input object as a prototype, which supplies the number of bytes to read from the received payload and
@@ -610,7 +699,7 @@ class SerializedTransferProtocol:
             speed (when combined with other optimizations) and enforces strict typing (critical for microcontroller
             communication, as most controllers use strictly typed C++ / C languages).
 
-            The method does not change the value of the __bytes_in_reception_buffer tracker, as reading from buffer does
+            The method does not change the value of the _bytes_in_reception_buffer tracker, as reading from buffer does
             not in any way modify the data stored inside the buffer. The only way to change the value of the tracker is
             to call the reset_reception_buffer() method or receive_data() method.
 
@@ -625,22 +714,22 @@ class SerializedTransferProtocol:
 
         Args:
             data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
-                The input object is used as a prototype to determine how many bytes to read from the __reception_buffer
+                The input object is used as a prototype to determine how many bytes to read from the _reception_buffer
                 and have to be properly initialized. Supported numpy types are: uint8, uint16, uint32, uint64, int8,
-                int16, int32, int64, float32, float64 and bool_. Additionally, arrays have to be 1-dimensional and not
+                int16, int32, int64, float32, float64, and bool_. Additionally, arrays have to be 1-dimensional and not
                 empty to be supported.
-            start_index: The index inside the __reception_buffer (0 to 253) from which to start reading the
+            start_index: The index inside the _reception_buffer (0 to 253) from which to start reading the
                 data_object bytes. Unlike for write_data() method, this value is mandatory.
 
         Returns:
-            A tuple of 2 elements. The first element is the data_object read from the __reception_buffer, which is cast
+            A tuple of 2 elements. The first element is the data_object read from the _reception_buffer, which is cast
             to the appropriate numpy type. When the data_object is a dataclass, the returned object will be the same
             dataclass instance with all attributes overwritten with read numpy values. The second element is the index
-            that immediately follows the last index that was read from the __reception_buffer during method runtime.
+            that immediately follows the last index that was read from the _reception_buffer during method runtime.
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
-            ValueError: If the payload stored inside the __reception_buffer does not have the sufficient number of bytes
+            ValueError: If the payload stored inside the _reception_buffer does not have the enough bytes
                 available from the start_index to fill the requested object. Also, if the input object is a
                 multidimensional or empty numpy array.
             RuntimeError: If the error-resolving mechanism based on the value of the end_index is not able to
@@ -654,24 +743,24 @@ class SerializedTransferProtocol:
         # If the input object is a supported numpy scalar, converts it to a numpy array and calls the read method.
         # Converts the returned one-element array back to a scalar numpy type. Due to numba limitations (or, rather,
         # the unorthodox way it is used here), this is the most efficient available method.
-        if isinstance(data_object, self.__accepted_numpy_scalars):
-            out_object, end_index = self.__read_array_data(
-                self.__reception_buffer,
+        if isinstance(data_object, self._accepted_numpy_scalars):
+            out_object, end_index = self._read_array_data(
+                self._reception_buffer,
                 np.array(data_object, dtype=data_object.dtype),
                 start_index,
-                self.__bytes_in_reception_buffer,
+                self._bytes_in_reception_buffer,
             )
             out_object = np.dtype(data_object.dtype).type(out_object.item())
 
         # If the input object is a numpy array, first ensures that it's datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data reading method.
         elif isinstance(data_object, np.ndarray):
-            if data_object.dtype in self.__accepted_numpy_scalars:
-                out_object, end_index = self.__read_array_data(
-                    self.__reception_buffer,
+            if data_object.dtype in self._accepted_numpy_scalars:
+                out_object, end_index = self._read_array_data(
+                    self._reception_buffer,
                     data_object,
                     start_index,
-                    self.__bytes_in_reception_buffer,
+                    self._bytes_in_reception_buffer,
                 )
 
         # If the input object is a python dataclass, enters a recursive loop which calls this method for each class
@@ -696,16 +785,23 @@ class SerializedTransferProtocol:
             out_object = data_object
             end_index = local_index
 
-        # If the input value is not a valid numpy scalar, array using a valid scalar datatype or a python dataclass,
+        # If the input value is not a valid numpy scalar, an array using a valid scalar datatype or a python dataclass,
         # raises TypeError exception.
         else:
             error_message = (
                 f"Unsupported input data_object type ({type(data_object)}) encountered when reading data "
-                f"from __reception_buffer. At this time, only the following numpy scalar or array types are supported: "
-                f"{self.__accepted_numpy_scalars}. Alternatively, a dataclass with all attributes set to supported "
+                f"from _reception_buffer. At this time, only the following numpy scalar or array types are supported: "
+                f"{self._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes set to supported "
                 f"numpy scalar or array types is also supported."
             )
-            raise TypeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise TypeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If end_index is different from the start_index and no error has been raised, the method runtime was
         # successful, so returns the read data_object and the end_index to caller
@@ -718,61 +814,89 @@ class SerializedTransferProtocol:
         # start_index to recreate the object.
         elif end_index == 0:
             error_message = (
-                f"Insufficient payload size to read the data from the __reception_buffer starting at the index "
+                f"Insufficient payload size to read the data from the _reception_buffer starting at the index "
                 f"'{start_index}'. Specifically, given the object size of '{data_object.nbytes}' bytes, the required "
                 f"payload size is '{start_index + data_object.nbytes}' bytes, but the available size is "
                 f"'{self.bytes_in_reception_buffer}' bytes."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If the index is set to code -1, that indicates that a multidimensional numpy array was provided as input,
         # but only flat arrays are allowed.
         elif end_index == -1:
             error_message = (
                 f"A multidimensional numpy array with {data_object.ndim} dimensions requested when reading "
-                f"data from __reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
+                f"data from _reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If the index is set to code -2, that indicates that an empty numpy array was provided as input, which does
         # not make sense and therefore is likely an error.
         elif end_index == -2:
             error_message = (
-                f"Am empty (size 0) numpy array requested when reading data from __reception_buffer. Reading empty "
+                f"Am empty (size 0) numpy array requested when reading data from _reception_buffer. Reading empty "
                 f"arrays is currently not supported."
             )
-            raise ValueError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise ValueError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
         # If the end_index is not resolved properly, catches and raises a runtime error. This is a static guard to
         # aid developers in discovering errors.
         else:
             error_message = (
                 f"Unknown end_index-communicated error code ({end_index}) encountered when reading data "
-                f"from __reception_buffer."
+                f"from _reception_buffer."
             )
-            raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+            raise RuntimeError(
+                textwrap.fill(
+                    error_message,
+                    width=120,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
 
     @staticmethod
     @njit(nogil=True, cache=True)
-    def __read_array_data(
-            source_buffer: np.ndarray,
-            array_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray],
-            start_index: int,
-            payload_size: int,
+    def _read_array_data(
+        source_buffer: np.ndarray,
+        array_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray],
+        start_index: int,
+        payload_size: int,
     ) -> tuple[np.ndarray, int]:
-        """Reads the requested array_object from the __reception_buffer.
+        """Reads the requested array_object from the _reception_buffer.
 
         Notes:
             Uses static integer codes to indicate runtime errors.
 
         Args:
             source_buffer: The buffer from which the data will be read. This should be the class-specific
-                __reception_buffer array.
-            array_object: The numpy array to be read from the __reception_buffer. Currently, the method is designed to
+                _reception_buffer array.
+            array_object: The numpy array to be read from the _reception_buffer. Currently, the method is designed to
                 only work with one-dimensional arrays with a minimal size of 1 element. The array should be initialized
                 and should use one of the supported datatypes. It is used as a prototype reconstructed using the data
                 stored inside the buffer.
-            start_index: The index inside the __reception_buffer (0 to 253) at which to start reading the data.
+            start_index: The index inside the _reception_buffer (0 to 253) at which to start reading the data.
             payload_size: The number of payload bytes stored inside the buffer. This is used to limit the read operation
                 to avoid retrieving data from the uninitialized portion of the buffer.
 
@@ -804,10 +928,13 @@ class SerializedTransferProtocol:
 
         # Generates a new array using the input data_object datatype and a slice of the byte-buffer that corresponds to
         # the number of bytes necessary to represent the object (also derived from the data_object via .nbytes).
-        return np.frombuffer(source_buffer[start_index:required_size], dtype=array_object.dtype).copy(), required_size
+        return (
+            np.frombuffer(source_buffer[start_index:required_size], dtype=array_object.dtype).copy(),
+            required_size,
+        )
 
     def send_data(self) -> bool:
-        """Packages the payload stored in the __transmission_buffer and sends it over the serial port.
+        """Packages the payload stored in the _transmission_buffer and sends it over the serial port.
 
         This is the central wrapper method that calls various sub-methods as needed. It carries out two distinct steps:
         Builds a transmission packet using the payload (fast) and writes it to the serial port (slow).
@@ -830,16 +957,16 @@ class SerializedTransferProtocol:
                 encountered. Such cases are very unlikely, but the static guard is kept around in case they do occur.
         """
 
-        # Constructs the serial packet ot be sent. This is a fast inline aggregation of all packet construction steps
-        # and to increase its runtime speed it uses JIT compilation and, therefore, has to access the inner jitclasses
-        # instead of suing the python COBS and CRC class wrappers.
-        packet = self.__construct_packet(
-            self.__transmission_buffer,
-            self.__cobs_processor.processor,
-            self.__crc_processor.processor,
-            self.__bytes_in_transmission_buffer,
-            self.__delimiter_byte,
-            self.__start_byte,
+        # Constructs the serial packet ot be sent. This is a fast inline aggregation of all packet construction steps,
+        # using JIT compilation to increase runtime speed. To maximize compilation benefits, it has to access the
+        # inner jitclasses instead of using the python COBS and CRC class wrappers.
+        packet = self._construct_packet(
+            self._transmission_buffer,
+            self._cobs_processor.processor,
+            self._crc_processor.processor,
+            self._bytes_in_transmission_buffer,
+            self._delimiter_byte,
+            self._start_byte,
         )
 
         # A valid packet will always have a positive size. If the returned packet size is above 0, proceeds with sending
@@ -847,7 +974,7 @@ class SerializedTransferProtocol:
         if packet.size > 0:
             # Calls pySerial write method. This takes 80% of this method's runtime and cannot really be optimized any
             # further as its speed directly depends on how Windows API handles serial port access.
-            self.__port.write(packet.tobytes())
+            self._port.write(packet.tobytes())
 
             # Resets the transmission buffer to indicate that the payload was sent and prepare for sending the next
             # payload.
@@ -857,21 +984,22 @@ class SerializedTransferProtocol:
             return True
 
         # If constructor method returns an empty packet, that means one of the inner methods ran into an error.
-        # Currently, only COBS and CRC classes can run into errors during __construct_packet() runtime (in theory, right
+        # Currently, only COBS and CRC classes can run into errors during _construct_packet() runtime (in theory, right
         # now errors are more or less not possible at all). When that happens, the method re-runs the computations using
         # non-jit-compiled methods that will find and resolve the error. This is rather slow, but it is not meant to be
         # executed in the first place, so is considered acceptable to use as a static fallback.
-        packet = self.__cobs_processor.encode_payload(
-            payload=self.__transmission_buffer[: self.__bytes_in_transmission_buffer], delimiter=self.__delimiter_byte
+        packet = self._cobs_processor.encode_payload(
+            payload=self._transmission_buffer[: self._bytes_in_transmission_buffer],
+            delimiter=self._delimiter_byte,
         )
-        checksum = self.__crc_processor.calculate_packet_crc_checksum(packet)
-        self.__crc_processor.convert_crc_checksum_to_bytes(checksum)
+        checksum = self._crc_processor.calculate_packet_crc_checksum(packet)
+        self._crc_processor.convert_crc_checksum_to_bytes(checksum)
 
         # The steps above SHOULD run into an error. If they did not, there is an unexpected error originating from the
-        # __construct_packet method. In this case, raises a generic RuntimeError to notify the user of the error so that
+        # _construct_packet method. In this case, raises a generic RuntimeError to notify the user of the error so that
         # they manually discover and rectify it.
         error_message = (
-            "Unexpected error encountered for __construct_packet() method when sending payload data. Re-running all "
+            "Unexpected error encountered for _construct_packet() method when sending payload data. Re-running all "
             "COBS and CRC steps used for packet construction in wrapped mode did not reproduce the error. Manual "
             "error resolution required."
         )
@@ -879,18 +1007,18 @@ class SerializedTransferProtocol:
 
     @staticmethod
     @njit(nogil=True, cache=True)
-    def __construct_packet(
-            payload_buffer: np.ndarray,
-            cobs_processor: COBSProcessor.processor,
-            crc_processor: CRCProcessor.processor,
-            payload_size: int,
-            delimiter_byte: np.uint8,
-            start_byte: np.uint8,
+    def _construct_packet(
+        payload_buffer: np.ndarray,
+        cobs_processor: COBSProcessor.processor,
+        crc_processor: CRCProcessor.processor,
+        payload_size: int,
+        delimiter_byte: np.uint8,
+        start_byte: np.uint8,
     ) -> np.ndarray:
         """Constructs the serial packet using the payload stored inside the input buffer.
 
         This method inlines COBS, CRC and start_byte prepending steps that iteratively transform the payload stored
-        inside the class __transmission_buffer into a serial packet that can be transmitted to the microcontroller.
+        inside the class _transmission_buffer into a serial packet that can be transmitted to the microcontroller.
         By accessing typically hidden jit-compiled _COBSProcessor and _CRCProcessor classes, this method inlines and
         compiles all operations into a single method, achieving the highest possible execution speed.
 
@@ -902,7 +1030,7 @@ class SerializedTransferProtocol:
 
         Args:
             payload_buffer: The numpy array that stores the 'raw' payload bytes. This should be automatically set to the
-                __transmission_buffer by the wrapper method.
+                _transmission_buffer by the wrapper method.
             cobs_processor: The inner _COBSProcessor jitclass instance. The instance can be obtained by using
                 '.processor' property of the COBSProcessor wrapper class.
             crc_processor: The inner _CRCProcessor jitclass instance. The instance can be obtained by using '.processor'
@@ -944,7 +1072,7 @@ class SerializedTransferProtocol:
         if postamble.size == 0:
             return np.empty(0, dtype=payload_buffer.dtype)
 
-        # Converts the start_byte to a preamble array. Then, concatenates the preamble, the encoded payload and the
+        # Converts the start_byte to a preamble array and concatenates the preamble, the encoded payload, and the
         # checksum postamble to form the serial packet and returns the constructed packet to the caller.
         preamble = np.array([start_byte], dtype=np.uint8)
         combined_array = np.concatenate((preamble, packet, postamble))
@@ -954,8 +1082,8 @@ class SerializedTransferProtocol:
         """If available, receives the serial packet stored inside the reception buffer of the serial port.
 
         This method aggregates the steps necessary to read the packet data from the serial port's reception buffer,
-        verify its integrity using CRC and decode the payload out of the received data packet using COBS. Following
-        verification, the decoded payload is transferred into the __reception_buffer array. This method uses multiple
+        verify its integrity using CRC, and decode the payload out of the received data packet using COBS. Following
+        verification, the decoded payload is transferred into the _reception_buffer array. This method uses multiple
         sub-methods and attempts to intelligently minimize the number of calls to the expensive serial port buffer
         manipulation methods.
 
@@ -967,21 +1095,21 @@ class SerializedTransferProtocol:
             The method can be co-opted as the check for whether the data is present in the first place, as it returns
             'False' if called when no data can be read or when the detected data is noise.
 
-            Since calling data parsing methods is expensive, the method only attempts to parse the data if sufficient
-            number of bytes is available, which is based on the minimum_received_payload_size class argument, among
+            Since calling data parsing methods is expensive, the method only attempts to parse the data if enough
+            bytes are available, which is based on the minimum_received_payload_size class argument, among
             other things. The higher the value of this argument, the less time is wasted on trying to parse incomplete
             packets.
 
         Returns:
             A boolean 'True' if the data was parsed and is available for reading via read-data() calls. A boolean
-            'False' if the number of available bytes is not sufficient to justify attempting to read the data.
+            'False' if the number of available bytes is not enough to justify attempting to read the data.
 
         Raises:
             ValueError: If the received packet fails the CRC verification check, indicating that the packet is
                 corrupted.
-            RuntimeError: If __receive_packet method fails. Also, if an unexpected error occurs for any of the
+            RuntimeError: If _receive_packet method fails. Also, if an unexpected error occurs for any of the
                 methods used to receive and parse the data.
-            Exception: If __validate_packet() method fails, the validation steps are re-run using slower python-wrapped
+            Exception: If _validate_packet() method fails, the validation steps are re-run using slower python-wrapped
                 methods. Any errors encountered by these methods (From COBS and CRC classes) are raised as their
                 preferred exception types.
         """
@@ -989,54 +1117,54 @@ class SerializedTransferProtocol:
         self.reset_reception_buffer()
 
         # Attempts to receive a new packet. If successful, this returns a static integer code 1 and saves the retrieved
-        # packet to the __transmission_buffer and the size of the packet to the __bytes_in_transmission_buffer tracker.
-        status_code = self.__receive_packet()
+        # packet to the _transmission_buffer and the size of the packet to the _bytes_in_transmission_buffer tracker.
+        status_code = self._receive_packet()
 
         # Only carries out the rest of the processing if the packet was successfully received
         if status_code == 1:
             # Validates and unpacks the payload into the reception buffer
-            payload_size = self.__validate_packet(
-                self.__reception_buffer,
-                self.__bytes_in_reception_buffer,
-                self.__cobs_processor.processor,
-                self.__crc_processor.processor,
-                self.__delimiter_byte,
-                self.__postamble_size,
+            payload_size = self._validate_packet(
+                self._reception_buffer,
+                self._bytes_in_reception_buffer,
+                self._cobs_processor.processor,
+                self._crc_processor.processor,
+                self._delimiter_byte,
+                self._postamble_size,
             )
 
             # Payload_size will always be a positive number if verification succeeds. In this case, overwrites the
-            # __bytes_in_reception_buffer tracker with the payload size and returns 'true' to indicate runtime success
+            # _bytes_in_reception_buffer tracker with the payload size and returns 'true' to indicate runtime success
             if payload_size:
-                self.__bytes_in_reception_buffer = payload_size
+                self._bytes_in_reception_buffer = payload_size
                 return True
 
             # If payload size is 0, this indicates runtime failure. In this case, reruns the verification procedure
             # using python-wrapped methods as they will necessarily catch and raise the error that prevented validating
-            # the packet. This is analogous to how it is resolved for __construct_packet() method failures.
+            # the packet. This is analogous to how it is resolved for _construct_packet() method failures.
             else:
-                packet = self.__reception_buffer[: self.__bytes_in_reception_buffer]  # Extracts the packet
+                packet = self._reception_buffer[: self._bytes_in_reception_buffer]  # Extracts the packet
 
                 # Resets the reception buffer to ensure intermediate data saved to the tracker is not usable for
                 # data reading attempts
                 self.reset_reception_buffer()
 
                 # CRC-checks packet's integrity
-                checksum = self.__crc_processor.calculate_packet_crc_checksum(buffer=packet)
+                checksum = self._crc_processor.calculate_packet_crc_checksum(buffer=packet)
 
                 # If checksum verification (NOT calculation, that is caught by the calculator method internally) fails,
                 # generates a manual error message that tells the user how the checksum failed.
                 if checksum != 0:
                     # Extracts the crc checksum from the end of the packet buffer
-                    byte_checksum = packet[-self.__postamble_size:]
+                    byte_checksum = packet[-self._postamble_size :]
 
                     # Also separates the packet portion of the buffer from the checksum
-                    packet = packet[: packet.size - self.__postamble_size]
+                    packet = packet[: packet.size - self._postamble_size]
 
                     # Converts the CRC checksum extracted from the end of the packet from a byte array to an integer.
-                    checksum_number = self.__crc_processor.convert_crc_checksum_to_integer(byte_checksum)
+                    checksum_number = self._crc_processor.convert_crc_checksum_to_integer(byte_checksum)
 
                     # Separately, calculates the checksum for the packet
-                    expected_checksum = self.__crc_processor.calculate_packet_crc_checksum(buffer=packet)
+                    expected_checksum = self._crc_processor.calculate_packet_crc_checksum(buffer=packet)
 
                     # Uses the checksum values calculated above to issue an informative error message to the user.
                     error_message = (
@@ -1046,30 +1174,41 @@ class SerializedTransferProtocol:
                         f"during transmission or reception."
                     )
                     raise ValueError(
-                        textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)
+                        textwrap.fill(
+                            error_message,
+                            width=120,
+                            break_long_words=False,
+                            break_on_hyphens=False,
+                        )
                     )
 
-                # Removes the CRC bytes from the end of the packet as they are no longer needed if the CRC check passed
-                packet = packet[: packet.size - self.__postamble_size]
+                # Removes the CRC bytes from the end of the packet as they are no longer necessary if the CRC check
+                # passed
+                packet = packet[: packet.size - self._postamble_size]
 
                 # COBS-decodes the payload from the received packet.
-                _ = self.__cobs_processor.decode_payload(packet=packet, delimiter=self.__delimiter_byte)
+                _ = self._cobs_processor.decode_payload(packet=packet, delimiter=self._delimiter_byte)
 
                 # The steps above SHOULD run into an error. If they did not, there is an unexpected error originating
-                # from the __validate_packet method. In this case, raises a generic RuntimeError to notify the user of
+                # from the _validate_packet method. In this case, raises a generic RuntimeError to notify the user of
                 # the error so that they manually discover and rectify it.
                 error_message = (
-                    "Unexpected error encountered for __verify_packet() method when receiving data. Re-running all "
+                    "Unexpected error encountered for _verify_packet() method when receiving data. Re-running all "
                     "COBS and CRC steps used for packet validation in wrapped mode did not reproduce the error. Manual "
                     "error resolution required."
                 )
                 raise RuntimeError(
-                    textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)
+                    textwrap.fill(
+                        error_message,
+                        width=120,
+                        break_long_words=False,
+                        break_on_hyphens=False,
+                    )
                 )
 
         # Handles other possible status codes, all of which necessarily mean some failure has occurred during packet
         # reception runtime.
-        # Not enough bytes were available to justify attempting to receive the packet or enough bytes
+        # Not enough bytes were available to justify attempting to receive the packet, or enough bytes
         # were available, but they were noise bytes (start byte was not found and start_byte_errors are disabled).
         elif status_code == 101:
             # In this case just returns 'False' to indicate no data was parsed.
@@ -1087,7 +1226,7 @@ class SerializedTransferProtocol:
         elif status_code == 103:
             error_message = (
                 f"Serial packet reception failed. Reception staled at payload_size byte reception. Specifically, the "
-                f"payload_size was not received in time ({self.__timeout} microseconds) following the reception of the "
+                f"payload_size was not received in time ({self._timeout} microseconds) following the reception of the "
                 f"start_byte."
             )
 
@@ -1095,30 +1234,30 @@ class SerializedTransferProtocol:
         elif status_code == 104:
             error_message = (
                 f"Serial packet reception failed. The declared size of the payload "
-                f"({self.__bytes_in_reception_buffer}), extracted from the received payload_size byte of the serial "
-                f"packet, was above the maximum allowed size of {self.__reception_buffer.size}."
+                f"({self._bytes_in_reception_buffer}), extracted from the received payload_size byte of the serial "
+                f"packet, was above the maximum allowed size of {self._reception_buffer.size}."
             )
 
-        # Packet bytes were not received in time (packet staled)
+        # Packet bytes were not received in time (packet reception staled)
         elif status_code == 105:
             # noinspection PyUnboundLocalVariable
             error_message = (
                 f"Serial packet reception failed. Reception staled at packet bytes reception. Specifically, the "
-                f"byte number {self.__bytes_in_reception_buffer + 1} was not received in time ({self.__timeout} "
+                f"byte number {self._bytes_in_reception_buffer + 1} was not received in time ({self._timeout} "
                 f"microseconds) following the reception of the previous byte."
             )
 
         # Unknown status_code. This should not really occur, and this is a static guard to help the developers.
         else:
             error_message = (
-                f"Unknown status_code value {status_code} returned by the __receive_packet() method when "
+                f"Unknown status_code value {status_code} returned by the _receive_packet() method when "
                 f"receiving data."
             )
 
         # Regardless of the error-message, uses RuntimeError for any valid error
         raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
-    def __receive_packet(self) -> int:
+    def _receive_packet(self) -> int:
         """Attempts to read the serialized packet from the serial port's reception buffer.
 
         This is a fairly involved method that calls a jit-compiled parser method to actually parse the bytes read from
@@ -1127,9 +1266,9 @@ class SerializedTransferProtocol:
         written should be optimized for the vast majority of cases though.
 
         Notes:
-            This method uses the __timeout attribute to specify the maximum delay in microseconds(!) between receiving
+            This method uses the _timeout attribute to specify the maximum delay in microseconds(!) between receiving
             any two consecutive bytes of the packet. That is, if not all bytes of the packet are available to the method
-            at runtime initialization, it will wait at most __timeout microseconds for the number of available bytes to
+            at runtime initialization, it will wait at most _timeout microseconds for the number of available bytes to
             increase before declaring the packet stale. There are two points at which the packet can become stale: the
             very beginning (the end of the preamble reception) and the reception of the packet itself. This corresponds
             to how the microcontroller sends teh data (preamble, followed by the packet+postamble fused into one). As
@@ -1138,23 +1277,23 @@ class SerializedTransferProtocol:
 
             The method tries to minimize the number of read() calls it makes as these calls are costly (compared to the
             rest of the methods in this library). As such, it may occasionally read more bytes than needed to process
-            the incoming packet. In this case, any 'leftover' bytes are saved to the class __leftover_bytes attribute
-            and reused by the next call to __parse_packet().
+            the incoming packet. In this case, any 'leftover' bytes are saved to the class _leftover_bytes attribute
+            and reused by the next call to _parse_packet().
 
             This method assumes the sender uses the same CRC type as the SerializedTransferProtocol class, as it
             directly controls the CRC checksum byte-size. Similarly, it assumes teh sender uses the same delimiter and
             start_byte values as the class instance. If any of these assumptions are violated, this method will not
             parse the packet data correctly.
 
-            Returned static codes: 101 -> no bytes to read. 102 -> start byte not found error. 103 -> reception staled
-            at acquiring the payload_size / packet_size. 104 -> payload size too large (not valid). 105 -> reception
+            Returned static codes: 101 → no bytes to read. 102 → start byte not found error. 103 → reception staled
+            at acquiring the payload_size / packet_size. 104 → payload size too large (not valid). 105 → reception
             staled at acquiring packet bytes. Also returns code 1 to indicate successful packet acquisition.
 
         Returns:
             A static integer code (see notes) that denotes method runtime status. Status code '1' indicates successful
             runtime, and any other code is an error to be handled by the wrapper method. If runtime is successful, the
-            retrieved packet is saved to the __reception_buffer and the size of the retrieved packet is saved to the
-            __bytes_in_reception_buffer tracker.
+            retrieved packet is saved to the _reception_buffer and the size of the retrieved packet is saved to the
+            _bytes_in_reception_buffer tracker.
         """
 
         # Quick preface. This method is written with a particular focus on minimizing the number of calls to read() and
@@ -1166,47 +1305,47 @@ class SerializedTransferProtocol:
 
         # If there are NOT enough leftover bytes to justify starting the reception procedure, checks how many bytes can
         # be obtained from the serial port
-        if len(self.__leftover_bytes) < self.__minimum_packet_size:
+        if len(self._leftover_bytes) < self._minimum_packet_size:
             # Combines the bytes inside the serial port buffer with the leftover bytes from previous calls to this
             # method and repeats the evaluation
-            available_bytes = self.__port.in_waiting
-            total_bytes = len(self.__leftover_bytes) + available_bytes
-            enough_bytes_available = total_bytes > self.__minimum_packet_size
+            available_bytes = self._port.in_waiting
+            total_bytes = len(self._leftover_bytes) + available_bytes
+            enough_bytes_available = total_bytes > self._minimum_packet_size
 
             # If the enough bytes are available if buffer bytes are included, reads and appends them to the end of the
             # leftover bytes
             if enough_bytes_available:
-                self.__leftover_bytes += self.__port.read(available_bytes)
+                self._leftover_bytes += self._port.read(available_bytes)
 
         # Otherwise, if enough bytes are available without using the read operation, statically sets the flag to true
         # and begins parsing the packet
         else:
             enough_bytes_available = True
 
-        # If not enough bytes are available, returns the static code 101 to indicate there was an insufficient number of
-        # bytes to read from the buffer
+        # If not enough bytes are available, returns the static code 101 to indicate there were not enough bytes to
+        # read from the buffer
         if not enough_bytes_available:
             return 101
 
         # The first call to the parses method, expect to at the very least find the start byte and at best to resolve
         # the entire packet
-        status, packet_size, remaining_bytes, packet_bytes = self.__parse_packet(
-            self.__leftover_bytes,
-            self.__start_byte,
-            self.__max_rx_payload_size,
-            self.__postamble_size,
-            self.__allow_start_byte_errors,
+        status, packet_size, remaining_bytes, packet_bytes = self._parse_packet(
+            self._leftover_bytes,
+            self._start_byte,
+            self._max_rx_payload_size,
+            self._postamble_size,
+            self._allow_start_byte_errors,
         )
 
         # Resolves parsing pass outcomes.
-        # Packet parsed. Saves the packet to the __reception_buffer and the packet size to the
-        # __bytes_in_reception_buffer tracker (for now)
+        # Packet parsed. Saves the packet to the _reception_buffer and the packet size to the
+        # _bytes_in_reception_buffer tracker (for now)
         if status == 1:
-            self.__reception_buffer[:packet_size] = packet_bytes
-            self.__bytes_in_reception_buffer = packet_size
+            self._reception_buffer[:packet_size] = packet_bytes
+            self._bytes_in_reception_buffer = packet_size
 
             # If any bytes remain unprocessed, adds them to storage until the next call to this method
-            self.__leftover_bytes = remaining_bytes.tobytes()
+            self._leftover_bytes = remaining_bytes.tobytes()
             return status
 
         # Status above 2 means an already resolved error or a non-error terminal status. Either the start byte was not
@@ -1216,9 +1355,9 @@ class SerializedTransferProtocol:
             # the terminator code situation was encountered. THis latter case is exclusive to code 104, as encountering
             # an invalid payload_size may have unprocessed bytes that remain at the time the error scenario is
             # encountered.
-            self.__leftover_bytes = remaining_bytes.tobytes()
+            self._leftover_bytes = remaining_bytes.tobytes()
             # Only meaningful for code 104, shares the packet size to be used in error messages via the tracker value
-            self.__bytes_in_reception_buffer = packet_size
+            self._bytes_in_reception_buffer = packet_size
             return status
 
         # Packet found, but not enough bytes are available to finish parsing the packet. Code 0 specifically means that
@@ -1226,39 +1365,39 @@ class SerializedTransferProtocol:
         # computationally demanding case, as potentially 2 more read() calls will be needed to parse the packet.
         elif status == 0:
             # Waits for at least one more byte to become available or for the reception to timeout.
-            self.__timer.reset()
-            available_bytes = self.__port.in_waiting
-            while self.__timer.elapsed < self.__timeout or available_bytes != 0:
-                available_bytes = self.__port.in_waiting
+            self._timer.reset()
+            available_bytes = self._port.in_waiting
+            while self._timer.elapsed < self._timeout or available_bytes != 0:
+                available_bytes = self._port.in_waiting
 
-            # If no more bytes are available (only one is needed) returns code 103: Packet reception staled at
+            # If no more bytes are available (only one is necessary) returns code 103: Packet reception staled at
             # payload_size byte.
             if available_bytes == 0:
                 # There are no leftover bytes when code 103 is encountered, so clears the storage
-                self.__leftover_bytes = bytes()
+                self._leftover_bytes = bytes()
                 return 103
 
             # If more bytes are available, reads the bytes into the placeholder storage. All leftover bytes are
             # necessarily consumed if status is 0, so the original value of the storage variable is irrelevant and
             # can be discarded at this point
-            self.__leftover_bytes = self.__port.read()
+            self._leftover_bytes = self._port.read()
 
             # This time sets a boolean flag to skip looking for start byte, as start byte is already found by the
             # first parser call.
-            status, packet_size, remaining_bytes, packet_bytes = self.__parse_packet(
-                self.__leftover_bytes,
-                self.__start_byte,
-                self.__max_rx_payload_size,
-                self.__postamble_size,
-                self.__allow_start_byte_errors,
+            status, packet_size, remaining_bytes, packet_bytes = self._parse_packet(
+                self._leftover_bytes,
+                self._start_byte,
+                self._max_rx_payload_size,
+                self._postamble_size,
+                self._allow_start_byte_errors,
                 True,
             )
 
             # Status 1 indicates that the packet was fully parsed. Returns the packet to caller
             if status == 1:
-                self.__reception_buffer[:packet_size] = packet_bytes
-                self.__bytes_in_reception_buffer = packet_size
-                self.__leftover_bytes = remaining_bytes.tobytes()
+                self._reception_buffer[:packet_size] = packet_bytes
+                self._bytes_in_reception_buffer = packet_size
+                self._leftover_bytes = remaining_bytes.tobytes()
                 return status
 
             # Status 2 indicates not all the packet was parsed, but the payload_size has been found and resolved.
@@ -1268,38 +1407,38 @@ class SerializedTransferProtocol:
                 required_size = packet_size - packet_bytes.size  # Accounts for already received bytes
 
                 # Blocks until enough bytes are available. Resets the timer every time more bytes become available
-                self.__timer.reset()
-                available_bytes = self.__port.in_waiting
+                self._timer.reset()
+                available_bytes = self._port.in_waiting
                 delta = required_size - available_bytes  # Used to determine when to reset the timer
-                while self.__timer.elapsed < self.__timeout or delta > 0:
-                    available_bytes = self.__port.in_waiting
+                while self._timer.elapsed < self._timeout or delta > 0:
+                    available_bytes = self._port.in_waiting
                     delta_new = required_size - available_bytes
 
                     # Compares the deltas each cycle. If new delta is different from the old one, overwrites the delta
                     # and resets the timer
                     if delta_new != delta:
-                        self.__timer.reset()
+                        self._timer.reset()
                         delta = delta_new
 
                 # If the while loop is escaped due to timeout, issues code 105: Packet reception staled at receiving
                 # packet bytes.
                 if delta > 0:
                     # There are no leftover bytes when code 105 is encountered, so clears the storage
-                    self.__leftover_bytes = bytes()
+                    self._leftover_bytes = bytes()
                     # Saves the number of the byte at which the reception staled so that it can be used in the error
                     # message raised by the wrapper
-                    self.__bytes_in_reception_buffer = packet_size - delta
+                    self._bytes_in_reception_buffer = packet_size - delta
                     return 105
 
                 # If the bytes were received in time, calls the parser a third time to finish packet reception. Inputs
                 # the packet_size and packet_bytes returned by the last method call to automatically jump to parsing
                 # the remaining packet bytes
-                status, packet_size, remaining_bytes, packet_bytes = self.__parse_packet(
-                    self.__leftover_bytes,
-                    self.__start_byte,
-                    self.__max_rx_payload_size,
-                    self.__postamble_size,
-                    self.__allow_start_byte_errors,
+                status, packet_size, remaining_bytes, packet_bytes = self._parse_packet(
+                    self._leftover_bytes,
+                    self._start_byte,
+                    self._max_rx_payload_size,
+                    self._postamble_size,
+                    self._allow_start_byte_errors,
                     True,
                     packet_size,
                     packet_bytes,
@@ -1307,16 +1446,16 @@ class SerializedTransferProtocol:
 
                 # This is the ONLY possible outcome
                 if status == 1:
-                    self.__reception_buffer[0:packet_size] = packet_bytes
-                    self.__bytes_in_reception_buffer = packet_size
-                    self.__leftover_bytes = remaining_bytes.tobytes()
+                    self._reception_buffer[0:packet_size] = packet_bytes
+                    self._bytes_in_reception_buffer = packet_size
+                    self._leftover_bytes = remaining_bytes.tobytes()
                     return status
 
             # If the status is not 1 or 2, returns the (already resolved) status 104. This is currently the only
             # possibility here, but uses status value in case it ever ends up being something else as well
             else:
-                self.__leftover_bytes = remaining_bytes.tobytes()
-                self.__bytes_in_reception_buffer = packet_size  # Saves the packet size to be used in the error message
+                self._leftover_bytes = remaining_bytes.tobytes()
+                self._bytes_in_reception_buffer = packet_size  # Saves the packet size to be used in the error message
                 return status
 
         # Same as above, but code 2 means that the payload_size was found and used to determine the packet_size, but
@@ -1327,38 +1466,38 @@ class SerializedTransferProtocol:
             required_size = packet_size - packet_bytes.size  # Accounts for already received bytes
 
             # Blocks until enough bytes are available. Resets the timer every time more bytes become available
-            self.__timer.reset()
-            available_bytes = self.__port.in_waiting
+            self._timer.reset()
+            available_bytes = self._port.in_waiting
             delta = required_size - available_bytes  # Used to determine when to reset the timer
-            while self.__timer.elapsed < self.__timeout or delta > 0:
-                available_bytes = self.__port.in_waiting
+            while self._timer.elapsed < self._timeout or delta > 0:
+                available_bytes = self._port.in_waiting
                 delta_new = required_size - available_bytes
 
                 # Compares the deltas each cycle. If new delta is different from the old one, overwrites the delta
                 # and resets the timer
                 if delta_new != delta:
-                    self.__timer.reset()
+                    self._timer.reset()
                     delta = delta_new
 
             # If the while loop is escaped due to timeout, issues code 105: Packet reception staled at receiving
             # packet bytes.
             if delta > 0:
                 # There are no leftover bytes when code 105 is encountered, so clears the storage
-                self.__leftover_bytes = bytes()
+                self._leftover_bytes = bytes()
                 # Saves the number of the byte at which the reception staled so that it can be used in the error
                 # message raised by the wrapper
-                self.__bytes_in_reception_buffer = packet_size - delta
+                self._bytes_in_reception_buffer = packet_size - delta
                 return 105
 
             # If the bytes were received in time, calls the parser a third time to finish packet reception. Inputs
             # the packet_size and packet_bytes returned by the last method call to automatically jump to parsing
             # the remaining packet bytes
-            status, packet_size, remaining_bytes, packet_bytes = self.__parse_packet(
-                self.__leftover_bytes,
-                self.__start_byte,
-                self.__max_rx_payload_size,
-                self.__postamble_size,
-                self.__allow_start_byte_errors,
+            status, packet_size, remaining_bytes, packet_bytes = self._parse_packet(
+                self._leftover_bytes,
+                self._start_byte,
+                self._max_rx_payload_size,
+                self._postamble_size,
+                self._allow_start_byte_errors,
                 True,
                 packet_size,
                 packet_bytes,
@@ -1366,15 +1505,15 @@ class SerializedTransferProtocol:
 
             # The ONLY possible outcome.
             if status == 1:
-                self.__reception_buffer[0:packet_size] = packet_bytes
-                self.__bytes_in_reception_buffer = packet_size
-                self.__leftover_bytes = remaining_bytes.tobytes()
+                self._reception_buffer[0:packet_size] = packet_bytes
+                self._bytes_in_reception_buffer = packet_size
+                self._leftover_bytes = remaining_bytes.tobytes()
                 return status
 
         # There should not be any way to reach this guard, but it is kept here to help developers by detecting when the
         # logic of this method fails to prevent it reaching this point
         error_message = (
-            f"General failure of the __receive_packet() method runtime detected. Specifically, the method reached the "
+            f"General failure of the _receive_packet() method runtime detected. Specifically, the method reached the "
             f"static guard, which should not be possible. The last available parser status is ({status}). Manual "
             f"intervention is required to identify and resolve the error."
         )
@@ -1382,35 +1521,35 @@ class SerializedTransferProtocol:
 
     @staticmethod
     @njit(nogil=True, cache=True)
-    def __parse_packet(
-            read_bytes: bytes,
-            start_byte: np.uint8,
-            max_payload_size: int,
-            postamble_size: int,
-            allow_start_byte_errors: bool,
-            start_found: bool = False,
-            packet_size: int = 0,
-            packet_bytes: np.ndarray = np.empty(0, dtype=np.uint8),
+    def _parse_packet(
+        read_bytes: bytes,
+        start_byte: np.uint8,
+        max_payload_size: int,
+        postamble_size: int | unsignedinteger[Any],
+        allow_start_byte_errors: bool,
+        start_found: bool = False,
+        packet_size: int = 0,
+        packet_bytes: np.ndarray = np.empty(0, dtype=np.uint8),
     ) -> tuple[int, int, np.ndarray, np.ndarray]:
         """Parses as much of the packet as possible using the input bytes stream.
 
-        This method contains all packets parsing logic and takes in the bytes extracted from the serial port buffer and,
+        This method contains all packet parsing logic and takes in the bytes extracted from the serial port buffer and,
         as a best case scenario, returns the extracted packet ready for CRC verification and COBS decoding. This method
-        is designed to be called repeatedly until a packet is fully parsed or until an external timeout guard handled
-        by the __receive_packet() method kicks in to abort the reception. As such, it can recursively work on the same
+        is designed to be called repeatedly until a packet is fully parsed, or until an external timeout guard handled
+        by the _receive_packet() method kicks in to abort the reception. As such, it can recursively work on the same
         packet across multiple calls. To enable proper call, hierarchy it is essential that this method is called
-        strictly from the __receive_packet() method.
+        strictly from the _receive_packet() method.
 
         Notes:
             This method becomes increasingly helpful in use patterns where many bytes are allowed to aggregate in the
             serial port before being evaluated. Due to JIT compilation this method is very fast, and any execution time
             loss typically comes from reading the data from the underlying serial port. That step is optimized to read
-            as much data as possible with each read() call, so the more data aggregates before being read the more
+            as much data as possible with each read() call, so the more data aggregates before being read, the more
             efficient is each call to the major receive_data() method.
 
             The returns of this method are designed to support potentially iterative (not recursive) calls to this
             method. As a minium, the packet may be fully parsed (or definitively fail to be parsed, that is a valid
-            outcome too) with one call, and as a maximum, 3 calls may be needed.
+            outcome too) with one call, and as a maximum, 3 calls may be necessary.
 
             The method uses static integer codes to communicate its runtimes:
 
@@ -1448,7 +1587,7 @@ class SerializedTransferProtocol:
             packet_size: Iterative parameter. When this method is called two or more times, this value can be provided
                 to the method to skip resolving the packet size. Specifically, it is used when a call to this method
                 resolves the packet size, but cannot resolve the packet. Then, a second call to this method is made to
-                resolve the packet and the size is provided as an argument to skip no longer needed parsing steps.
+                resolve the packet and the size is provided as an argument to skip no longer necessary parsing steps.
             packet_bytes: Iterative parameter. If the method is able to parse some, but not all the packet's bytes,
                 the already parsed bytes can be fed back into the method during a second call using this argument.
                 Then, the method will automatically combine already parsed bytes with any additionally extracted bytes.
@@ -1535,14 +1674,14 @@ class SerializedTransferProtocol:
                     # Extracts the remaining number of bytes needed to fully parse the packet from the processed bytes
                     # array. Also, automatically 'discards' any processed bytes
                     extracted_bytes = evaluated_bytes[
-                                      processed_bytes: packet_size - packet_bytes.size + processed_bytes
-                                      ]
+                        processed_bytes : packet_size - packet_bytes.size + processed_bytes
+                    ]
 
                     # Appends extracted bytes to the end of the array holding already parsed bytes
                     packet = np.concatenate((packet_bytes, extracted_bytes))
 
                     # Extracts any remaining bytes so that they can be properly stored for future receive_data() calls
-                    remaining_bytes = evaluated_bytes[packet_size - packet_bytes.size + processed_bytes:]
+                    remaining_bytes = evaluated_bytes[packet_size - packet_bytes.size + processed_bytes :]
 
                     # Sets the status to static code 1: Packet fully parsed code
                     status_code = 1
@@ -1567,8 +1706,8 @@ class SerializedTransferProtocol:
                     return status_code, packet_size, remaining_bytes, packet_bytes
 
         # If this point is reached, that means that the method was not able to resolve the start byte. Determines the
-        # status code based on whether start byte errors are allowed or not. If they are allowed, returns 102,
-        # otherwise (default) returns 101.
+        # status code based on whether start byte errors are allowed or not. If they are allowed, returns 102.
+        # Otherwise (default) returns 101.
         if allow_start_byte_errors:
             status_code = 102
         else:
@@ -1584,23 +1723,23 @@ class SerializedTransferProtocol:
 
     @staticmethod
     @njit(nogil=True, cache=True)
-    def __validate_packet(
-            reception_buffer: np.ndarray,
-            packet_size: int,
-            cobs_processor: COBSProcessor.processor,
-            crc_processor: CRCProcessor.processor,
-            delimiter_byte: np.uint8,
-            postamble_size: int,
+    def _validate_packet(
+        reception_buffer: np.ndarray,
+        packet_size: int,
+        cobs_processor: COBSProcessor.processor,
+        crc_processor: CRCProcessor.processor,
+        delimiter_byte: np.uint8,
+        postamble_size: int | np.unsignedinteger[Any],
     ) -> int:
-        """Validates the packet using CRC checksum, decodes it using COBS-scheme and saves it to the reception_buffer.
+        """Validates the packet using CRC checksum, decodes it using COBS-scheme, and saves it to the reception_buffer.
 
         Both the CRC checksum and COBS decoding act as validation steps, and they jointly make it very unlikely that
         a corrupted packet passes this step. COBS-decoding extracts the payload from the buffer, making it available
         for consumption via read_data() method calls.
 
         Notes:
-            This method expects the packet to be stored inside the __reception_buffer and will store the decoded
-            payload to the __reception_buffer if method runtime succeeds. This allows optimizing memory usage and
+            This method expects the packet to be stored inside the _reception_buffer and will store the decoded
+            payload to the _reception_buffer if method runtime succeeds. This allows optimizing memory usage and
             reduces the overhang of passing arrays around.
 
             The method uses the property of CRCs that ensures running a CRC calculation on the buffer to which its CRC
@@ -1611,7 +1750,7 @@ class SerializedTransferProtocol:
 
         Args:
             reception_buffer: The buffer to which the extracted payload data will be saved and which is expected to
-                store the packet to verify. Should be set to the __reception_buffer of the class.
+                store the packet to verify. Should be set to the _reception_buffer of the class.
             packet_size: The size of the packet to be verified. Used to access the required portion of the input
                 reception_buffer.
             cobs_processor: The inner _COBSProcessor jitclass instance. The instance can be obtained by using
@@ -1641,7 +1780,7 @@ class SerializedTransferProtocol:
         if checksum != 0:
             return 0
         else:
-            # Removes the CRC bytes from the end of the packet as they are no longer needed if the CRC check passed
+            # Removes the CRC bytes from the end of the packet as they are no longer necessary if the CRC check passed
             packet = packet[: packet.size - postamble_size]
 
         # COBS-decodes the payload from the received packet.

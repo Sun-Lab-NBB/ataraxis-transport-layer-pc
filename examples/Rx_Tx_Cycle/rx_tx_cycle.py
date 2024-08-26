@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 
-from src.helper_modules import ElapsedTimer
+from src.ataraxis_transport_layer.helper_modules import ElapsedTimer
 from src.serial_transfer_protocol import SerializedTransferProtocol
 
 protocol = SerializedTransferProtocol(

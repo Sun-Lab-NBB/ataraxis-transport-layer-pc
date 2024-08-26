@@ -1,5 +1,5 @@
-""" This file contains the test functions that verify the functionality and error-handling of all
-SerializedTransferProtocol class methods. Special care is taken to fully test the 4 major methods: write_data(),
+"""This file contains the test functions that verify the functionality and error-handling of all
+TransportLayer class methods. Special care is taken to fully test the 4 major methods: write_data(),
 read_data(), send_data(), and receive_data(). You can also use this file if you need more examples on how to use
 class methods.
 """
@@ -11,13 +11,19 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from src.helper_modules import COBSProcessor, CRCProcessor, SerialMock
-from src.serialized_transfer_protocol import SerializedTransferProtocol
+from src.ataraxis_transport_layer.helper_modules import (
+    COBSProcessor,
+    CRCProcessor,
+    SerialMock,
+)
+from src.ataraxis_transport_layer.transport_layer import (
+    TransportLayer,
+)
 
 
 @dataclass
 class SampleDataClass:
-    """A simple dataclass used to test 'structure' serialization capability of the SerializedTransferProtocol class. Has
+    """A simple dataclass used to test 'structure' serialization capability of the TransportLayer class. Has
      to use numpy arrays and scalars as field types to support serialization.
 
     Attributes:
@@ -31,13 +37,13 @@ class SampleDataClass:
 
 
 def test_serial_transfer_protocol_buffer_manipulation():
-    """Tests the functionality of the SerializedTransferProtocol class' write_data() and read_data() methods. This, by
+    """Tests the functionality of the TransportLayer class' write_data() and read_data() methods. This, by
     extension, also tests all internal private methods that enable the proper functioning of the main two methods. Also
     test buffer reset methods.
     """
 
-    # Instantiates the tested SerializedTransferProtocol class
-    protocol = SerializedTransferProtocol(
+    # Instantiates the tested TransportLayer class
+    protocol = TransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
@@ -53,7 +59,7 @@ def test_serial_transfer_protocol_buffer_manipulation():
     # Verifies that the class initializes in test mode, which involves using SerialMock instead of the Serial class
     # from pySerial third-party library.
     # noinspection PyUnresolvedReferences
-    assert isinstance(protocol._SerializedTransferProtocol__port, SerialMock)
+    assert isinstance(protocol._port, SerialMock)
 
     # Instantiates tested scalar objects
     unsigned_8 = np.uint8(10)
@@ -87,7 +93,28 @@ def test_serial_transfer_protocol_buffer_manipulation():
     # Verifies that the bytes_in_transmission_buffer tracker matches the expected value (end_index) and that the
     # transmission buffer was indeed set to the expected byte values (matching written data).
     expected_buffer = np.array(
-        [10, 195, 1, 64, 226, 1, 0, 246, 61, 254, 192, 29, 254, 255, 45, 18, 156, 67, 1], dtype=np.uint8
+        [
+            10,
+            195,
+            1,
+            64,
+            226,
+            1,
+            0,
+            246,
+            61,
+            254,
+            192,
+            29,
+            254,
+            255,
+            45,
+            18,
+            156,
+            67,
+            1,
+        ],
+        dtype=np.uint8,
     )
     assert np.array_equal(expected_buffer, protocol.transmission_buffer[:end_index])
     assert protocol.bytes_in_transmission_buffer == 19
@@ -97,7 +124,7 @@ def test_serial_transfer_protocol_buffer_manipulation():
     signed_array_64 = np.array([-1, -2, -3, -4, -5], dtype=np.int64)
     float_array_64 = np.array([1.1, 2.2, 3.3, 4.4, 5.5], dtype=np.float64)
 
-    # Tests Array object writing. Specifically, every supported array type 8 bytes in size. Scalars and arrays are
+    # Tests Array object writing. Specifically, every supported array type is 8 bytes in size. Scalars and arrays are
     # interchangeable in terms of supported types, so combined with scalar testing, this confirms the entire supported
     # range works as expected
     end_index = protocol.write_data(unsigned_array_64)
@@ -108,7 +135,7 @@ def test_serial_transfer_protocol_buffer_manipulation():
     assert end_index == 139
 
     # Modifies the expected buffer to account for the newly added data (120 newly added bytes) so that the buffer state
-    # can be verified against the expected values. Then verifies the __transmission_buffer actually looks as expected
+    # can be verified against the expected values. Then verifies the _transmission_buffer actually looks as expected
     # and that the bytes' tracker was updated accordingly.
     next_expected_array = np.array(
         [
@@ -254,10 +281,13 @@ def test_serial_transfer_protocol_buffer_manipulation():
 
     # Verifies that the data inside the buffer was overwritten as expected
     expected_buffer[0:4] = [50, 1, 2, 3]
-    assert np.array_equal(expected_buffer, protocol.transmission_buffer[: protocol.bytes_in_transmission_buffer])
+    assert np.array_equal(
+        expected_buffer,
+        protocol.transmission_buffer[: protocol.bytes_in_transmission_buffer],
+    )
 
     # Restores the initial portion of the buffer back to the scalar test values and re-writes the dataclass to the
-    # end of the payload. This is needed to properly support data reading tests below.
+    # end of the payload. This is necessary to properly support data reading tests below.
     end_index = protocol.write_data(unsigned_8, start_index=0)
     end_index = protocol.write_data(unsigned_16, start_index=end_index)
     protocol.write_data(unsigned_32, start_index=end_index)
@@ -271,13 +301,13 @@ def test_serial_transfer_protocol_buffer_manipulation():
     # Copies the contents of the transmission buffer into the reception buffer to test data reading. Since there is no
     # exposed mechanism for doing so, directly accesses private attributes.
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__reception_buffer = protocol.transmission_buffer
+    protocol._reception_buffer = protocol.transmission_buffer
 
     # Also transfers the payload size from the transmission to the reception tracker, as this is necessary for the
     # data to be readable (the tracker is typically set by the receive_data() method during data reception). Same as
     # above, directly overwrites the private class attribute.
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__bytes_in_reception_buffer = protocol.bytes_in_transmission_buffer
+    protocol._bytes_in_reception_buffer = protocol.bytes_in_transmission_buffer
 
     # Verifies reading scalar values from the buffer works as expected. Provides zero-initialized prototype objects
     # to the read function and expects returned object values to match those used for writing
@@ -322,7 +352,7 @@ def test_serial_transfer_protocol_buffer_manipulation():
     assert end_index == 139
 
     # Verifies that reading dataclasses works as expected
-    test_class_read = SampleDataClass(uint_value=np.uint8(0), uint_array=np.zeros(3, dtype=np.uint8))
+    test_class_read: SampleDataClass = SampleDataClass(uint_value=np.uint8(0), uint_array=np.zeros(3, dtype=np.uint8))
     # noinspection PyTypeChecker
     test_class_read, end_index = protocol.read_data(test_class_read, start_index=end_index)
     assert test_class_read.uint_value == test_class.uint_value
@@ -345,21 +375,21 @@ def test_serial_transfer_protocol_buffer_manipulation():
 
 
 def test_serial_transfer_protocol_buffer_manipulation_errors():
-    """Tests the error-handling capabilities of SerializedTransferProtocol class write_data() and read_data() methods.
+    """Tests the error-handling capabilities of TransportLayer class write_data() and read_data() methods.
     Also tests class initialization errors.
     """
 
     # Verifies that using maximum_transmitted_payload_size argument above 254 triggers an error during class
     # initialization. Keeps the rest of the parameters set to default values, where possible.
     error_message = (
-        f"Unable to initialize SerializedTransferProtocol class. 'maximum_transmitted_payload_size' argument value "
+        f"Unable to initialize TransportLayer class. 'maximum_transmitted_payload_size' argument value "
         f"({255}) cannot exceed 254."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = SerializedTransferProtocol(
+        _ = TransportLayer(
             port="COM7",
             maximum_transmitted_payload_size=np.uint8(255),
             test_mode=True,
@@ -367,27 +397,27 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
     # Verifies that the minimum_received_payload_size cannot be set outside the range of 1 to 254 (inclusive)
     error_message = (
-        f"Unable to initialize SerializedTransferProtocol class. 'minimum_received_payload_size' argument value "
+        f"Unable to initialize TransportLayer class. 'minimum_received_payload_size' argument value "
         f"({0}) must be between 1 and 254 (inclusive)."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = SerializedTransferProtocol(
+        _ = TransportLayer(
             port="COM7",
             minimum_received_payload_size=0,
             test_mode=True,
         )
     error_message = (
-        f"Unable to initialize SerializedTransferProtocol class. 'minimum_received_payload_size' argument value "
+        f"Unable to initialize TransportLayer class. 'minimum_received_payload_size' argument value "
         f"({255}) must be between 1 and 254 (inclusive)."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = SerializedTransferProtocol(
+        _ = TransportLayer(
             port="COM7",
             minimum_received_payload_size=255,
             test_mode=True,
@@ -395,14 +425,14 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
     # Verifies that setting start_byte and delimiter_byte to the same value triggers an error.
     error_message = (
-        f"Unable to initialize SerializedTransferProtocol class. 'start_byte' and 'delimiter_byte' arguments "
+        f"Unable to initialize TransportLayer class. 'start_byte' and 'delimiter_byte' arguments "
         f"cannot be set to the same value ({129})."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = SerializedTransferProtocol(
+        _ = TransportLayer(
             port="COM7",
             start_byte=np.uint8(129),
             delimiter_byte=np.uint8(129),
@@ -411,7 +441,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
     # Instantiates the tested protocol class. Lists all addressable parameters, although technically only port should
     # be provided to use default initialization values.
-    protocol = SerializedTransferProtocol(
+    protocol = TransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
@@ -434,8 +464,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     # noinspection PyUnresolvedReferences
     error_message = (
         f"Unsupported input data_object type ({type(invalid_input)}) encountered when writing data "
-        f"to __transmission_buffer. At this time, only the following numpy scalar or array types are "
-        f"supported: {protocol._SerializedTransferProtocol__accepted_numpy_scalars}. Alternatively, a dataclass with "
+        f"to _transmission_buffer. At this time, only the following numpy scalar or array types are "
+        f"supported: {protocol._accepted_numpy_scalars}. Alternatively, a dataclass with "
         f"all attributes set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(
@@ -451,7 +481,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     payload = np.ones(200, dtype=np.uint8)
     # noinspection PyUnresolvedReferences
     error_message = (
-        f"Insufficient buffer space to write the data to the __transmission_buffer starting at the index "
+        f"Insufficient buffer space to write the data to the _transmission_buffer starting at the index "
         f"'{start_index}'. Specifically, given the data size of '{payload.nbytes}' bytes, the required buffer "
         f"size is '{start_index + payload.nbytes}' bytes, but the available size is "
         f"'{protocol.transmission_buffer.size}' bytes."
@@ -466,7 +496,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     invalid_array = np.zeros((2, 2), dtype=np.uint8)
     error_message = (
         f"A multidimensional numpy array with {invalid_array.ndim} dimensions encountered when writing "
-        f"data to __transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
+        f"data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
     )
     with pytest.raises(
         ValueError,
@@ -477,7 +507,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     # Verifies that calling write_data method for an empty numpy array raises an error.
     empty_array = np.empty(0, dtype=np.uint8)
     error_message = (
-        f"An empty (size 0) numpy array encountered when writing data to __transmission_buffer. Writing empty arrays "
+        f"An empty (size 0) numpy array encountered when writing data to _transmission_buffer. Writing empty arrays "
         f"is not supported."
     )
     with pytest.raises(
@@ -488,17 +518,17 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         protocol.write_data(empty_array)
 
     # READ DATA
-    # Sets the __bytes_in_reception_buffer to a non-zero value to support testing. Since there is no way of 'gracefully'
+    # Sets the _bytes_in_reception_buffer to a non-zero value to support testing. Since there is no way of 'gracefully'
     # accessing this private attribute, uses direct access.
-    protocol._SerializedTransferProtocol__bytes_in_reception_buffer = 50
+    protocol._bytes_in_reception_buffer = 50
 
     # Verifies that calling read_data method for a non-supported input object raises an error.
     invalid_input = None
     # noinspection PyUnresolvedReferences
     error_message = (
         f"Unsupported input data_object type ({type(invalid_input)}) encountered when reading data "
-        f"from __reception_buffer. At this time, only the following numpy scalar or array types are supported: "
-        f"{protocol._SerializedTransferProtocol__accepted_numpy_scalars}. Alternatively, a dataclass with all "
+        f"from _reception_buffer. At this time, only the following numpy scalar or array types are supported: "
+        f"{protocol._accepted_numpy_scalars}. Alternatively, a dataclass with all "
         f"attributes set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(
@@ -513,7 +543,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     start_index = 150
     payload = np.ones(200, dtype=np.uint8)
     error_message = (
-        f"Insufficient payload size to read the data from the __reception_buffer starting at the index "
+        f"Insufficient payload size to read the data from the _reception_buffer starting at the index "
         f"'{start_index}'. Specifically, given the object size of '{payload.nbytes}' bytes, the required payload "
         f"size is '{start_index + payload.nbytes}' bytes, but the available size is "
         f"'{protocol.bytes_in_reception_buffer}' bytes."
@@ -528,7 +558,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     invalid_array = np.zeros((2, 2), dtype=np.uint8)
     error_message = (
         f"A multidimensional numpy array with {invalid_array.ndim} dimensions requested when reading "
-        f"data from __reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
+        f"data from _reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
     )
     with pytest.raises(
         ValueError,
@@ -540,7 +570,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
     # Verifies that calling read_data for an empty array raises an error.
     error_message = (
-        f"Am empty (size 0) numpy array requested when reading data from __reception_buffer. Reading empty "
+        f"Am empty (size 0) numpy array requested when reading data from _reception_buffer. Reading empty "
         f"arrays is currently not supported."
     )
     with pytest.raises(
@@ -552,12 +582,12 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
 
 def test_serial_transfer_protocol_data_transmission():
-    """Tests the send_data() and receive_data() methods of the SerializedTransferProtocol class. Relies on the
+    """Tests the send_data() and receive_data() methods of the TransportLayer class. Relies on the
     read_data() and write_data() methods of the class to function as expected and also on the SerialMock class to be
     available to mock the pySerial Serial class."""
 
     # Initialize the tested class
-    protocol = SerializedTransferProtocol(
+    protocol = TransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
@@ -574,16 +604,18 @@ def test_serial_transfer_protocol_data_transmission():
     # Instantiates separate instances of encoder classes used to verify processing results
     cobs_processor = COBSProcessor()
     crc_processor = CRCProcessor(
-        polynomial=np.uint16(0x1021), initial_crc_value=np.uint16(0xFFFF), final_xor_value=np.uint16(0x0000)
+        polynomial=np.uint16(0x1021),
+        initial_crc_value=np.uint16(0xFFFF),
+        final_xor_value=np.uint16(0x0000),
     )
 
     # Generates the test array to be packaged and 'sent'
     test_array = np.array([1, 2, 3, 0, 0, 6, 0, 8, 0, 0], dtype=np.uint8)
 
-    # Writes the package into the __transmission_buffer
+    # Writes the package into the _transmission_buffer
     protocol.write_data(test_array)
 
-    # Verifies that the bytes were added to the __transmission_buffer
+    # Verifies that the bytes were added to the _transmission_buffer
     assert protocol.bytes_in_transmission_buffer == test_array.nbytes
 
     # Packages and sends the data to the StreamMock class buffer (due-to-protocol running in test mode)
@@ -594,7 +626,7 @@ def test_serial_transfer_protocol_data_transmission():
     assert send_status
     assert protocol.bytes_in_transmission_buffer == 0
 
-    # Manually verifies the contents of the tx_buffer of the SerialMock class (ensures the data was added as expected
+    # Manually verifies SerialMock tx_buffer contents (ensures the data was added as expected
     # and was encoded and CRC-checksummed as expected).
 
     # First, determines the expected COBS-encoded and CRC-checksummed packet. This is what is being passed to the Serial
@@ -606,7 +638,7 @@ def test_serial_transfer_protocol_data_transmission():
 
     # Assess the state of the tx_buffer by generating a numpy uint8 array using the contents of the tx_buffer
     # noinspection PyUnresolvedReferences
-    tx_buffer = np.frombuffer(protocol._SerializedTransferProtocol__port.tx_buffer, dtype=np.uint8)
+    tx_buffer = np.frombuffer(protocol._port.tx_buffer, dtype=np.uint8)
     assert tx_buffer[0] == 129  # Asserts that the first byte-value in the buffer is the same as the start_byte value
 
     # Verifies that the data written to the tx_buffer is the same as the expected packet
@@ -622,7 +654,7 @@ def test_serial_transfer_protocol_data_transmission():
     # is expected (unlike during transmission).
     rx_bytes = bytes([129, 10]) + expected_packet.tobytes()  # generates a bytes-sequence to represent received data
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__port.rx_buffer = rx_bytes  # Sets the reception buffer to received data
+    protocol._port.rx_buffer = rx_bytes  # Sets the reception buffer to received data
 
     # Simulates data reception using the rx_buffer of the mock port
     receive_status = protocol.receive_data()
@@ -639,19 +671,20 @@ def test_serial_transfer_protocol_data_transmission():
 
 
 def test_serial_transfer_protocol_data_transmission_errors():
-    """Tests SerializedTransferProtocol class send_data() and receive_data() method error handling. Focuses on testing
-    the errors that arise specifically from these methods or private methods of the SerializedTransferProtocol class.
-    Assumes= helper method errors are tested using the dedicated helper testing functions."""
+    """Tests TransportLayer class send_data() and receive_data() method error handling. Focuses on testing
+    the errors that arise specifically from these methods or private methods of the TransportLayer class.
+    Assumes= helper method errors are tested using the dedicated helper testing functions.
+    """
 
     # Instantiates the tested class
     # noinspection DuplicatedCode
-    protocol = SerializedTransferProtocol(
+    protocol = TransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
         initial_crc_value=np.uint16(0xFFFF),
         final_crc_xor_value=np.uint16(0x0000),
-        maximum_transmitted_payload_size=np.uint8(254),
+        maximum_transmitted_payload_size=254,
         start_byte=np.uint8(129),
         delimiter_byte=np.uint8(0),
         timeout=np.uint64(20000),
@@ -662,7 +695,9 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # Instantiates separate instances of encoder classes used to verify processing results
     cobs_processor = COBSProcessor()
     crc_processor = CRCProcessor(
-        polynomial=np.uint16(0x1021), initial_crc_value=np.uint16(0xFFFF), final_xor_value=np.uint16(0x0000)
+        polynomial=np.uint16(0x1021),
+        initial_crc_value=np.uint16(0xFFFF),
+        final_xor_value=np.uint16(0x0000),
     )
 
     # Initializes a test payload
@@ -686,13 +721,13 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # Verifies no error occurs when protocol is configured to ignore start_byte errors (there is no start_byte in the
     # zeroes buffer)
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__port.rx_buffer = empty_buffer.tobytes()  # Writes 'noise' bytes to serial port
+    protocol._port.rx_buffer = empty_buffer.tobytes()  # Writes 'noise' bytes to serial port
     receive_status = protocol.receive_data()
     assert not receive_status
 
-    # To save some time on recompiling the class flips the 'allow_start_byte_errors' flag of the protocol class using
+    # To save some time on recompiling, the class flips the 'allow_start_byte_errors' flag of the protocol class using
     # name un-mangling. This should not be done during production runtime.
-    protocol._SerializedTransferProtocol__allow_start_byte_errors = True
+    protocol._allow_start_byte_errors = True
 
     # Note, for all tests below, the rx_buffer has to be refilled with bytes after each test as the bytes are actually
     # consumed during each test.
@@ -704,7 +739,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
         "serial packet. Reception aborted."
     )
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__port.rx_buffer = empty_buffer.tobytes()  # Refills rx buffer
+    protocol._port.rx_buffer = empty_buffer.tobytes()  # Refills rx buffer
     with pytest.raises(
         RuntimeError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
@@ -722,7 +757,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # Sets the last variable in the empty_buffer to the start byte to simulate receiving start byte (and nothing else)
     empty_buffer[-1] = 129
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__port.rx_buffer = empty_buffer.tobytes()  # Refills rx buffer
+    protocol._port.rx_buffer = empty_buffer.tobytes()  # Refills rx buffer
     with pytest.raises(
         RuntimeError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
@@ -739,7 +774,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
     )
     test_data[1] = 110  # Payload size is 10, but this tells the algorithm it is at least 110 bytes
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__port.rx_buffer = test_data.tobytes()  # Refills rx buffer
+    protocol._port.rx_buffer = test_data.tobytes()  # Refills rx buffer
     with pytest.raises(
         RuntimeError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
@@ -754,7 +789,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
     )
     test_data[1] = 255
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__port.rx_buffer = test_data.tobytes()  # Refills rx buffer
+    protocol._port.rx_buffer = test_data.tobytes()  # Refills rx buffer
     with pytest.raises(
         RuntimeError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
@@ -774,7 +809,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
     test_data[-1] = 112  # Modifies the LOWEST byte of the CRC checksum. Not that it matters, just fiy.
     received_checksum[-1] = 112
 
-    # Uses crc class to calculate integer expected and 'received' checksums to make the error message look nice.
+    # Uses crc class to calculate integer 'expected' and 'received' checksums to make the error message look nice.
     error_message = (
         f"CRC checksum verification failed for the received serial packet. Specifically, the checksum "
         f"value transmitted with the packet {hex(crc_processor.convert_crc_checksum_to_integer(received_checksum))} "
@@ -783,7 +818,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
     )
 
     # noinspection PyUnresolvedReferences
-    protocol._SerializedTransferProtocol__port.rx_buffer = test_data.tobytes()  # Refills rx buffer
+    protocol._port.rx_buffer = test_data.tobytes()  # Refills rx buffer
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
