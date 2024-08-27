@@ -272,10 +272,10 @@ class COBSProcessor:
     automatically converts internal class runtime status codes into exception error messages where appropriate to
     notify users about runtime errors.
 
-    For the maximum execution speed, you can access the private methods directly via the 'processor' property,
-    although this is highly discouraged.
-
     Notes:
+        For the maximum execution speed, you can access the private methods directly via the 'processor' property,
+        although this is highly discouraged.
+
         See the API documentation for the _COBSProcessor class for more details about the COBS encoding and decoding
         methodology.
 
@@ -544,16 +544,25 @@ class COBSProcessor:
 
 
 class _CRCProcessor:
-    """The inner CRCProcessor class that actually implements all method logic.
+    """Provides methods for working with CRC checksums used to verify the integrity of transferred data packets.
+
+    This class is intended to be initialized through Numba's 'jitclass' function. The intended way to do so is through
+    first initializing a CRCProcessor (no underscore) class and then accessing the jit-compiled core through the
+    'processor' property. Initializing this class directly will not have the tangible performance benefits offered by
+    the jit-compiled class.
 
     Notes:
-        This class is optimized using Numba's JIT (Just-In-Time) compilation module to significantly improve
-        the execution speed of all class methods. As an unfortunate side effect, this process interferes with
-        Python's built-in error handling tools. To provide error-handling capacity, a C-driven approach of
-        returning fixed byte error-codes has been implemented. The error codes are available through the class
-        attributes below. Each method returns the status (success or error) code by setting the class 'status'
-        attribute to the latest runtime code, mimicking the functioning of the class version intended for
-        microcontrollers.
+        For more information on how the CRC checksum works, see the original paper:
+        W. W. Peterson and D. T. Brown, "Cyclic Codes for Error Detection," in Proceedings of the IRE, vol. 49, no. 1,
+        pp. 228-235, Jan. 1961, doi: 10.1109/JRPROC.1961.287814.
+
+        To support error-handling, the class returns fixed byte error-codes. Available error codes can be obtained
+        via class attributes. Each method returns the status (success or error) code by setting the class 'status'
+        attribute to the latest runtime code.
+
+        To increase runtime speed, this class generates a static CRC lookup table using the input polynomial, which is
+        subsequently used to calculate CRC checksums. This statically reserves 256, 512, or 1024 bytes of RAM to store
+        the table.
 
     Attributes:
         status: Stores the last-called method's runtime status code.
@@ -587,17 +596,15 @@ class _CRCProcessor:
             array of bytes to an appropriate numpy unsigned integer (uint8, uint16, or uint32).
 
     Args:
-        polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
-            appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials are
+        polynomial: The polynomial used to generate the CRC lookup table. Can be provided as a HEX number
+            (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16 and uint32 datatypes are
             supported.
-        polynomial_size: The size of the polynomial in bytes. This is used to support the manipulations
-            necessary to calculate the CRC checksum and add / read it from storage buffers.
-        initial_crc_value: The initial value to which the CRC checksum variable is initialized during
-            calculation. This value is based on the polynomial parameter. Can be provided as an appropriately
-            sized HEX number (e.g., 0xFFFF).
-        final_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value is
-            based on the polynomial parameter. Can be provided as an appropriately sized HEX number
-            (e.g., 0x0000).
+        initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
+            This value depends on the chosen polynomial algorithm and should use the same datatype as the polynomial
+            argument. It can be provided as a HEX number (e.g., 0xFFFF).
+        final_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value depends on
+            the chosen polynomial algorithm and should use the same datatype as the polynomial argument. It can be
+            provided as a HEX number (e.g., 0x0000).
     """
 
     def __init__(
@@ -841,48 +848,37 @@ class _CRCProcessor:
 
 
 class CRCProcessor:
-    """Provides methods for working with CRC checksums used to verify the integrity of transferred data packets.
+    """Wraps a jit-compiled _CRCProcessor class that provides methods for working with CRC checksums used to verify
+    the integrity of transferred data packets.
 
-    For more information on how the CRC checksum works, see the original paper:
-    W. W. Peterson and D. T. Brown, "Cyclic Codes for Error Detection," in Proceedings of the IRE, vol. 49, no. 1,
-    pp. 228-235, Jan. 1961, doi: 10.1109/JRPROC.1961.287814.
+    This class functions as a wrapper that provides a consistent Python API for the internal instance of a
+    jit-compiled _CRCProcessor class. This allows achieving python-like experience when using the class while
+    simultaneously benefiting from fast compiled code generated through numba jit-optimization. The wrapper
+    automatically converts internal class runtime status codes into exception error messages where appropriate to
+    notify users about runtime errors.
 
     Notes:
-        This class functions as a wrapper that provides a consistent Python API for the internal instance of a
-        jit-compiled _CRCProcessor class. This allows achieving python-like experience when using the class while
-        simultaneously benefiting from fast machine-compiled code generated through numba jit-optimization. The wrapper
-        automatically converts internal class runtime status codes into exception error messages where appropriate to
-        notify users about runtime errors.
+        For the maximum execution speed, you can access the private methods directly via the 'processor' property,
+        although this is highly discouraged.
 
-        For the maximum execution speed, you can access the private methods directly (see TransportLayer
-        class), although this is highly discouraged.
-
-        To increase runtime speed, this class generates a static CRC lookup table using the input polynomial, which is
-        subsequently used to calculate CRC checksums. This statically reserves 256, 512, or 1024 bytes of RAM to store
-        the table, which is more or less irrelevant for all modern systems.
-
-        In addition to providing CRC checksum calculation methods, this class also provides methods for converting the
-        calculated CRC checksum between unsigned integer format returned by the calculator and the numpy byte array used
-        during transmission.
+        See the API documentation for the _CRCProcessor class for more details about CRC checksum generation and usage.
 
     Attributes:
-        _processor: The private instance of the jit-compiled _CRCProcessor class which actually does all the required
-            computations. Private by design and should never be accessed directly.
+        _processor: Stores the jit-compiled _CRCProcessor class, which carries out all computations.
 
     Args:
-        polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
-            appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials of numpy
-            uint8, uint16 and uint32 datatypes are supported.
+        polynomial: The polynomial used to generate the CRC lookup table. Can be provided as a HEX number
+            (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16 and uint32 datatypes are
+            supported.
         initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
-            This value depends on the chosen polynomial algorithm ('polynomial' argument) and should use the same
-            datatype as the polynomial argument. It can be provided as an appropriately sized HEX number (e.g., 0xFFFF).
+            This value depends on the chosen polynomial algorithm and should use the same datatype as the polynomial
+            argument. It can be provided as a HEX number (e.g., 0xFFFF).
         final_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value depends on
-            the chosen polynomial algorithm ('polynomial' argument) and should use the same datatype as the polynomial
-            argument. It can be provided as an appropriately sized HEX number (e.g., 0x0000).
+            the chosen polynomial algorithm and should use the same datatype as the polynomial argument. It can be
+            provided as a HEX number (e.g., 0x0000).
 
     Raises:
-        TypeError: If any of the class initialization arguments are not of the supported type, and if the arguments are
-            not of the same type.
+        TypeError: If any of the class initialization arguments are not of the valid type.
     """
 
     def __init__(

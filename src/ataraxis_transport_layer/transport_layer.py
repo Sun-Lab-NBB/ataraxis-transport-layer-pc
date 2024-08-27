@@ -1063,7 +1063,7 @@ class TransportLayer:
         # Checksum calculation method does not have a unique error-associated return value. If it runs into an error, it
         # returns 0, but 0 can also be returned by a successful checksum calculation. To verify that the checksum
         # calculation was successful, verifies that the processor status matches expected success status.
-        if crc_processor.status != crc_processor.checksum_calculated:
+        if crc_processor._status != crc_processor.checksum_calculated:
             return np.empty(0, dtype=payload_buffer.dtype)
 
         # Converts the integer checksum to a bytes' format (form the crc postamble)
@@ -1773,7 +1773,7 @@ class TransportLayer:
 
         # Verifies that the checksum calculation method ran successfully. if not, returns 0 to indicate verification
         # failure
-        if crc_processor.status != crc_processor.checksum_calculated:
+        if crc_processor._status != crc_processor.checksum_calculated:
             return 0
 
         # If the checksum is not 0, but the calculator runtime was successful, this indicates that the packet was
