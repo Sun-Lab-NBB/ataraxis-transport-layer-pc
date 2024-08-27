@@ -16,9 +16,9 @@ practical use outside of this specific role.
 
 from typing import Any, Union
 
+from numba import uint8, uint16, uint32
 import numpy as np
 from numpy.typing import NDArray
-from numba import uint8, uint16, uint32
 from numba.experimental import jitclass
 from ataraxis_base_utilities import console
 
@@ -41,7 +41,7 @@ class _COBSProcessor:
         attribute to the latest runtime code.
 
     Attributes:
-        status: Dynamically updated during runtime to track the latest method's runtime integer byte-code.
+        status: Tracks the latest method runtime status byte-code.
         standby: The integer code used during class initialization (before any method is called).
         maximum_payload_size: The maximum size of the payload, in bytes. Due to COBS, cannot exceed 254 bytes.
         minimum_payload_size: The minimum size of the payload, in bytes. No algorithmic minimum enforced, but
@@ -67,28 +67,30 @@ class _COBSProcessor:
 
     def __init__(self) -> None:
         # Constant class parameters (do not modify, they are already optimal for any non-embedded system)
-        self.maximum_payload_size = 254
-        self.minimum_payload_size = 1
-        self.maximum_packet_size = 256
-        self.minimum_packet_size = 3
+        self.maximum_payload_size: int = 254
+        self.minimum_payload_size: int = 1
+        self.maximum_packet_size: int = 256
+        self.minimum_packet_size: int = 3
 
         # Status codes. Follow a similar approach to TransportLayer implemented in ataraxis-micro-controller
         # library, where the codes are unique across the entire library and stay in the range of 11 to 50.
-        self.standby = 11
-        self.payload_too_small_error = 12
-        self.payload_too_large_error = 13
-        self.invalid_payload_datatype_error = 14
-        self.payload_encoded = 15
-        self.packet_too_small_error = 16
-        self.packet_too_large_error = 17
-        self.delimiter_not_found_error = 18
-        self.delimiter_found_too_early_error = 19
-        self.invalid_packet_datatype_error = 20
-        self.payload_decoded = 21
+        self.standby: int = 11
+        self.payload_too_small_error: int = 12
+        self.payload_too_large_error: int = 13
+        self.invalid_payload_datatype_error: int = 14
+        self.payload_encoded: int = 15
+        self.packet_too_small_error: int = 16
+        self.packet_too_large_error: int = 17
+        self.delimiter_not_found_error: int = 18
+        self.delimiter_found_too_early_error: int = 19
+        self.invalid_packet_datatype_error: int = 20
+        self.payload_decoded: int = 21
 
-        self.status = self.standby  # Initializes to standby
+        self.status: int = self.standby  # Initializes to standby
 
-    def encode_payload(self, payload: NDArray[np.uint8], delimiter: np.uint8 = 0) -> NDArray[np.uint8]:
+    def encode_payload(
+        self, payload: NDArray[np.uint8], delimiter: np.uint8 = 0
+    ) -> NDArray[np.uint8]:
         """Encodes the input payload into a transmittable packet using COBS scheme.
 
         Eliminates all instances of the delimiter value from the payload by replacing each with the distance to the
@@ -132,14 +134,18 @@ class _COBSProcessor:
         # Initializes the output array, uses payload size + 2 as size to make space for the overhead and
         # delimiter bytes (see COBS scheme for more details on why this is necessary).
         packet = np.empty(size + 2, dtype=payload.dtype)
-        packet[-1] = delimiter  # Sets the last byte of the packet to the delimiter byte value
+        packet[-1] = (
+            delimiter  # Sets the last byte of the packet to the delimiter byte value
+        )
         packet[1:-1] = (
             payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
         )
 
         # A tracker variable that is used to calculate the distance to the next delimiter value when an
         # unencoded delimiter is required.
-        next_delimiter_position = packet.size - 1  # Initializes to the index of the delimiter value added above
+        next_delimiter_position = (
+            packet.size - 1
+        )  # Initializes to the index of the delimiter value added above
 
         # Iterates over the payload in reverse and replaces every instance of the delimiter value inside the
         # payload with the distance to the next delimiter value (or the value added to the end of the payload).
@@ -151,11 +157,13 @@ class _COBSProcessor:
                 # the distance to the next_delimiter_position. This is either the distance to the next encoded
                 # value or the distance to the delimiter value located at the end of the packet.
                 packet[i + 1] = next_delimiter_position - (
-                        i + 1
+                    i + 1
                 )  # +1 is to translate from payload to packet index
 
                 # Overwrites the next_delimiter_position with the index of the encoded value
-                next_delimiter_position = i + 1  # +1 is to translate for payload to packet index
+                next_delimiter_position = (
+                    i + 1
+                )  # +1 is to translate for payload to packet index
 
         # Once the runtime above is complete, sets the overhead byte to the value of the
         # next_delimiter_position. As a worst-case scenario, that would be the index of the delimiter byte
@@ -169,7 +177,9 @@ class _COBSProcessor:
         self.status = self.payload_encoded
         return packet
 
-    def decode_payload(self, packet: NDArray[np.uint8], delimiter: np.uint8 = 0) -> NDArray[np.uint8]:
+    def decode_payload(
+        self, packet: NDArray[np.uint8], delimiter: np.uint8 = 0
+    ) -> NDArray[np.uint8]:
         """Decodes the COBS-encoded payload from the input packet.
 
         Traverses the input packet by jumping between encoded delimiter values and restoring them to the original value.
@@ -222,7 +232,9 @@ class _COBSProcessor:
         read_index = 0
 
         # Tracks the distance to the next index to evaluate, relative to the read_index value
-        next_index = packet[read_index]  # Reads the distance stored in the overhead byte into the next_index
+        next_index = packet[
+            read_index
+        ]  # Reads the distance stored in the overhead byte into the next_index
 
         # Loops over the payload and iteratively jumps over all encoded values, restoring (decoding) them back
         # to the delimiter value in the process. Carries on with the process until it reaches the end of the
@@ -308,12 +320,14 @@ class COBSProcessor:
 
         # Instantiates the jit class and saves it to wrapper class attribute. Developer hint: when used as function,
         # jitclass returns an uninitialized compiled object, so initializing is crucial here.
-        self._processor: _COBSProcessor = jitclass(cls_or_spec=_COBSProcessor, spec=cobs_spec)()
+        self._processor: _COBSProcessor = jitclass(
+            cls_or_spec=_COBSProcessor, spec=cobs_spec
+        )()
 
     def __repr__(self) -> str:
         """Returns a string representation of the COBSProcessor class instance."""
         representation_string = (
-            f"COBSProcessor(inner_status={self._processor.status}, "
+            f"COBSProcessor(status={self._processor.status}, "
             f"maximum_payload_size={self._processor.maximum_payload_size}, "
             f"minimum_payload_size={self._processor.minimum_payload_size}, "
             f"maximum_packet_size={self._processor.maximum_packet_size}, "
@@ -321,7 +335,9 @@ class COBSProcessor:
         )
         return representation_string
 
-    def encode_payload(self, payload: NDArray[np.uint8], delimiter: np.uint8 = 0) -> np.ndarray:
+    def encode_payload(
+        self, payload: NDArray[np.uint8], delimiter: np.uint8 = 0
+    ) -> NDArray[np.uint8]:
         """Encodes the input payload into a transmittable packet using COBS scheme.
 
         The encoding produces the following packet structure: [Overhead] ... [COBS Encoded Payload] ... [Delimiter].
@@ -331,25 +347,26 @@ class COBSProcessor:
                 datatype and be between 1 and 254 bytes in length.
             delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter.
 
-        Raises:
-            TypeError: If the payload or delimiter arguments are not of the correct numpy datatype.
-
         Returns:
             The packet uint8 numpy array encoded using COBS scheme.
+
+        Raises:
+            TypeError: If the payload or delimiter arguments are not of the correct numpy datatype.
+            ValueError: If encoding failed for any reason.
         """
 
         # Prevents using the method for unsupported input types
         if not isinstance(payload, np.ndarray):
             message = (
                 f"Unable to encode payload using COBS scheme. A numpy ndarray with uint8 datatype expected as "
-                f"payload, but instead encountered {payload} of type {type(payload).__name__}."
+                f"'payload' argument, but instead encountered {payload} of type {type(payload).__name__}."
             )
             console.error(message, error=TypeError)
 
         elif not isinstance(delimiter, np.uint8):
             message = (
-                f"Unable to encode payload using COBS scheme. A scalar numpy uint8 (byte) delimiter value expected, "
-                f"but instead encountered {delimiter} of type {type(delimiter).__name__}."
+                f"Unable to encode payload using COBS scheme. A scalar numpy uint8 (byte) value expected as "
+                f"'delimiter' argument, but instead encountered {delimiter} of type {type(delimiter).__name__}."
             )
             console.error(message, error=TypeError)
 
@@ -378,7 +395,7 @@ class COBSProcessor:
 
         # Success code, verification is complete
         if self._processor.status == self._processor.payload_encoded:
-            pass
+            return
 
         # Payload too small
         elif self._processor.status == self._processor.payload_too_small_error:
@@ -408,14 +425,15 @@ class COBSProcessor:
             console.error(message, error=ValueError)
 
         # Unknown status code
-        else:  # pragma: no cover
-            message = (
-                f"Failed to encode the payload using COBS scheme. Unexpected inner _COBSProcessor class status code "
-                f"({self._processor.status}) encountered. CODE: 0."
-            )
-            console.error(message, error=RuntimeError)
+        message = (
+            f"Failed to encode the payload using COBS scheme. Unexpected inner _COBSProcessor class status code "
+            f"({self._processor.status}) encountered. CODE: 0."
+        )  # pragma: no cover
+        console.error(message, error=RuntimeError)  # pragma: no cover
 
-    def decode_payload(self, packet: NDArray[np.uint8], delimiter: np.uint8 = 0) -> NDArray[np.uint8]:
+    def decode_payload(
+        self, packet: NDArray[np.uint8], delimiter: np.uint8 = 0
+    ) -> NDArray[np.uint8]:
         """Decodes the COBS-encoded payload from the input packet.
 
         Expects the input packets to adhere to the following structure:
@@ -434,20 +452,21 @@ class COBSProcessor:
 
         Raises:
             TypeError: If the packet or delimiter arguments are not of a correct numpy datatype.
+            ValueError: If decoding failed for any reason.
         """
 
         # Prevents using the method for unsupported input types
         if not isinstance(packet, np.ndarray):
             message = (
-                f"Unable to decode payload using COBS scheme. A numpy ndarray packet expected, but instead encountered"
-                f"{packet} of type {type(packet).__name__}."
+                f"Unable to decode payload using COBS scheme. A numpy ndarray expected as 'packet' argument, but "
+                f"instead encountered {packet} of type {type(packet).__name__}."
             )
             console.error(message, error=TypeError)
 
-        elif not isinstance(delimiter, np.uint8):
+        if not isinstance(delimiter, np.uint8):
             message = (
-                f"Unable to decode payload using COBS scheme. A scalar numpy uint8 (byte) delimiter expected, but "
-                f"instead encountered delimiter of type {type(delimiter).__name__}."
+                f"Unable to decode payload using COBS scheme. A scalar numpy uint8 (byte) value expected as "
+                f"'delimiter' argument, but instead encountered {delimiter} of type {type(delimiter).__name__}."
             )
             console.error(message, error=TypeError)
 
@@ -460,7 +479,7 @@ class COBSProcessor:
         # Returns the decoded payload to caller if verification was successful
         return payload
 
-    def _resolve_decoding_status(self, packet: np.ndarray) -> None:
+    def _resolve_decoding_status(self, packet: NDArray[np.uint8]) -> None:
         """Resolves the status of the decode_payload() method runtime.
 
         If the status was not successful, raises the appropriate error message.
@@ -472,12 +491,11 @@ class COBSProcessor:
             ValueError: If the parameters of the input packet are not valid. This includes the case of the packet being
                 corrupted.
             RuntimeError: If the status code returned by the decoder method is not one of the expected values.
-
         """
 
         # Runtime successful, verification is complete
         if self._processor.status == self._processor.payload_decoded:
-            pass
+            return
 
         # Packet too small
         elif self._processor.status == self._processor.packet_too_small_error:
@@ -526,19 +544,19 @@ class COBSProcessor:
             console.error(message, error=ValueError)
 
         # Unknown code
-        else:  # pragma: no cover
-            message = (
-                f"Failed to decode payload using COBS scheme. Unexpected inner _COBSProcessor class status code "
-                f"({self._processor.status}) encountered. CODE: 0."
-            )
-            console.error(message, error=RuntimeError)
+        message = (
+            f"Failed to decode payload using COBS scheme. Unexpected inner _COBSProcessor class status code "
+            f"({self._processor.status}) encountered. CODE: 0."
+        )  # pragma: no cover
+        console.error(message, error=RuntimeError)  # pragma: no cover
 
     @property
     def processor(self) -> _COBSProcessor:
         """Returns the jit-compiled _COBSProcessor class instance.
 
         This accessor represents a convenient way of unwrapping the jit-compiled class, so that its methods can be
-        used directly (helpful for using them from other jit-methods or to bypass the overhead of error checking).
+        used directly. This is helpful for using them from other jit-methods or to bypass the overhead of error
+        checking.
         """
         return self._processor
 
@@ -565,32 +583,22 @@ class _CRCProcessor:
         the table.
 
     Attributes:
-        status: Stores the last-called method's runtime status code.
-        polynomial: Stores the polynomial used for the CRC checksum calculation. Only used for the wrapper class
-            __repr__ method as the inner class immediately converts the polynomial to a static crc_table upon
-            initialization.
-        initial_crc_value: Stores the initial value used for the CRC checksum calculation. Specifically, this is
-            the value that the CRC checksum variable is initialized to at the beginning of each
-            calculate_packet_crc_checksum() method runtime.
-        final_xor_value: Stores the final XOR value used for the CRC checksum calculation. Specifically, this is
-            the value that the CRC checksum variable is XORed with prior to being returned to caller at the end
-            of each calculate_packet_crc_checksum() method runtime.
-        crc_byte_length: Stores the length of the CRC polynomial in bytes. This is used across most methods of
-            the class to automatically scale processing to the number of bytes used to store the CRC checksum
-            value.
+        status: Tracks the latest method runtime status byte-code.
+        polynomial: Stores the polynomial used for the CRC checksum calculation.
+        initial_crc_value: Stores the initial value used for the CRC checksum calculation.
+        final_xor_value: Stores the final XOR value used for the CRC checksum calculation.
+        crc_byte_length: Stores the length of the CRC polynomial in bytes.
         crc_table: The array that stores the CRC lookup table. The lookup table is used to speed up CRC checksum
             calculation by pre-computing the checksum value for each possible byte-value (from 0 through 255:
-            256 values total). The table is filled automatically during class instantiation and reserves 256,
-            512, or 1024 bytes of RAM for the entire lifetime of the class, depending on the numpy datatype of
-            the polynomial.
+            256 values total).
         standby: The integer code used during class initialization (before any method is called).
-        calculate_checksum_buffer_datatype_error: The buffer provided to the calculate_packet_crc_checksum()
+        calculate_checksum_buffer_datatype_error: The buffer provided to the calculate_crc_checksum()
             method was not of the required uint8 numpy datatype.
         checksum_calculated: The CRC checksum has been successfully calculated.
         checksum_converted_to_bytes: The CRC checksum has been successfully converted to an uint8 numpy array.
         convert_checksum_invalid_buffer_datatype_error: The buffer provided to the
-            convert_crc_checksum_to_integer() method was not of the required uint8 numpy datatype.
-        convert_checksum_invalid_buffer_size_error: The buffer provided to the convert_crc_checksum_to_integer()
+            convert_bytes_to_checksum() method was not of the required uint8 numpy datatype.
+        convert_checksum_invalid_buffer_size_error: The buffer provided to the convert_bytes_to_checksum()
             method was not of the byte-size required to store the byte-converted crc checksum value.
         checksum_converted_to_integer: The CRC checksum has been successfully converted from an uint8 numpy
             array of bytes to an appropriate numpy unsigned integer (uint8, uint16, or uint32).
@@ -608,55 +616,66 @@ class _CRCProcessor:
     """
 
     def __init__(
-            self,
-            polynomial: Union[np.uint8, np.uint16, np.uint32],
-            polynomial_size: np.uint8,
-            initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
-            final_xor_value: Union[np.uint8, np.uint16, np.uint32],
-            crc_type: np.dtype
+        self,
+        polynomial: Union[np.uint8, np.uint16, np.uint32],
+        polynomial_size: np.uint8,
+        initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
+        final_xor_value: Union[np.uint8, np.uint16, np.uint32],
+        crc_type: np.dtype,
     ) -> None:
+
+        # No error checking, as it is assumed that the class is always initialized through the CRCProcessor wrapper.
+
         # Local variables
-        self.polynomial = polynomial
-        self.initial_crc_value = initial_crc_value
-        self.final_xor_value = final_xor_value
-        self.crc_byte_length = polynomial_size
-        self.crc_table = np.empty(256, dtype=crc_type)  # Initializes to empty for efficiency
+        self.polynomial: crc_type = polynomial
+        self.initial_crc_value: crc_type = initial_crc_value
+        self.final_xor_value: crc_type = final_xor_value
+        self.crc_byte_length: np.uint8 = polynomial_size
+        self.crc_table = np.empty(
+            256, dtype=crc_type
+        )  # Initializes to empty for efficiency
 
-        # Static status_codes
-        self.standby = 51  # The code used right after class initialization (before any other method is called)
-        self.calculate_checksum_buffer_datatype_error = 52
-        self.checksum_calculated = 53
-        self.checksum_converted_to_bytes = 54
-        self.convert_checksum_invalid_buffer_datatype_error = 55
-        self.convert_checksum_invalid_buffer_size_error = 56
-        self.checksum_converted_to_integer = 57
+        # Static status_codes. Have to use codes 51 through 100 to support unified error handling across the library
+        # methods.
+        self.standby: int = (
+            51  # The code used right after class initialization (before any other method is called)
+        )
+        self.calculate_checksum_buffer_datatype_error: int = 52
+        self.checksum_calculated: int = 53
+        self.checksum_converted_to_bytes: int = 54
+        self.convert_checksum_invalid_buffer_datatype_error: int = 55
+        self.convert_checksum_invalid_buffer_size_error: int = 56
+        self.checksum_converted_to_integer: int = 57
 
-        self.status = self.standby  # Dynamically updated to track the latest method runtime status
+        self.status: int = (
+            self.standby
+        )  # Dynamically updated to track the latest method runtime status
 
-        # Calls table generation method that generates a lookup table based on the target polynomial
-        # parameters and iteratively sets each variable inside the crc_table placeholder to the calculated
-        # values.
-        self.generate_crc_table(_polynomial=polynomial)
+        # Generates the lookup table based on the target polynomial parameters and iteratively sets each variable
+        # inside the crc_table placeholder to the calculated values.
+        self._generate_crc_table(polynomial=polynomial)
 
     # noinspection DuplicatedCode
-    def calculate_packet_crc_checksum(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
-        """Calculates the checksum for the (entire) input buffer.
+    def calculate_crc_checksum(
+        self, buffer: NDArray[np.uint8]
+    ) -> Union[np.uint8, np.uint16, np.uint32]:
+        """Calculates the checksum for the input buffer.
 
-        This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-        If possible, only use this method through a wrapper API to ensure proper error handling.
+        This method loops over the contents of the buffer and iteratively computes the CRC checksum for the entire
+        buffer. Assumes that the buffer is entirely made up of the data to be checksummed.
 
         Notes:
-            While error runtimes always return 0, any 0-value returned by this method is potentially a valid
-            value. To determine if the method runtime was successful or failed, use 'status' class attribute.
-            The returned value is not meaningful until it is verified using the status code!
+            While error runtimes always return value 0, any 0-value returned by this method is potentially a valid
+            value. To determine if the method runtime was successful, use 'status' class attribute. The returned value
+            is not meaningful until it is verified using the status code!
 
         Args:
             buffer: The uint8 numpy array that stores the data to be checksummed.
 
         Returns:
-            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
-            class initialization) that represents the calculated CRC checksum value. Also sets the 'status'
-            class attribute to communicate the status of the method's runtime.
+            A numpy uint8, uint16, or uint32 integer that represents the calculated CRC checksum value. The returned
+            data type depends on the polynomial used during class initialization. Also sets the 'status' class
+            attribute to communicate the status of the method's runtime.
         """
 
         # Verifies that the buffer is using an appropriate datatype (uint8). This method is intended to work
@@ -678,7 +697,9 @@ class _CRCProcessor:
             # Extracts the byte-specific CRC value from the table using the result of the operation above. The
             # retrieved CRC value from the table is then XORed with the checksum that is shifted back to the
             # original position to generate an updated checksum.
-            crc_checksum = self.make_polynomial_type((crc_checksum << 8) ^ self.crc_table[table_index])
+            crc_checksum = self._make_polynomial_type(
+                (crc_checksum << 8) ^ self.crc_table[table_index]
+            )
 
         # The Final XOR operation may or may not be used (depending on the polynomial). The default
         # polynomial 0x1021 has it set to 0x0000 (0), so it is actually not used. Other polynomials may require
@@ -688,13 +709,15 @@ class _CRCProcessor:
 
         # Sets the status to indicate runtime success and returns calculated checksum to the caller.
         self.status = self.checksum_calculated
-        return self.make_polynomial_type(crc_checksum)
+        return self._make_polynomial_type(crc_checksum)
 
-    def convert_crc_checksum_to_bytes(self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]) -> np.ndarray:
+    def convert_checksum_to_bytes(
+        self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]
+    ) -> NDArray[np.uint8]:
         """Converts the input checksum value into a numpy array of bytes.
 
-        This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-        If possible, only use this method through a wrapper API to ensure proper error handling.
+        This method converts a multibyte CRC checksum into a sequence of individual bytes and writes them to a numpy
+        uint8 array starting with the highest byte of the checksum.
 
         Returns:
             A uint8 numpy array entirely filled with the CRC checksum bytes. Also sets the 'status' class
@@ -715,11 +738,14 @@ class _CRCProcessor:
         self.status = self.checksum_converted_to_bytes
         return buffer
 
-    def convert_crc_checksum_to_integer(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
-        """Converts the crc checksum stored in the (entire!) input buffer to an unsigned numpy integer value.
+    def convert_bytes_to_checksum(
+        self, buffer: NDArray[np.uint8]
+    ) -> Union[np.uint8, np.uint16, np.uint32]:
+        """Converts the CRC checksum stored in the input buffer as a series of bytes to an unsigned numpy integer value.
 
-        This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-        If possible, only use this method through a wrapper API to ensure proper error handling.
+        This method is used to convert uint8 (byte) numpy arrays to crc checksum integer values. The method assumes
+        that the checksum has been converted to bytes starting with the highest byte of the checksum and that the buffer
+        is entirely filled with the checksum bytes.
 
         Notes:
             While error runtimes always return 0, any 0-value returned by this method is potentially a valid
@@ -727,9 +753,9 @@ class _CRCProcessor:
             The returned value is not meaningful until it is verified using the status code!
 
         Returns:
-            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
-            class initialization) that represents the converted CRC checksum value. Also sets the 'status' class
-            attribute to communicate method runtime status.
+            A numpy uint8, uint16, or uint32 integer that represents the converted CRC checksum value. The returned
+            value data type depends on the polynomial datatype that was used during class initialization. Also sets
+            the 'status' class attribute to communicate method runtime status.
         """
 
         # Verifies that the input buffer uses an appropriate (uint8) datatype. This method is intended to decode
@@ -746,7 +772,7 @@ class _CRCProcessor:
             return np.uint8(0)
 
         # Precreates the variable to store the extracted checksum and initializes it to zero
-        extracted_crc = self.make_polynomial_type(0)
+        extracted_crc = self._make_polynomial_type(0)
 
         # Loops over the input buffer and extracts the CRC checksum from the bytes inside the buffer. Assumes
         # the buffer is entirely filled with the checksum bytes and uses crc_byte_length to constrain processing
@@ -754,44 +780,44 @@ class _CRCProcessor:
         for i in range(self.crc_byte_length):
             # Constructs the CRC checksum from the buffer, starting from the most significant byte and moving
             # towards the least significant byte. This matches the process of how it was converted to bytes by
-            # the convert_crc_checksum_to_bytes() or an equivalent microcontroller method.
-            extracted_crc |= self.make_polynomial_type(buffer[i] << (8 * (self.crc_byte_length - i - 1)))
+            # the convert_checksum_to_bytes() or an equivalent microcontroller method.
+            extracted_crc |= self._make_polynomial_type(
+                buffer[i] << (8 * (self.crc_byte_length - i - 1))
+            )
 
         # Returns the extracted CRC checksum to caller and sets the status to communicate runtime success.
         self.status = self.checksum_converted_to_integer
         return extracted_crc
 
-    def generate_crc_table(self, _polynomial: Union[np.uint8, np.uint16, np.uint32]) -> None:
+    def _generate_crc_table(
+        self, polynomial: Union[np.uint8, np.uint16, np.uint32]
+    ) -> None:
         """Uses the polynomial specified during class instantiation to compute the CRC checksums for each
         possible uint8 (byte) value.
 
-        The method updates the precompiled empty crc_table with polynomial-derived CRC values. Note, the
-        crc_table has to be initialized correctly for this method to work properly. Use
-        make_crc_processor_class() wrapper class method to initialize the class and the crc_table as it
-        automatically resolves all type dependencies. Additionally, this method is ONLY intended to be called by
-        the class initialization method. Do not use this method outside the class initialization context!
+        The method updates the precompiled empty crc_table with polynomial-derived CRC values. This method is only
+        intended to be called by the class initialization method. Do not use this method outside the class
+        initialization context!
 
         Notes:
             While the PC is fast enough to work without a pregenerated table, this method is used to
-            maintain algorithmic similarity to the version of the library used for microcontrollers. Also, using
+            maintain algorithmic similarity to the version of the library used for Microcontrollers. Also, using
             a static table is still faster even for PCs.
 
         Args:
-            _polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
-                appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials are
-                supported.
+            polynomial: The polynomial to use for the generation of the CRC lookup table.
         """
 
-        # Determines the number of bits in the CRC type
+        # Determines the number of bits in the CRC datatype
         crc_bits = np.uint8(self.crc_byte_length * 8)
 
         # Determines the Most Significant Bit (MSB) mask based on the CRC type
-        msb_mask = self.make_polynomial_type(np.left_shift(1, crc_bits - 1))
+        msb_mask = self._make_polynomial_type(np.left_shift(1, crc_bits - 1))
 
         # Iterates over each possible value of a byte variable
         for byte in np.arange(256, dtype=np.uint8):
             # Casts crc to the appropriate type based on the polynomial type
-            crc = self.make_polynomial_type(byte)
+            crc = self._make_polynomial_type(byte)
 
             # Shifts the CRC value left by the appropriate number of bits based on the CRC type to align the
             # initial value to the highest byte of the CRC variable.
@@ -805,7 +831,7 @@ class _CRCProcessor:
                     # If the top bit is set, shifts the crc value left to bring the next bit into the top
                     # position, then XORs it with the polynomial. This simulates polynomial division where bits
                     # are checked from top to bottom.
-                    crc = self.make_polynomial_type((crc << 1) ^ _polynomial)
+                    crc = self._make_polynomial_type((crc << 1) ^ polynomial)
                 else:
                     # If the top bit is not set, simply shifts the crc value left. This moves to the next bit
                     # without changing the current crc value, as division by polynomial wouldn't modify it.
@@ -816,7 +842,9 @@ class _CRCProcessor:
             # CRC-sized number), by the CRC polynomial.
             self.crc_table[byte] = crc
 
-    def make_polynomial_type(self, value: Any) -> Union[np.uint8, np.uint16, np.uint32]:
+    def _make_polynomial_type(
+        self, value: Any
+    ) -> Union[np.uint8, np.uint16, np.uint32]:
         """Converts the input value to the appropriate numpy unsigned integer type based on the class instance
         polynomial datatype.
 
@@ -829,22 +857,21 @@ class _CRCProcessor:
             uint8, uint16, or uint32 (uses 'crc_byte_length' attribute of the class).
 
         Args:
-            value: The value to convert to the appropriate type.
+            value: The value to convert to the polynomial type.
 
         Returns:
-            The value converted to the appropriate numpy unsigned integer datatype
+            The value converted to the requested numpy unsigned integer datatype
         """
+        # CRC-8
         if self.crc_byte_length == 1:
             return np.uint8(value)
-        elif self.crc_byte_length == 2:
+
+        # CRC-16
+        if self.crc_byte_length == 2:
             return np.uint16(value)
-        elif self.crc_byte_length == 4:
-            return np.uint32(value)
-        # Empty errors are currently supported by Numba. Not the most informative way of doing this, but this
-        # error should never occur unless the entire class is changed to add support for more polynomial types,
-        # there this error will remind the developers to adjust this method.
-        else:
-            raise RuntimeError()
+
+        # CRC-32. Since there are no plans to support CRC-64, this is the only remaining option
+        return np.uint32(value)
 
 
 class CRCProcessor:
@@ -878,14 +905,14 @@ class CRCProcessor:
             provided as a HEX number (e.g., 0x0000).
 
     Raises:
-        TypeError: If any of the class initialization arguments are not of the valid type.
+        TypeError: If class initialization arguments are not of the valid type.
     """
 
     def __init__(
-            self,
-            polynomial: Union[np.uint8, np.uint16, np.uint32],
-            initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
-            final_xor_value: Union[np.uint8, np.uint16, np.uint32],
+        self,
+        polynomial: Union[np.uint8, np.uint16, np.uint32],
+        initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
+        final_xor_value: Union[np.uint8, np.uint16, np.uint32],
     ) -> None:
         # Ensures that all inputs use the same valid type. Note, uint64 is currently not supported primarily to maintain
         # implicit compatibility with older AVR boards that do not support uint64 type. That said, both the C++ and this
@@ -893,33 +920,37 @@ class CRCProcessor:
         # allow it.
         if not isinstance(polynomial, (np.uint8, np.uint16, np.uint32)):
             message = (
-                f"Unsupported 'polynomial' argument type '{type(polynomial)}' encountered when instantiating "
-                f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
+                f"Unable to initialize the CRCProcessor class. A numpy uint8, uint16 or uint32 scalar expected as "
+                f"'polynomial' argument, but encountered {polynomial} of type {type(polynomial).__name__}."
             )
             console.error(message, error=TypeError)
 
         if not isinstance(initial_crc_value, (np.uint8, np.uint16, np.uint32)):
             message = (
-                f"Unsupported 'initial_crc_value' argument type {type(initial_crc_value)} encountered when "
-                f"instantiating CRCProcessor class. Use numpy uint8, uint16, or uint32."
+                f"Unable to initialize the CRCProcessor class. A numpy uint8, uint16 or uint32 scalar expected as "
+                f"'initial_crc_value' argument, but encountered {initial_crc_value} of type "
+                f"{type(initial_crc_value).__name__}."
             )
             console.error(message, error=TypeError)
 
         if not isinstance(final_xor_value, (np.uint8, np.uint16, np.uint32)):
             message = (
-                f"Unsupported 'final_xor_value' argument type {type(final_xor_value)} encountered when instantiating "
-                f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
+                f"Unable to initialize the CRCProcessor class. A numpy uint8, uint16 or uint32 scalar expected as "
+                f"'final_xor_value' argument, but encountered {final_xor_value} of "
+                f"type {type(final_xor_value).__name__}."
             )
             console.error(message, error=TypeError)
 
         if not (polynomial.dtype == initial_crc_value.dtype == final_xor_value.dtype):
             message = (
-                "All arguments ('polynomial', 'initial_crc_value', 'final_xor_value') must have the same type when "
-                "instantiating CRCProcessor class."
+                "Unable to initialize the CRCProcessor class. All arguments "
+                "('polynomial', 'initial_crc_value', 'final_xor_value') must have the same data type. Instead, "
+                f"encountered ({polynomial.dtype.__name__}, {initial_crc_value.dtype.__name__}, "
+                f"{final_xor_value.dtype.__name__})"
             )
             console.error(message, error=TypeError)
 
-        # Converts the input polynomial type from numpy to numba format so that it can be used in the spec array below
+        # Converts the input polynomial type from numpy to numba format so that it can be used in the spec list below
         if polynomial.dtype is np.dtype(np.uint8):
             crc_type = uint8
         elif polynomial.dtype is np.dtype(np.uint16):
@@ -948,7 +979,9 @@ class CRCProcessor:
 
         # Initializes and compiles the internal _CRCProcessor class. This automatically generates the static CRC lookup
         # table
-        self._processor: _CRCProcessor = jitclass(cls_or_spec=_CRCProcessor, spec=crc_spec)(
+        self._processor: _CRCProcessor = jitclass(
+            cls_or_spec=_CRCProcessor, spec=crc_spec
+        )(
             polynomial=polynomial,
             polynomial_size=np.uint8(polynomial.itemsize),
             initial_crc_value=initial_crc_value,
@@ -957,8 +990,9 @@ class CRCProcessor:
         )
 
     def __repr__(self) -> str:
+        """Returns a string representation of the CRCProcessor object."""
         repr_message = (
-            f"CRCProcessor(inner_status={self._processor.status}, "
+            f"CRCProcessor(status={self._processor.status}, "
             f"polynomial={hex(self._processor.polynomial)}, "
             f"initial_crc_value={hex(self._processor.initial_crc_value)}, "
             f"final_xor_value={hex(self._processor.final_xor_value)}, "
@@ -966,129 +1000,114 @@ class CRCProcessor:
         )
         return repr_message
 
-    def calculate_packet_crc_checksum(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
-        """Calculates the checksum for the input buffer.
-
-        This method loops over the contents of the buffer and iteratively computes the CRC checksum for the entire
-        buffer. Assumes that the buffer is entirely made up of the data to be checksummed.
+    def calculate_crc_checksum(
+        self, buffer: NDArray[np.uint8]
+    ) -> Union[np.uint8, np.uint16, np.uint32]:
+        """Calculates the CRC checksum for the data in the input buffer.
 
         Args:
             buffer: The uint8 numpy array that stores the data to be checksummed.
 
         Returns:
-            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during class
-            initialization) that stores the calculated CRC checksum value.
+            A numpy uint8, uint16, or uint32 integer that stores the calculated CRC checksum value.
 
         Raises:
             TypeError: If the input buffer is not a numpy array.
-            ValueError: If the inner _CRCProcessor class returns an unsupported value for the byte-size of the CRC
-                checksum (This is impossible unless the class code is tampered with, so serves as a static guard to aid
-                developers).
+            ValueError: If CRC checksum calculation fails for any reason.
         """
 
         # Prevents using the method for unsupported input types
         if not isinstance(buffer, np.ndarray):
             message = (
-                f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(buffer)}' when calculating the "
-                f"CRC checksum for the input buffer."
+                f"Unable to calculate the CRC checksum for the input buffer. A uint8 numpy ndarray expected as "
+                f"'buffer' argument, but instead encountered {buffer} of type {type(buffer).__name__}."
             )
             console.error(message, error=TypeError)
 
         # Calls the appropriate _CRCProcessor method to calculate the crc checksum
-        checksum = self._processor.calculate_packet_crc_checksum(buffer)
+        checksum = self._processor.calculate_crc_checksum(buffer)
 
         # Verifies that checksum calculation was successful
-        self._verify_checksum_calculation_outcome(buffer)
+        self._resolve_checksum_calculation_status(buffer)
 
         # Since other methods expect numpy values, the checksum is explicitly cast to the correct type here. Numba has a
         # limitation, where it prefers python types and casts all outputs to them regardless of the type assigned during
         # numba runtime. This is why the types need to be resolved explicitly at the level of the wrapper.
         if self._processor.crc_byte_length == 1:
             return np.uint8(checksum)
-        elif self._processor.crc_byte_length == 2:
+        if self._processor.crc_byte_length == 2:
             return np.uint16(checksum)
-        elif self._processor.crc_byte_length == 4:
-            return np.uint32(checksum)
         else:
-            message = (
-                f"Unsupported 'crc_byte_length' value ({self._processor.crc_byte_length}) encountered when "
-                f"calculating the CRC checksum for the input buffer."
-            )
-            console.error(message, error=ValueError)
+            return np.uint32(checksum)
 
-    def _verify_checksum_calculation_outcome(self, buffer: np.ndarray) -> None:
-        """Verifies that calculate_packet_crc_checksum() method runtime was successful. If not, raises the appropriate
-        exception.
+    def _resolve_checksum_calculation_status(self, buffer: NDArray[np.uint8]) -> None:
+        """Resolves the status of the calculate_crc_checksum() method runtime.
 
-        Notes:
-            The main reason for having this as a separate method is to allow verification following direct calls to
-            inner methods that bypass the API wrapper methods.
+        If the status was not successful, raises the appropriate error message.
 
         Args:
-            buffer: The input buffer that was checksummed. Only used to extract some descriptive information, such as
-            its dtype, to make error messages more informative.
+            buffer: The data buffer that was provided to the CRC checksum calculation method.
 
         Raises:
-            ValueError: If the input buffer numpy array is not using the uint8 datatype.
-            RuntimeError: If the status code returned by the crc calculator method is not one of the expected values.
+            ValueError: If input buffer parameters were not valid.
+            RuntimeError: If the status code returned by the CRC calculator method is not one of the expected values.
         """
         # Success code, verification successful
         if self._processor.status == self._processor.checksum_calculated:
-            pass
+            return
 
         # Incorrect buffer datatype
-        elif self._processor.status == self._processor.calculate_checksum_buffer_datatype_error:
+        if (
+            self._processor.status
+            == self._processor.calculate_checksum_buffer_datatype_error
+        ):
             message = (
-                f"The datatype of the input buffer to be CRC-checksummed ({buffer.dtype}) is not supported. "
-                f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs. "
+                f"CRC checksum calculation failed. The datatype of the input buffer ({buffer.dtype.__name__}) is not "
+                f"supported. Only uint8 (byte) numpy arrays are currently supported as buffer inputs. "
                 f"CODE: {self._processor.status}."
             )
             console.error(message, error=ValueError)
 
         # Unexpected status code
-        else:
-            message = (
-                f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
-                f"attempting to calculate the CRC checksum for the input buffer. "
-                f"CODE: 0."
-            )
-            console.error(message, error=RuntimeError)
+        message = (
+            f"CRC checksum calculation failed. Unexpected inner _CRCProcessor class status code "
+            f"({self._processor.status}) encountered. CODE: 0."
+        )  # pragma: no cover
+        console.error(message, error=RuntimeError)  # pragma: no cover
 
-    def convert_crc_checksum_to_bytes(self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]) -> np.ndarray:
-        """Converts the input numpy integer checksum into a byte numpy array.
-
-        This method converts a multibyte CRC checksum into multiple bytes and writes them to a numpy uint8 array
-        starting with the highest byte of the checksum.
+    def convert_checksum_to_bytes(
+        self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]
+    ) -> NDArray[np.uint8]:
+        """Converts the input numpy scalar checksum into a byte numpy array.
 
         Returns:
             A uint8 numpy array entirely filled with the CRC checksum bytes.
 
         Raises:
             TypeError: If the input crc_checksum is not a numpy uint8, uint16, or uint32 integer.
+            ValueError: If checksum conversion fails for any reason.
         """
         # Prevents using the method for unsupported input types
         if not isinstance(crc_checksum, (np.uint8, np.uint16, np.uint32)):
             message = (
-                f"A uint8, uint16 or uint32 crc_checksum expected, but instead encountered '{type(crc_checksum)}', "
-                f"when converting the unsigned integer CRC checksum to an array of bytes."
+                f"Unable to convert the CRC checksum scalar to an array of bytes. A uint8, uint16 or uint32 "
+                f"value expected as 'crc_checksum' argument, but instead encountered {crc_checksum} of type "
+                f"{type(crc_checksum).__name__}."
             )
             console.error(message, error=TypeError)
 
         # Calls the appropriate _CRCProcessor method to convert the crc checksum to an array of bytes
-        checksum_bytes = self._processor.convert_crc_checksum_to_bytes(crc_checksum)
+        checksum_bytes = self._processor.convert_checksum_to_bytes(crc_checksum)
 
         # At the time of writing this method cannot fail, and this is more or less a static check that the returned
         # code matches the success code in case something changes in the future.
-        self._verify_crc_to_bytes_conversion()
+        self._resolve_bytes_conversion_status()
         return checksum_bytes
 
-    def _verify_crc_to_bytes_conversion(self) -> None:
-        """Verifies that convert_crc_checksum_to_bytes() method runtime was successful. If not, raises the appropriate
-        exception.
+    def _resolve_bytes_conversion_status(self) -> None:
+        """Resolves the status of the convert_checksum_to_bytes() method runtime.
 
-        Notes:
-            The main reason for having this as a separate method is to allow verification following direct calls to
-            inner methods that bypass the API wrapper methods.
+        If the status was not successful, raises the appropriate error message.
 
         Raises:
             RuntimeError: If the status code returned by the checksum converter method is not one of the expected
@@ -1097,47 +1116,42 @@ class CRCProcessor:
 
         # Success code, verification successful
         if self._processor.status == self._processor.checksum_converted_to_bytes:
-            pass
+            return
 
         # Unknown status code
-        else:
-            message = (
-                f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
-                f"converting the unsigned integer CRC checksum to an array of bytes. CODE: 0."
-            )
-            console.error(message, error=RuntimeError)
+        message = (
+            f"CRC checksum to bytes conversion failed. Unexpected inner _CRCProcessor class status code "
+            f"({self._processor.status}) encountered. CODE: 0."
+        )  # pragma: no cover
+        console.error(message, error=RuntimeError)  # pragma: no cover
 
-    def convert_crc_checksum_to_integer(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
-        """Converts the input buffer that stores crc checksum bytes to an unsigned numpy integer value.
-
-        This method is used to convert uint8 (byte) numpy arrays to crc checksum integer values. The method assumes
-        that the checksum has been converted to bytes starting with the highest byte of the checksum and assumes that
-        the buffer is entirely filled with the checksum bytes.
+    def convert_bytes_to_checksum(
+        self, buffer: NDArray[np.uint8]
+    ) -> Union[np.uint8, np.uint16, np.uint32]:
+        """Converts the input buffer that stores crc checksum bytes to an unsigned numpy integer checksum.
 
         Returns:
-            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during class
-            initialization) that stores the converted CRC checksum value.
+            A numpy uint8, uint16, or uint32 integer that stores the converted CRC checksum value.
+            The returned value datatype depends on the polynomial datatype that was used during class initialization.
 
         Raises:
             TypeError: If the input buffer is not a numpy array.
-            ValueError: If the inner _CRCProcessor class returns an unsupported value for the byte-size of the CRC
-                checksum (This is impossible unless the class code is tampered with, so serves as a static guard to aid
-                 developers).
+            ValueError: If checksum conversion fails for any reason.
         """
 
         # Prevents using the method for unsupported input types
         if not isinstance(buffer, np.ndarray):
             message = (
-                f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(buffer)}' type when converting "
-                f"the array of CRC checksum bytes to the unsigned integer value."
+                f"Unable to convert the array of bytes to the CRC checksum. A uint8 numpy ndarray expected as 'buffer' "
+                f"argument, but instead encountered {buffer} of type {type(buffer).__name__}."
             )
             console.error(message, error=TypeError)
 
         # Calls the appropriate _CRCProcessor method to convert the aray of crc checksum bytes to an integer value
-        checksum = self._processor.convert_crc_checksum_to_integer(buffer)
+        checksum = self._processor.convert_bytes_to_checksum(buffer)
 
         # Verifies method runtime status
-        self._verify_crc_to_integer_conversion(buffer)
+        self._resolve_checksum_conversion_status(buffer)
 
         # Since other methods expect numpy values, the checksum is explicitly cast to the correct type here. Numba has a
         # limitation, where it prefers python types and casts all outputs to them regardless of the type assigned during
@@ -1146,153 +1160,150 @@ class CRCProcessor:
             return np.uint8(checksum)
         elif self._processor.crc_byte_length == 2:
             return np.uint16(checksum)
-        elif self._processor.crc_byte_length == 4:
-            return np.uint32(checksum)
         else:
-            message = (
-                f"Unsupported 'crc_byte_length' value ({self._processor.crc_byte_length}) encountered when "
-                f"calculating the CRC checksum for the input buffer."
-            )
-            console.error(message, error=ValueError)
+            return np.uint32(checksum)
 
-    def _verify_crc_to_integer_conversion(self, buffer: np.ndarray) -> None:
-        """Verifies that convert_crc_checksum_to_integer() method runtime was successful. If not, raises the appropriate
-        exception.
+    def _resolve_checksum_conversion_status(self, buffer: NDArray[np.uint8]) -> None:
+        """Resolves the status of the convert_bytes_to_checksum() method runtime.
 
-        Notes:
-            The main reason for having this as a separate method is to allow verification following direct calls to
-            inner methods that bypass the API wrapper methods.
+        If the status was not successful, raises the appropriate error message.
 
         Args:
-            buffer: The input buffer that was checksummed. Only used to extract some descriptive information, such as
-            its dtype, to make error messages more informative.
+            buffer: The buffer that was provided to the CRC checksum conversion method.
 
         Raises:
-            ValueError: If the input buffer numpy array is not using the uint8 datatype or is not exactly the same
-                byte-size as needed to store the unsigned integer checksum (this is derived from the polynomial
-                byte-size).
+            ValueError: If input buffer parameters were not valid.
             RuntimeError: If the status code returned by the checksum converter method is not one of the expected
                 values.
         """
 
         # Success code, verification successful
         if self._processor.status == self._processor.checksum_converted_to_integer:
-            pass
+            return
 
         # Invalid buffer datatype
-        elif self._processor.status == self._processor.convert_checksum_invalid_buffer_datatype_error:
+        elif (
+            self._processor.status
+            == self._processor.convert_checksum_invalid_buffer_datatype_error
+        ):
             message = (
-                f"The datatype of the input buffer to be converted to the unsigned integer CRC checksum "
+                f"Bytes to CRC checksum conversion failed. The datatype of the input buffer to be converted "
                 f"({buffer.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer "
                 f"inputs. CODE: {self._processor.status}."
             )
             console.error(message, error=ValueError)
 
         # The size of the buffer does not match the number of bytes required to represent the checksum datatype
-        elif self._processor.status == self._processor.convert_checksum_invalid_buffer_size_error:
+        elif (
+            self._processor.status
+            == self._processor.convert_checksum_invalid_buffer_size_error
+        ):
             message = (
-                f"The byte-size of the input buffer to be converted to the unsigned integer CRC checksum "
+                f"Bytes to CRC checksum conversion failed. The byte-size of the input buffer to be converted "
                 f"({buffer.size}) does not match the size required to represent the specified checksum datatype "
                 f"({self._processor.crc_byte_length}). CODE: {self._processor.status}."
             )
             console.error(message, error=ValueError)
 
         # Unknown status code
-        else:
-            message = (
-                f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
-                f"converting the array of CRC checksum bytes to the unsigned integer value. CODE: 0."
-            )
-            console.error(message, error=RuntimeError)
+        message = (
+            f"Bytes to CRC checksum conversion failed. Unexpected inner _CRCProcessor class status code "
+            f"({self._processor.status}) encountered when. CODE: 0."
+        )  # pragma: no cover
+        console.error(message, error=RuntimeError)  # pragma: no cover
 
     @property
     def crc_byte_length(self) -> np.uint8:
-        """Returns the variable byte-size used by the class instance to store CRC checksums."""
+        """Returns the byte-size used by CRC checksums."""
         return self._processor.crc_byte_length
 
     @property
     def crc_table(self) -> np.ndarray:
-        """Returns the CRC lookup table used by the class instance during checksum calculation."""
+        """Returns the CRC checksum lookup table."""
         return self._processor.crc_table
 
     @property
     def processor(self):
-        """Returns the private jit-compiled _CRCProcessor class instance. This accessor represents a convenient way of
-        unwrapping the jit-compiled class, so that the fast methods can be used directly (helpful when you want to use
-        them from another jit-method).
+        """Returns the jit-compiled _CRCProcessor class instance.
+
+        This accessor represents a convenient way of unwrapping the jit-compiled class, so that its methods can be
+        used directly. This is helpful for using them from other jit-methods or to bypass the overhead of error
+        checking.
         """
         return self._processor
 
     @property
     def polynomial(self) -> Union[np.uint8, np.uint16, np.uint32]:
-        """Returns the polynomial used by the class instance during checksum calculation."""
+        """Returns the polynomial used for checksum calculation."""
         return self._processor.polynomial
 
     @property
     def initial_crc_value(self) -> Union[np.uint8, np.uint16, np.uint32]:
-        """Returns the initial value used by the class instance during checksum calculation."""
+        """Returns the initial value used for checksum calculation."""
         return self._processor.initial_crc_value
 
     @property
     def final_xor_value(self) -> Union[np.uint8, np.uint16, np.uint32]:
-        """Returns the final XOR value used by the class instance during checksum calculation."""
+        """Returns the final XOR value used for checksum calculation."""
         return self._processor.final_xor_value
 
 
 class SerialMock:
-    """Simulates the methods of pySerial.Serial class used by TransportLayer class to support unit-testing.
+    """Simulates the runtime behavior of pySerial.Serial class methods, which is used to test the TransportLayer class.
 
     This class only provides the methods that are either helpful for testing (like resetting the Mock class buffers)
     or are directly used by the TransportLayer class (reading and writing data, opening / closing the port,
-    etc.). For example, since TransportLayer class does not use readlines() method, this class does not
-    offer its mock implementation.
+    etc.). Any Serial class method not used by the TransportLayer class is not included in this class.
 
     Notes:
-        This class is used in place of the actual Serial class to enable unit-testing of main class methods without
-        the confounds of a third-party library. Additionally, it makes the test suite for this library truly platform-
-        and user-configuration-agnostic, since there is no longer a need provide a valid Serial port during class
-        instantiation when the Mock class is used.
+        This class is used in place of the actual Serial class to enable unit-testing of TransportLayer class methods
+        without the confounding of a third-party library. Additionally, it simplifies testing, as it removes the need
+        for a working serial communication.
 
-        Also, unlike its prototype, this class exposes the rx_ and tx_ buffers while using similar logic for adding data
-        to the buffers as the real Serial class. This allows using this class to fully test and verify all
-        TransportLayer class methods and expect them to behave identically during real runtime.
-
-        Since all communication protocols share the same interface, this class is also perfectly adequate for imitating
-        the functioning of the ZeroMQSerial class.
+        Also, unlike its Serial class prototype, this class exposes the rx_ and tx_ buffers while using similar logic
+        for adding data to the buffers. This makes it possible to verify the outcome of a would-be data transmission or
+        reception runtime.
 
     Attributes:
-        is_open: A boolean flag that tracks the state of the serial port.
-        tx_buffer: A buffer that stores the data to be sent over the serial port.
-        rx_buffer: A buffer that stores the data received from the serial port.
+        is_open: The boolean flag that tracks the state of the serial port.
+        tx_buffer: The 'bytes' buffer that stores the data to be sent over the serial port.
+        rx_buffer: The 'bytes' buffer that stores the data received from the serial port.
     """
 
     def __init__(self) -> None:
-        self.is_open = False
-        self.tx_buffer = b""
-        self.rx_buffer = b""
+        self.is_open: bool = False
+        self.tx_buffer: bytes = b""
+        self.rx_buffer: bytes = b""
 
     def __repr__(self) -> str:
-        repr_message = f"StreamMock(open={self.is_open})"
+        """Returns a string representation of the SerialMock object."""
+        repr_message = f"SerialMock(open={self.is_open})"
         return repr_message
 
     def open(self) -> None:
-        """If 'is_open' flag is False, switches it to True. Simulates the effect of successful 'open' method calls."""
+        """If 'is_open' flag is False, switches it to True.
+
+        Simulates the effect of successful 'open' method calls.
+        """
         if not self.is_open:
             self.is_open = True
 
     def close(self) -> None:
-        """If 'is_open' flag is True, switches it to False. Simulates the effect of successful 'close' method calls."""
+        """If 'is_open' flag is True, switches it to False.
+
+        Simulates the effect of successful 'close' method calls.
+        """
         if self.is_open:
             self.is_open = False
 
     def write(self, data: bytes) -> None:
-        """Writes the input data (stored as a 'bytes' object) to the tx_buffer buffer.
+        """Writes the input data (stored as a 'bytes' object) to the tx_buffer.
 
         Args:
             data: The data to be written to the output buffer. Has to be stored as a 'bytes' python object.
 
         Raises:
-            TypeError: If the input data is not in bytes' format.
+            TypeError: If the input data is not in 'bytes' format.
             Exception: If the mock serial port is not open.
         """
         if self.is_open:

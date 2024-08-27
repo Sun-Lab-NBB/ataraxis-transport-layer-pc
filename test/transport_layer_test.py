@@ -4,17 +4,16 @@ read_data(), send_data(), and receive_data(). You can also use this file if you 
 class methods.
 """
 
-import textwrap
 import re
+import textwrap
 from dataclasses import dataclass
 
 import numpy as np
 import pytest
-
 from src.ataraxis_transport_layer.helper_modules import (
-    COBSProcessor,
-    CRCProcessor,
     SerialMock,
+    CRCProcessor,
+    COBSProcessor,
 )
 from src.ataraxis_transport_layer.transport_layer import (
     TransportLayer,
@@ -632,8 +631,8 @@ def test_serial_transfer_protocol_data_transmission():
     # First, determines the expected COBS-encoded and CRC-checksummed packet. This is what is being passed to the Serial
     # class to be added to its tx buffer
     expected_packet = cobs_processor.encode_payload(test_array, delimiter=np.uint8(0))
-    checksum = crc_processor.calculate_packet_crc_checksum(expected_packet)
-    checksum = crc_processor.convert_crc_checksum_to_bytes(checksum)
+    checksum = crc_processor.calculate_crc_checksum(expected_packet)
+    checksum = crc_processor.convert_checksum_to_bytes(checksum)
     expected_packet = np.concatenate((expected_packet, checksum))
 
     # Assess the state of the tx_buffer by generating a numpy uint8 array using the contents of the tx_buffer
@@ -712,8 +711,8 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # Generates data to test the receive_data() method
     preamble = np.array([129, 10], dtype=np.uint8)  # Start byte and payload size
     packet = cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))  # COBS
-    checksum = crc_processor.calculate_packet_crc_checksum(packet)
-    checksum = crc_processor.convert_crc_checksum_to_bytes(checksum)
+    checksum = crc_processor.calculate_crc_checksum(packet)
+    checksum = crc_processor.convert_checksum_to_bytes(checksum)
     np.concatenate((packet, checksum))  # CRC
     test_data = np.concatenate((preamble, packet), axis=0)  # Constructs the final expected packet
     empty_buffer = np.zeros(20, dtype=np.uint8)  # An empty array to simulate parsing noise-data
@@ -812,9 +811,9 @@ def test_serial_transfer_protocol_data_transmission_errors():
     # Uses crc class to calculate integer 'expected' and 'received' checksums to make the error message look nice.
     error_message = (
         f"CRC checksum verification failed for the received serial packet. Specifically, the checksum "
-        f"value transmitted with the packet {hex(crc_processor.convert_crc_checksum_to_integer(received_checksum))} "
+        f"value transmitted with the packet {hex(crc_processor.convert_bytes_to_checksum(received_checksum))} "
         f"does not match the value expected for the packet (calculated locally) "
-        f"{hex(crc_processor.convert_crc_checksum_to_integer(expected_checksum))}. Packet corrupted, reception aborted."
+        f"{hex(crc_processor.convert_bytes_to_checksum(expected_checksum))}. Packet corrupted, reception aborted."
     )
 
     # noinspection PyUnresolvedReferences

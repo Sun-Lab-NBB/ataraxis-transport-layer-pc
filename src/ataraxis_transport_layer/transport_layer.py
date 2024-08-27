@@ -6,23 +6,22 @@ devices frequently used in science applications. All features of the class are a
 write_data(), send_data(), receive_data() and read_data(). See method and class docstrings for more information.
 """
 
+from typing import Any, Type, Union, Optional
 import textwrap
 from dataclasses import fields, is_dataclass
-from typing import Optional, Type, Union, Any
 
-import numpy as np
-import serial
 from numba import njit
+import numpy as np
 from numpy import unsignedinteger
+import serial
 from serial.tools import list_ports
-
+from ataraxis_time import PrecisionTimer
 from src.ataraxis_transport_layer.helper_modules import (
+    SerialMock,
+    CRCProcessor,
     COBSProcessor,
     _COBSProcessor,
-    CRCProcessor,
-    SerialMock,
 )
-from ataraxis_time import PrecisionTimer
 
 
 class TransportLayer:
@@ -176,19 +175,19 @@ class TransportLayer:
     """
 
     def __init__(
-            self,
-            port: str,
-            baudrate: int = 115200,
-            polynomial: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x1021),
-            initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
-            final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
-            maximum_transmitted_payload_size: int = 254,
-            minimum_received_payload_size: int = 1,
-            start_byte: int = 129,
-            delimiter_byte: int = 0,
-            timeout: int = 20000,
-            test_mode: bool = False,
-            allow_start_byte_errors: bool = False,
+        self,
+        port: str,
+        baudrate: int = 115200,
+        polynomial: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x1021),
+        initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
+        final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
+        maximum_transmitted_payload_size: int = 254,
+        minimum_received_payload_size: int = 1,
+        start_byte: int = 129,
+        delimiter_byte: int = 0,
+        timeout: int = 20000,
+        test_mode: bool = False,
+        allow_start_byte_errors: bool = False,
     ) -> None:
         # Ensures that the class is initialized properly by catching possible class configuration argument errors.
         if start_byte == delimiter_byte:
@@ -371,16 +370,16 @@ class TransportLayer:
         self._bytes_in_reception_buffer = 0
 
     def write_data(
-            self,
-            data_object: Union[
-                np.unsignedinteger,
-                np.signedinteger,
-                np.floating,
-                np.bool_,
-                np.ndarray,
-                Type,
-            ],
-            start_index: Optional[int] = None,
+        self,
+        data_object: Union[
+            np.unsignedinteger,
+            np.signedinteger,
+            np.floating,
+            np.bool_,
+            np.ndarray,
+            Type,
+        ],
+        start_index: Optional[int] = None,
     ) -> int:
         """Writes the input data_object to the _transmission_buffer, starting at the specified start_index.
 
@@ -575,10 +574,10 @@ class TransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)
     def _write_scalar_data(
-            target_buffer: np.ndarray,
-            data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_],
-            object_size: int,
-            start_index: int,
+        target_buffer: np.ndarray,
+        data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_],
+        object_size: int,
+        start_index: int,
     ) -> int:
         """Converts input numpy scalars to byte-sequences and writes them to the _transmission_buffer.
 
@@ -620,9 +619,9 @@ class TransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)
     def _write_array_data(
-            target_buffer: np.ndarray,
-            array_object: np.ndarray,
-            start_index: int,
+        target_buffer: np.ndarray,
+        array_object: np.ndarray,
+        start_index: int,
     ) -> int:
         """Converts input numpy arrays to byte-sequences and writes them to the _transmission_buffer.
 
@@ -665,16 +664,16 @@ class TransportLayer:
         return required_size
 
     def read_data(
-            self,
-            data_object: Union[
-                np.unsignedinteger,
-                np.signedinteger,
-                np.floating,
-                np.bool_,
-                np.ndarray,
-                Type,
-            ],
-            start_index: int = 0,
+        self,
+        data_object: Union[
+            np.unsignedinteger,
+            np.signedinteger,
+            np.floating,
+            np.bool_,
+            np.ndarray,
+            Type,
+        ],
+        start_index: int = 0,
     ) -> tuple[
         Union[
             np.unsignedinteger,
@@ -880,10 +879,10 @@ class TransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)
     def _read_array_data(
-            source_buffer: np.ndarray,
-            array_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray],
-            start_index: int,
-            payload_size: int,
+        source_buffer: np.ndarray,
+        array_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray],
+        start_index: int,
+        payload_size: int,
     ) -> tuple[np.ndarray, int]:
         """Reads the requested array_object from the _reception_buffer.
 
@@ -993,8 +992,8 @@ class TransportLayer:
             payload=self._transmission_buffer[: self._bytes_in_transmission_buffer],
             delimiter=self._delimiter_byte,
         )
-        checksum = self._crc_processor.calculate_packet_crc_checksum(packet)
-        self._crc_processor.convert_crc_checksum_to_bytes(checksum)
+        checksum = self._crc_processor.calculate_crc_checksum(packet)
+        self._crc_processor.convert_checksum_to_bytes(checksum)
 
         # The steps above SHOULD run into an error. If they did not, there is an unexpected error originating from the
         # _construct_packet method. In this case, raises a generic RuntimeError to notify the user of the error so that
@@ -1009,12 +1008,12 @@ class TransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)
     def _construct_packet(
-            payload_buffer: np.ndarray,
-            cobs_processor: _COBSProcessor,
-            crc_processor: CRCProcessor.processor,
-            payload_size: int,
-            delimiter_byte: np.uint8,
-            start_byte: np.uint8,
+        payload_buffer: np.ndarray,
+        cobs_processor: _COBSProcessor,
+        crc_processor: CRCProcessor.processor,
+        payload_size: int,
+        delimiter_byte: np.uint8,
+        start_byte: np.uint8,
     ) -> np.ndarray:
         """Constructs the serial packet using the payload stored inside the input buffer.
 
@@ -1058,7 +1057,7 @@ class TransportLayer:
             return np.empty(0, dtype=payload_buffer.dtype)
 
         # Calculates the CRC checksum for the encoded payload and converts it to a bytes' numpy array
-        checksum = crc_processor.calculate_packet_crc_checksum(packet)
+        checksum = crc_processor.calculate_crc_checksum(packet)
 
         # Checksum calculation method does not have a unique error-associated return value. If it runs into an error, it
         # returns 0, but 0 can also be returned by a successful checksum calculation. To verify that the checksum
@@ -1067,7 +1066,7 @@ class TransportLayer:
             return np.empty(0, dtype=payload_buffer.dtype)
 
         # Converts the integer checksum to a bytes' format (form the crc postamble)
-        postamble = crc_processor.convert_crc_checksum_to_bytes(checksum)
+        postamble = crc_processor.convert_checksum_to_bytes(checksum)
 
         # For bytes' conversion, an empty checksum array indicates failure
         if postamble.size == 0:
@@ -1150,22 +1149,22 @@ class TransportLayer:
                 self.reset_reception_buffer()
 
                 # CRC-checks packet's integrity
-                checksum = self._crc_processor.calculate_packet_crc_checksum(buffer=packet)
+                checksum = self._crc_processor.calculate_crc_checksum(buffer=packet)
 
                 # If checksum verification (NOT calculation, that is caught by the calculator method internally) fails,
                 # generates a manual error message that tells the user how the checksum failed.
                 if checksum != 0:
                     # Extracts the crc checksum from the end of the packet buffer
-                    byte_checksum = packet[-self._postamble_size:]
+                    byte_checksum = packet[-self._postamble_size :]
 
                     # Also separates the packet portion of the buffer from the checksum
                     packet = packet[: packet.size - self._postamble_size]
 
                     # Converts the CRC checksum extracted from the end of the packet from a byte array to an integer.
-                    checksum_number = self._crc_processor.convert_crc_checksum_to_integer(byte_checksum)
+                    checksum_number = self._crc_processor.convert_bytes_to_checksum(byte_checksum)
 
                     # Separately, calculates the checksum for the packet
-                    expected_checksum = self._crc_processor.calculate_packet_crc_checksum(buffer=packet)
+                    expected_checksum = self._crc_processor.calculate_crc_checksum(buffer=packet)
 
                     # Uses the checksum values calculated above to issue an informative error message to the user.
                     error_message = (
@@ -1523,14 +1522,14 @@ class TransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)
     def _parse_packet(
-            read_bytes: bytes,
-            start_byte: np.uint8,
-            max_payload_size: int,
-            postamble_size: int | unsignedinteger[Any],
-            allow_start_byte_errors: bool,
-            start_found: bool = False,
-            packet_size: int = 0,
-            packet_bytes: np.ndarray = np.empty(0, dtype=np.uint8),
+        read_bytes: bytes,
+        start_byte: np.uint8,
+        max_payload_size: int,
+        postamble_size: int | unsignedinteger[Any],
+        allow_start_byte_errors: bool,
+        start_found: bool = False,
+        packet_size: int = 0,
+        packet_bytes: np.ndarray = np.empty(0, dtype=np.uint8),
     ) -> tuple[int, int, np.ndarray, np.ndarray]:
         """Parses as much of the packet as possible using the input bytes stream.
 
@@ -1675,14 +1674,14 @@ class TransportLayer:
                     # Extracts the remaining number of bytes needed to fully parse the packet from the processed bytes
                     # array. Also, automatically 'discards' any processed bytes
                     extracted_bytes = evaluated_bytes[
-                                      processed_bytes: packet_size - packet_bytes.size + processed_bytes
-                                      ]
+                        processed_bytes : packet_size - packet_bytes.size + processed_bytes
+                    ]
 
                     # Appends extracted bytes to the end of the array holding already parsed bytes
                     packet = np.concatenate((packet_bytes, extracted_bytes))
 
                     # Extracts any remaining bytes so that they can be properly stored for future receive_data() calls
-                    remaining_bytes = evaluated_bytes[packet_size - packet_bytes.size + processed_bytes:]
+                    remaining_bytes = evaluated_bytes[packet_size - packet_bytes.size + processed_bytes :]
 
                     # Sets the status to static code 1: Packet fully parsed code
                     status_code = 1
@@ -1725,12 +1724,12 @@ class TransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)
     def _validate_packet(
-            reception_buffer: np.ndarray,
-            packet_size: int,
-            cobs_processor: COBSProcessor.processor,
-            crc_processor: CRCProcessor.processor,
-            delimiter_byte: np.uint8,
-            postamble_size: int | np.unsignedinteger[Any],
+        reception_buffer: np.ndarray,
+        packet_size: int,
+        cobs_processor: COBSProcessor.processor,
+        crc_processor: CRCProcessor.processor,
+        delimiter_byte: np.uint8,
+        postamble_size: int | np.unsignedinteger[Any],
     ) -> int:
         """Validates the packet using CRC checksum, decodes it using COBS-scheme, and saves it to the reception_buffer.
 
@@ -1769,7 +1768,7 @@ class TransportLayer:
         packet = reception_buffer[:packet_size]
 
         # Calculates the CRC checksum for the packet + postamble, which is expected to return 0
-        checksum = crc_processor.calculate_packet_crc_checksum(buffer=packet)
+        checksum = crc_processor.calculate_crc_checksum(buffer=packet)
 
         # Verifies that the checksum calculation method ran successfully. if not, returns 0 to indicate verification
         # failure

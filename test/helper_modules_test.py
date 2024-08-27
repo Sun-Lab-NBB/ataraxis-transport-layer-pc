@@ -1,36 +1,79 @@
-"""This file contains the test functions used to verify the functioning and error handling of all classes available
-through the helper_modules file. You can also use this file if you need more examples on how to use helper_modules
-methods.
-"""
+"""Contains tests for classes and methods stored inside the helper_modules module."""
 
 import re
 import textwrap
+from nis import match
 
 import numpy as np
 import pytest
+from src.ataraxis_transport_layer.helper_modules import (
+    SerialMock,
+    CRCProcessor,
+    COBSProcessor,
+)
 
-from src.ataraxis_transport_layer.helper_modules import COBSProcessor, CRCProcessor, SerialMock
+
+def error_format(message: str) -> str:
+    """Formats the input message to match the default Console format and escapes it using re, so that it can be used to
+    verify raised exceptions.
+
+    This method is used to set up pytest 'match' clauses to verify raised exceptions.
+
+    Args:
+        message: The message to format and escape, according to standard Ataraxis testing parameters.
+
+    Returns:
+        Formatted and escape message that can be used as the 'match' argument of pytest.raises() method.
+    """
+    return re.escape(
+        textwrap.fill(
+            message, width=120, break_long_words=False, break_on_hyphens=False
+        )
+    )
 
 
-def test_cobs_processor():
-    """Tests normal functioning of encode_payload() and decode_payload() methods of the COBSProcessor class."""
+@pytest.mark.parametrize(
+    "input_buffer,encoded_buffer",
+    [
+        (
+            np.array([1, 2, 3, 4, 5], dtype=np.uint8),
+            np.array([6, 1, 2, 3, 4, 5, 0], dtype=np.uint8),
+        ),  # Standard case
+        (
+            np.array([1, 2, 0, 4, 5, 0], dtype=np.uint8),
+            np.array([3, 1, 2, 3, 4, 5, 1, 0], dtype=np.uint8),
+        ),  # Standard case with delimiters in the payload
+        (
+            np.array([1], dtype=np.uint8),
+            np.array([2, 1, 0], dtype=np.uint8),
+        ),  # Minimal payload size
+        (
+            np.zeros(shape=254, dtype=np.uint8),
+            np.array(
+                np.concat(([1], np.ones(shape=254, dtype=np.uint8), [0])),
+                dtype=np.uint8,
+            ),
+        ),  # Maximum payload size, also the payload is entirely made of delimiters
+    ],
+)
+def test_cobs_processor(input_buffer, encoded_buffer):
+    """Verifies the functioning of the COBSProcessor class encode_payload() and decode_payload() methods."""
 
     # Instantiates the tested class
     processor = COBSProcessor()
-    payload = np.array([1, 2, 3, 4, 5], dtype=np.uint8)
     delimiter = np.uint8(0)
 
     # Tests successful payload encoding
-    encoded_packet = processor.encode_payload(payload, delimiter)
-    assert encoded_packet.tolist() == [6, 1, 2, 3, 4, 5, 0]
+    encoded_packet = processor.encode_payload(input_buffer, delimiter)
+    assert encoded_packet.tolist() == encoded_buffer.tolist()
 
     # Tests successful packet decoding
     decoded_payload = processor.decode_payload(encoded_packet, delimiter)
-    assert decoded_payload.tolist() == payload.tolist()
+    assert decoded_payload.tolist() == input_buffer.tolist()
 
 
 def test_cobs_processor_errors():
-    """Tests error handling of encode_payload() and decode_payload() methods of the COBSProcessor class."""
+    """Verifies the error-handling behavior of the COBSProcessor class encode_payload() and decode_payload() methods."""
 
     # Instantiates the tested class
     processor = COBSProcessor()
@@ -39,76 +82,61 @@ def test_cobs_processor_errors():
 
     # Tests invalid payload array encoder input error
     invalid_input = None
-    error_message = (
-        f"A numpy ndarray payload expected, but instead encountered '{type(invalid_input)}' when encoding payload "
-        f"using COBS scheme."
+    message = (
+        f"Unable to encode payload using COBS scheme. A numpy ndarray with uint8 datatype expected as "
+        f"'payload' argument, but instead encountered {invalid_input} of type {type(invalid_input).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = processor.encode_payload(invalid_input, delimiter)
 
     # Tests invalid delimiter encoder input error
     invalid_input = None
-    error_message = (
-        f"A scalar numpy uint8 (byte) delimiter expected, but instead encountered '{type(invalid_input)}' when "
-        f"encoding payload using COBS scheme."
+    message = (
+        f"Unable to encode payload using COBS scheme. A scalar numpy uint8 (byte) value expected as "
+        f"'delimiter' argument, but instead encountered {invalid_input} of type {type(invalid_input).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = processor.encode_payload(payload, invalid_input)
 
     # Tests payload too small encoder error
     empty_payload = np.array([], dtype=np.uint8)
-    error_message = (
-        f"The size of the input payload ({empty_payload.size}) is too small to be encoded using COBS scheme. "
-        f"A minimum size of {1} elements (bytes) is required. CODE: 12."
+    message = (
+        f"Failed to encode the payload using COBS scheme. The size of the input payload "
+        f"({empty_payload.size}) is too small. A minimum size of {processor._processor.minimum_payload_size} elements "
+        f"(bytes) is required. CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(empty_payload, delimiter)
 
     # Tests payload too large encoder error
     large_payload = np.ones(255, dtype=np.uint8)
-    error_message = (
-        f"The size of the input payload ({large_payload.size}) is too large to be encoded using COBS scheme. "
-        f"A maximum size of {254} elements (bytes) is required. CODE: 13."
+    message = (
+        f"Failed to encode the payload using COBS scheme. The size of the input payload ({large_payload.size}) is "
+        f"too large. A maximum size of {processor._processor.maximum_payload_size} elements (bytes) is required. "
+        f"CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(large_payload, delimiter)
 
     # Tests incorrect payload datatype encoder error
     wrong_dtype_payload = np.array([1, 2, 3, 4, 5], dtype=np.uint16)
-    error_message = (
-        f"The datatype of the input payload to be encoded using COBS scheme ({wrong_dtype_payload.dtype}) is not "
-        f"supported. Only uint8 (byte) numpy arrays are currently supported as payload inputs. CODE: 14."
+    message = (
+        f"Failed to encode the payload using COBS scheme. The datatype of the input payload "
+        f"({wrong_dtype_payload.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as "
+        f"payload inputs. CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(wrong_dtype_payload, delimiter)
 
     # Tests invalid packet array decoder input error
     invalid_input = None
-    error_message = (
-        f"A numpy ndarray packet expected, but instead encountered '{type(invalid_input)}' when decoding packet "
-        f"using COBS scheme."
+    message = (
+        f"Unable to decode payload using COBS scheme. A numpy ndarray expected as 'packet' argument, but "
+        f"instead encountered {invalid_input} of type {type(invalid_input).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = processor.decode_payload(invalid_input, delimiter)
 
@@ -116,79 +144,64 @@ def test_cobs_processor_errors():
     invalid_input = None
     # Needed for this test specifically, expects that the 'error-free' runtime has been verified
     encoded_packet = processor.encode_payload(payload, delimiter)
-    error_message = (
-        f"A scalar numpy uint8 (byte) delimiter expected, but instead encountered '{type(invalid_input)}' when "
-        f"decoding packet using COBS scheme."
+    message = (
+        f"Unable to decode payload using COBS scheme. A scalar numpy uint8 (byte) value expected as "
+        f"'delimiter' argument, but instead encountered {invalid_input} of type {type(invalid_input).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = processor.decode_payload(encoded_packet, invalid_input)
 
     # Tests packet too small decoder error
     small_packet = np.array([1, 2], dtype=np.uint8)
-    error_message = (
-        f"The size of the input packet ({small_packet.size}) is too small to be decoded using COBS scheme. "
-        f"A minimum size of {3} elements (bytes) is required. CODE: 16."
+    message = (
+        f"Failed to decode payload using COBS scheme. The size of the input packet ({small_packet.size}) is too "
+        f"small. A minimum size of {processor._processor.minimum_packet_size} elements (bytes) is required. "
+        f"CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(small_packet, delimiter)
 
     # Tests packet too large decoder error
     large_packet = np.ones(257, dtype=np.uint8)
-    error_message = (
-        f"The size of the input packet ({large_packet.size}) is too large to be decoded using COBS scheme. "
-        f"A maximum size of {256} elements (bytes) is required. CODE: 17."
+    message = (
+        f"Failed to decode payload using COBS scheme. The size of the input packet ({large_packet.size}) is too "
+        f"large. A maximum size of {processor._processor.maximum_packet_size} elements (bytes) is required. "
+        f"CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(large_packet, delimiter)
 
     # Tests incorrect packet datatype decoder error
     wrong_dtype_packet = np.array([6, 1, 2, 3, 4, 5, 0], dtype=np.uint16)
-    error_message = (
-        f"The datatype of the input packet to be decoded using COBS scheme ({wrong_dtype_packet.dtype}) is not "
-        f"supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs. CODE: 20."
+    message = (
+        f"Failed to decode payload using COBS scheme. The datatype of the input packet ({wrong_dtype_packet.dtype}) is "
+        f"not supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
+        f"CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(wrong_dtype_packet, delimiter)
 
     # Tests packet decoder corruption error where an unencoded delimiter (0) is found before reaching the end of the
     # packet (delimiter_found_too_early_error)
     corrupted_packet = np.array([4, 1, 2, 3, 0, 5, 0], dtype=np.uint8)
-    error_message = (
-        f"Unencoded delimiter found before reaching the end of the packet during COBS-decoding sequence. "
-        f"Packet is likely corrupted. CODE: 19."
+    message = (
+        f"Failed to decode payload using COBS scheme. Found unencoded delimiter before reaching the end of "
+        f"the packet. Packet is likely corrupted. CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet, delimiter)
 
     # Tests packet decoder corruption error where the unencoded payload is not found at the end of the payload or, for
     # that matter, at all (delimiter_not_found_error)
     corrupted_packet = np.array([6, 1, 2, 3, 4, 5, 6], dtype=np.uint8)
-    error_message = (
-        f"Attempting to decode the packet using COBS scheme does not result in reaching the unencoded delimiter"
+    message = (
+        f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter"
         f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
-        f"because the traversal process does not point at the final index of the packet. Packet is likely "
-        f"corrupted. CODE: 18."
+        f"because the decoding does not end at the final index of the packet. Packet is likely "
+        f"corrupted. CODE: {processor._processor.status}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet, delimiter)
 
 
@@ -459,11 +472,15 @@ def test_crc_processor_generate_table_crc_8():
 
     # Instantiates CRCProcessor class using crc_8 polynomial
     crc_processor = CRCProcessor(
-        polynomial=polynomial, initial_crc_value=initial_crc_value, final_xor_value=final_xor_value
+        polynomial=polynomial,
+        initial_crc_value=initial_crc_value,
+        final_xor_value=final_xor_value,
     )
 
     # Verifies that the class generates the expected lookup table for the crc_8 polynomial
-    assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint8))
+    assert np.array_equal(
+        crc_processor.crc_table, np.array(expected_array, dtype=np.uint8)
+    )
 
 
 def test_crc_processor_generate_table_crc_16():
@@ -733,11 +750,15 @@ def test_crc_processor_generate_table_crc_16():
 
     # Instantiates CRCProcessor class using crc_16 polynomial
     crc_processor = CRCProcessor(
-        polynomial=polynomial, initial_crc_value=initial_crc_value, final_xor_value=final_xor_value
+        polynomial=polynomial,
+        initial_crc_value=initial_crc_value,
+        final_xor_value=final_xor_value,
     )
 
     # Verifies that the class generates the expected lookup table for the crc_16 polynomial
-    assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint16))
+    assert np.array_equal(
+        crc_processor.crc_table, np.array(expected_array, dtype=np.uint16)
+    )
 
 
 def test_crc_processor_generate_table_crc_32():
@@ -1007,20 +1028,27 @@ def test_crc_processor_generate_table_crc_32():
 
     # Instantiates CRCProcessor class using crc_32 polynomial
     crc_processor = CRCProcessor(
-        polynomial=polynomial, initial_crc_value=initial_crc_value, final_xor_value=final_xor_value
+        polynomial=polynomial,
+        initial_crc_value=initial_crc_value,
+        final_xor_value=final_xor_value,
     )
 
     # Verifies that the class generates the expected lookup table for the crc_32 polynomial
-    assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint32))
+    assert np.array_equal(
+        crc_processor.crc_table, np.array(expected_array, dtype=np.uint32)
+    )
 
 
 def test_crc_processor():
     """Tests the functioning of the CRCProcessor class calculate_packet_crc_checksum(), convert_crc_checksum_to_bytes()
-    and convert_crc_checksum_to_integer() methods. All tests are using CRC16 polynomial."""
+    and convert_crc_checksum_to_integer() methods. All tests are using CRC16 polynomial.
+    """
 
     # Define test data
     test_data_1 = np.array([0x01, 0x02, 0x03, 0x04, 0x05, 0x15], dtype=np.uint8)
-    test_data_2 = np.array([0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80], dtype=np.uint8)
+    test_data_2 = np.array(
+        [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80], dtype=np.uint8
+    )
     test_data_3 = np.array([0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA], dtype=np.uint8)
 
     # Instantiates tested class
@@ -1031,26 +1059,26 @@ def test_crc_processor():
 
     # Tests checksum calculation using 3 data seeds:
     # Test 1
-    checksum = crc_processor.calculate_packet_crc_checksum(test_data_1)
+    checksum = crc_processor.calculate_crc_checksum(test_data_1)
     assert checksum == np.uint16(0xF54E)
 
     # Test 2
-    checksum = crc_processor.calculate_packet_crc_checksum(test_data_2)
+    checksum = crc_processor.calculate_crc_checksum(test_data_2)
     assert checksum == np.uint16(0x2B19)
 
     # Test 3
-    checksum = crc_processor.calculate_packet_crc_checksum(test_data_3)
+    checksum = crc_processor.calculate_crc_checksum(test_data_3)
     assert checksum == np.uint16(0xBA4F)
     assert isinstance(checksum, np.uint16)
 
     # Tests checksum integer-to-byte array conversion
-    checksum = crc_processor.calculate_packet_crc_checksum(test_data_1)
-    checksum_buffer = crc_processor.convert_crc_checksum_to_bytes(checksum)
+    checksum = crc_processor.calculate_crc_checksum(test_data_1)
+    checksum_buffer = crc_processor.convert_checksum_to_bytes(checksum)
     assert np.array_equal(checksum_buffer, np.array([245, 78], dtype=np.uint8))
     assert isinstance(checksum_buffer, np.ndarray)
 
     # Tests the checksum byte array to integer conversion (extraction from buffer)
-    checksum = crc_processor.convert_crc_checksum_to_integer(checksum_buffer)
+    checksum = crc_processor.convert_bytes_to_checksum(checksum_buffer)
     assert checksum == np.uint16(0xF54E)
     assert isinstance(checksum, np.uint16)
 
@@ -1075,7 +1103,11 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
         _ = CRCProcessor(invalid_argument_type, initial_crc_value, final_xor_value)
@@ -1088,7 +1120,11 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
         _ = CRCProcessor(polynomial, invalid_argument_type, final_xor_value)
@@ -1101,21 +1137,31 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
         _ = CRCProcessor(polynomial, initial_crc_value, invalid_argument_type)
 
     # Verifies that using valid, but non-matching types for the class initialization arguments correctly triggers
     # the appropriate type error:
-    non_matching_argument = np.uint32(0xFFFF)  # Valid initial value and type, but does not match polynomial
+    non_matching_argument = np.uint32(
+        0xFFFF
+    )  # Valid initial value and type, but does not match polynomial
     error_message = (
         "All arguments ('polynomial', 'initial_crc_value', 'final_xor_value') must have the same type when "
         "instantiating CRCProcessor class."
     )
     with pytest.raises(
         TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
         _ = CRCProcessor(polynomial, non_matching_argument, final_xor_value)
@@ -1128,10 +1174,14 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
-        _ = crc_processor.calculate_packet_crc_checksum(invalid_input)
+        _ = crc_processor.calculate_crc_checksum(invalid_input)
 
     # Tests invalid buffer datatype checksum calculation error
     invalid_buffer_type = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint16)
@@ -1141,10 +1191,14 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
-        _ = crc_processor.calculate_packet_crc_checksum(invalid_buffer_type)
+        _ = crc_processor.calculate_crc_checksum(invalid_buffer_type)
 
     # Tests invalid crc_checksum input type checksum to byte array conversion error
     invalid_input = None
@@ -1154,10 +1208,14 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_crc_checksum_to_bytes(invalid_input)
+        _ = crc_processor.convert_checksum_to_bytes(invalid_input)
 
     # Tests invalid buffer input type checksum to integer conversion error
     invalid_input = None
@@ -1167,10 +1225,14 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         TypeError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_crc_checksum_to_integer(invalid_input)
+        _ = crc_processor.convert_bytes_to_checksum(invalid_input)
 
     # Tests invalid buffer dtype checksum to integer conversion error
     invalid_buffer = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint16)
@@ -1181,13 +1243,19 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_crc_checksum_to_integer(invalid_buffer)
+        _ = crc_processor.convert_bytes_to_checksum(invalid_buffer)
 
     # Tests invalid buffer size checksum to integer conversion error
-    invalid_buffer = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint8)  # Correct dtype this time
+    invalid_buffer = np.array(
+        [0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint8
+    )  # Correct dtype this time
     error_message = (
         f"The byte-size of the input buffer to be converted to the unsigned integer CRC checksum "
         f"({invalid_buffer.size}) does not match the size required to represent the specified checksum datatype "
@@ -1195,10 +1263,14 @@ def test_crc_processor_errors():
     )
     with pytest.raises(
         ValueError,
-        match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
+        match=re.escape(
+            textwrap.fill(
+                error_message, width=120, break_long_words=False, break_on_hyphens=False
+            )
+        ),
     ):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_crc_checksum_to_integer(invalid_buffer)
+        _ = crc_processor.convert_bytes_to_checksum(invalid_buffer)
 
 
 def test_serial_mock():
