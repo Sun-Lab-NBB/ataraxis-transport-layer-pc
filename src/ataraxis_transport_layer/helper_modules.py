@@ -14,421 +14,286 @@ class, so that TransportLayer can be tested without a properly configured Microc
 practical use outside of this specific role.
 """
 
-import textwrap
 from typing import Any, Union
 
 import numpy as np
+from numpy.typing import NDArray
 from numba import uint8, uint16, uint32
 from numba.experimental import jitclass
 from ataraxis_base_utilities import console
 
 
-class COBSProcessor:
+class _COBSProcessor:
     """Provides methods for encoding and decoding data using the Consistent Overhead Byte Stuffing (COBS) scheme.
 
-    See the original paper for the details on COBS methodology and specific data packet layouts:
-    S. Cheshire and M. Baker, "Consistent overhead byte stuffing," in IEEE/ACM Transactions on Networking, vol. 7,
-    no. 2, pp. 159-172, April 1999, doi: 10.1109/90.769765.
+    This class is intended to be initialized through Numba's 'jitclass' function. The intended way to do so is through
+    first initializing a COBSProcessor (no underscore) class and then accessing the jit-compiled core through the
+    'processor' property. Initializing this class directly will not have the tangible performance benefits offered by
+    the jit-compiled class.
 
     Notes:
-        This class functions as a wrapper that provides a consistent Python API for the internal instance of a
-        jit-compiled _COBSProcessor class. This allows achieving python-like experience when using the class while
-        simultaneously benefiting from fast machine-compiled code generated through numba jit-optimization. The wrapper
-        automatically converts internal class runtime status codes into exception error messages where appropriate to
-        notify users about runtime errors.
+        See the original paper for the details on COBS methodology and specific data packet layouts:
+        S. Cheshire and M. Baker, "Consistent overhead byte stuffing," in IEEE/ACM Transactions on Networking, vol. 7,
+        no. 2, pp. 159-172, April 1999, doi: 10.1109/90.769765.
 
-        For the maximum execution speed, you can access the private methods directly (see TransportLayer
-        class), although this is highly discouraged.
+        To support error-handling, the class returns fixed byte error-codes. Available error codes can be obtained
+        via class attributes. Each method returns the status (success or error) code by setting the class 'status'
+        attribute to the latest runtime code.
 
     Attributes:
-        _processor: Stores the jit-compiled _COBSProcessor class, which carries out all computations.
+        status: Dynamically updated during runtime to track the latest method's runtime integer byte-code.
+        standby: The integer code used during class initialization (before any method is called).
+        maximum_payload_size: The maximum size of the payload, in bytes. Due to COBS, cannot exceed 254 bytes.
+        minimum_payload_size: The minimum size of the payload, in bytes. No algorithmic minimum enforced, but
+            does not make sense to have it below 1 byte.
+        maximum_packet_size: The maximum size of the packet, in bytes. Due to COBS, it cannot exceed 256 bytes
+            (254 payload bytes + 1 overhead + 1 delimiter byte).
+        minimum_packet_size: The minimum size of the packet, in bytes. Due to COBS cannot be below 3 bytes.
+        payload_too_small_error: The input payload array size was below the min_payload_size during encoding.
+        payload_too_large_error: The input payload array size was above the max_payload_size during encoding.
+        invalid_payload_datatype_error: The input payload array datatype was not valid for the encoding
+            method (not uint8).
+        payload_encoded: Payload was successfully encoded (into a packet).
+        packet_too_small_error: The input packet array size was below the min_packet_size during decoding.
+        packet_too_large_error: The input packet array size was above the max_packet_size during decoding.
+        delimiter_not_found_error: The decoder method did not encounter an unencoded delimiter during its
+            runtime.
+        delimiter_found_too_early_error: The decoder method encountered the unencoded delimiter before reaching
+            the end of the packet.
+        invalid_packet_datatype_error: The input packet array datatype was not valid for the decoder method
+            (not uint8).
+        payload_decoded: Packet was successfully decoded into payload.
     """
 
     def __init__(self) -> None:
-        # Instantiates the inner COBS class using the proper spec template
-        self._processor = self._make_cobs_processor_class()
+        # Constant class parameters (do not modify, they are already optimal for any non-embedded system)
+        self.maximum_payload_size = 254
+        self.minimum_payload_size = 1
+        self.maximum_packet_size = 256
+        self.minimum_packet_size = 3
 
-    def __repr__(self) -> str:
-        """Returns a string representation of the COBSProcessor class instance."""
-        representation_string = (
-            f"COBSProcessor(inner_status={self._processor.status}, "
-            f"max_payload_size={self._processor.max_payload_size}, "
-            f"min_payload_size={self._processor.min_payload_size}, "
-            f"max_packet_size={self._processor.max_packet_size}, "
-            f"min_packet_size={self._processor.min_packet_size})"
-        )
-        return representation_string
+        # Status codes. Follow a similar approach to TransportLayer implemented in ataraxis-micro-controller
+        # library, where the codes are unique across the entire library and stay in the range of 11 to 50.
+        self.standby = 11
+        self.payload_too_small_error = 12
+        self.payload_too_large_error = 13
+        self.invalid_payload_datatype_error = 14
+        self.payload_encoded = 15
+        self.packet_too_small_error = 16
+        self.packet_too_large_error = 17
+        self.delimiter_not_found_error = 18
+        self.delimiter_found_too_early_error = 19
+        self.invalid_packet_datatype_error = 20
+        self.payload_decoded = 21
 
-    def encode_payload(self, payload: np.ndarray, delimiter: np.uint8 = 0) -> np.ndarray:
+        self.status = self.standby  # Initializes to standby
+
+    def encode_payload(self, payload: NDArray[np.uint8], delimiter: np.uint8 = 0) -> NDArray[np.uint8]:
         """Encodes the input payload into a transmittable packet using COBS scheme.
 
-        Eliminates all instances of the delimiter value from the payload by replacing every such value
-        with the distance to the next consecutive instance or, if no more instances are discovered, to the end of the
-        payload. Appends an overhead byte value to the beginning of the payload that stores the distance to the first
-        instance of the (eliminated) delimiter value or the end of the payload. Appends an unencoded delimiter byte
-        value to the end of the payload to mark the end of the packet.
-
-        Notes:
-            The encoding produces the following packet structure: [Overhead] ... [COBS Encoded Payload] ... [Delimiter].
+        Eliminates all instances of the delimiter value from the payload by replacing each with the distance to the
+        next consecutive instance or, if no more instances are discovered, to the end of the payload. Next, prepends an
+        overhead byte value to the beginning of the payload. The overhead byte stores the distance to the first
+        instance of the (eliminated) delimiter value or the end of the payload. Finally, appends an unencoded
+        delimiter byte value to the end of the payload to mark the end of the packet.
 
         Args:
             payload: The numpy array that stores the payload to be encoded using COBS scheme. Has to use uint8
                 datatype and be between 1 and 254 bytes in length.
             delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter.
 
-        Raises:
-            TypeError: If the payload or delimiter arguments are not of a correct numpy datatype.
-
         Returns:
-            The packet uint8 numpy array encoded using COBS scheme.
+            The packet uint8 numpy array encoded using COBS scheme, if the method succeeds or an empty
+            uninitialized numpy array otherwise. Sets the class status to the method runtime status code.
         """
 
-        # Prevents using the method for unsupported input types
-        if not isinstance(payload, np.ndarray):
-            error_message = (
-                f"A numpy ndarray payload expected, but instead encountered '{type(payload)}' when encoding payload "
-                f"using COBS scheme."
-            )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-        elif not isinstance(delimiter, np.uint8):
-            error_message = (
-                f"A scalar numpy uint8 (byte) delimiter expected, but instead encountered '{type(delimiter)}' when "
-                f"encoding payload using COBS scheme."
-            )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+        # Saves payload size to a separate variable
+        size = payload.size
 
-        # Calls the encoding method
-        packet = self._processor.encode_payload(payload, delimiter)
+        # Prevents execution if the packet is too small. It is meaningless to send empty packets.
+        if size < self.minimum_payload_size:
+            self.status = self.payload_too_small_error
+            return np.empty(0, dtype=payload.dtype)
 
-        # Resolves method runtime status to see if an error exception needs to be raised or the packet has been encoded
-        # and can be returned to caller
-        self._verify_encoding_outcome(payload)
+        # Prevents execution if the payload is too large. Due to using byte-streams and COBS encoding, the
+        # overhead byte can only store a maximum value of 255 and for any payload it should be able to store the
+        # distance to the end of the packet. 254 bytes is the maximum size that still fits that requirement once
+        # overhead and delimiter are added to the payload.
+        elif size > self.maximum_payload_size:
+            self.status = self.payload_too_large_error
+            return np.empty(0, dtype=payload.dtype)
 
-        # If runtime was successful, returns the packet
+        # Ensures that the input payload uses uint8 datatype. Since the library uses byte-streams for
+        # communication, this is an important prerequisite.
+        if payload.dtype is not np.dtype(np.uint8):
+            self.status = self.invalid_payload_datatype_error
+            return np.empty(0, dtype=payload.dtype)
+
+        # Initializes the output array, uses payload size + 2 as size to make space for the overhead and
+        # delimiter bytes (see COBS scheme for more details on why this is necessary).
+        packet = np.empty(size + 2, dtype=payload.dtype)
+        packet[-1] = delimiter  # Sets the last byte of the packet to the delimiter byte value
+        packet[1:-1] = (
+            payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
+        )
+
+        # A tracker variable that is used to calculate the distance to the next delimiter value when an
+        # unencoded delimiter is required.
+        next_delimiter_position = packet.size - 1  # Initializes to the index of the delimiter value added above
+
+        # Iterates over the payload in reverse and replaces every instance of the delimiter value inside the
+        # payload with the distance to the next delimiter value (or the value added to the end of the payload).
+        # This process ensures that the delimiter value is only found at the end of the packet and, if delimiter
+        # is not 0, potentially also as the overhead byte value. This encodes the payload using COBS scheme.
+        for i in range(size - 1, -1, -1):  # Loops over every index of the payload
+            if payload[i] == delimiter:
+                # If any of the payload values match the delimiter value, replaces that value in the packet with
+                # the distance to the next_delimiter_position. This is either the distance to the next encoded
+                # value or the distance to the delimiter value located at the end of the packet.
+                packet[i + 1] = next_delimiter_position - (
+                        i + 1
+                )  # +1 is to translate from payload to packet index
+
+                # Overwrites the next_delimiter_position with the index of the encoded value
+                next_delimiter_position = i + 1  # +1 is to translate for payload to packet index
+
+        # Once the runtime above is complete, sets the overhead byte to the value of the
+        # next_delimiter_position. As a worst-case scenario, that would be the index of the delimiter byte
+        # written to the end of the packet, which at maximum can be 255. Otherwise, that would be the distance
+        # to the first encoded delimiter value inside the payload. It is now possible to start with the overhead
+        # byte and 'jump' through all encoded values all the way to the end of the packet, where the only
+        # unencoded delimiter is found.
+        packet[0] = next_delimiter_position
+
+        # Returns the encoded packet array to caller
+        self.status = self.payload_encoded
         return packet
 
-    def _verify_encoding_outcome(self, payload: np.ndarray) -> None:
-        """Verifies that encode_payload() method runtime was successful. If not, raises the appropriate exception.
-
-        Notes:
-            The main reason for having this as a separate method is to allow verification following direct calls to
-            inner methods that bypass the API wrapper methods.
-
-        Args:
-            payload: The input payload array. The payload is used to extract information like it's size and datatype
-                properties to make the error messages more informative.
-
-        Raises:
-            ValueError: If the parameters of the input arguments, such as the size or the datatype of the payload
-                array, are not valid.
-            RuntimeError: If the status code returned by the encoder method is not one of the expected values.
-
-        """
-
-        # Success code, verification is complete
-        if self._processor.status == self._processor.payload_encoded:
-            pass
-
-        # Payload too small
-        elif self._processor.status == self._processor.payload_too_small_error:
-            error_message = (
-                f"The size of the input payload ({payload.size}) is too small to be encoded using COBS scheme. "
-                f"A minimum size of {self._processor.min_payload_size} elements (bytes) is required. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-
-        # Payload too large
-        elif self._processor.status == self._processor.payload_too_large_error:
-            error_message = (
-                f"The size of the input payload ({payload.size}) is too large to be encoded using COBS scheme. "
-                f"A maximum size of {self._processor.max_payload_size} elements (bytes) is required. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-
-        # Invalid payload datatype
-        elif self._processor.status == self._processor.invalid_payload_datatype_error:
-            error_message = (
-                f"The datatype of the input payload to be encoded using COBS scheme ({payload.dtype}) is not "
-                f"supported. Only uint8 (byte) numpy arrays are currently supported as payload inputs. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-
-        # Unknown status code
-        else:
-            error_message = (
-                f"Unexpected inner _COBSProcessor class status code ({self._processor.status}) encountered when "
-                f"attempting to COBS-encode the input payload. "
-                f"CODE: 0."
-            )
-            raise RuntimeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-
-    def decode_payload(self, packet: np.ndarray, delimiter: np.uint8 = 0) -> np.ndarray:
+    def decode_payload(self, packet: NDArray[np.uint8], delimiter: np.uint8 = 0) -> NDArray[np.uint8]:
         """Decodes the COBS-encoded payload from the input packet.
 
-        Traverses the input packet by cyclically advancing by the number of indices obtained from the value of the
-        variable evaluated at the beginning of each cycle, starting from the overhead bytes. For all variables other
-        than the overhead and the delimiter bytes, overwrites them with the input delimiter value. Removes the overhead
-        and the delimiter bytes once the payload has been decoded.
-
-        Notes:
-            This method doubles-up as packet corruption detector. Specifically, it expects that the input packet always
-            ends with the unencoded delimiter and that there are no unencoded delimiter occurrences amongst the
-            traversed variables. Any deviation from this expectation is interpreted as packet corruption.
-
-            Expects the input packets to adhere to the following structure:
-            [Overhead] ... [COBS Encoded Payload] ... [Delimiter].
+        Traverses the input packet by jumping between encoded delimiter values and restoring them to the original value.
+        Removes the overhead and the delimiter bytes once the payload has been decoded. This method doubles-up as packet
+        corruption detector. Specifically, it expects that the input packet always ends with the unencoded delimiter
+        and that there are no unencoded delimiter occurrences amongst the traversed variables. Any deviation from this
+        expectation is interpreted as packet corruption.
 
         Args:
-            packet: The numpy array that stores COBS-encoded packet. The array should be using uint8 datatype and has to
-                be entirely filled with the packet data. The first index (0) should store the overhead byte, and the
-                last valid index of the packet should store the unencoded delimiter. The packet should be between 3 and
-                256 bytes in length.
+            packet: The numpy array that stores COBS-encoded packet. The array should be using uint8 datatype
+                and has to be entirely filled with the packet data. That means that the first index (0) should
+                store the overhead byte and the last valid index of the packet should store the unencoded
+                delimiter. The packet should be between 3 and 256 bytes in length.
             delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter. It is used to
                 optimize the decoding flow and to verify the unencoded delimiter at the end of the packet.
 
         Returns:
-            The payload uint8 numpy array decoded from the packet.
-
-        Raises:
-            TypeError: If the packet or delimiter arguments are not of a correct numpy datatype.
+            The payload uint8 numpy array decoded from the packet if the method succeeds or an empty
+            uninitialized numpy array otherwise. Sets the class status to the method runtime status code.
         """
+        # noinspection DuplicatedCode
+        size = packet.size  # Extracts packet size for the checks below
 
-        # Prevents using the method for unsupported input types
-        if not isinstance(packet, np.ndarray):
-            error_message = (
-                f"A numpy ndarray packet expected, but instead encountered '{type(packet)}' when decoding packet "
-                f"using COBS scheme."
-            )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-        elif not isinstance(delimiter, np.uint8):
-            error_message = (
-                f"A scalar numpy uint8 (byte) delimiter expected, but instead encountered '{type(delimiter)}' when "
-                f"decoding packet using COBS scheme."
-            )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+        # This is necessary due to how this method is used by the main class, where the input to this method
+        # happens to be a 'readonly' array. Copying the array removes the readonly flag.
+        packet = packet.copy()
 
-        # Calls decoding method
-        payload = self._processor.decode_payload(packet, delimiter)
+        # Prevents execution if the size of the packet is too small. The packet should at minimum have enough
+        # space for the overhead byte, one payload byte and the delimiter byte (3 bytes).
+        # noinspection DuplicatedCode
+        if size < self.minimum_packet_size:
+            self.status = self.packet_too_small_error
+            return np.empty(0, dtype=packet.dtype)
 
-        # Verifies the outcome of decoding method runtime
-        self._verify_decoding_outcome(packet)
+        # Also prevents execution if the size of the packet is too large. The maximum size is enforced due to
+        # how the COBS encoding works, as it requires having at most 255 bytes between the overhead byte and the
+        # end of the packet.
+        elif size > self.maximum_packet_size:
+            self.status = self.packet_too_large_error
+            return np.empty(0, dtype=packet.dtype)
 
-        # Returns the decoded payload to caller if verification was successful
-        return payload
+        # Ensures that the input packet uses uint8 datatype. Since the library uses byte-streams for
+        # communication, this is an important prerequisite.
+        if packet.dtype is not np.dtype(np.uint8):
+            self.status = self.invalid_packet_datatype_error
+            return np.empty(0, dtype=packet.dtype)
 
-    def _verify_decoding_outcome(self, packet: np.ndarray) -> None:
-        """Verifies that decode_payload() method runtime was successful. If not, raises the appropriate exception.
+        # Tracks the currently evaluated variable's index in the packet array. Initializes to 0 (overhead byte
+        # index).
+        read_index = 0
 
-        Notes:
-            The main reason for having this as a separate method is to allow verification following direct calls to
-            inner methods that bypass the API wrapper methods.
+        # Tracks the distance to the next index to evaluate, relative to the read_index value
+        next_index = packet[read_index]  # Reads the distance stored in the overhead byte into the next_index
 
-        Args:
-            packet: The input packet array. The packet is used to extract information like it's size and datatype
-                properties to make the error messages more informative.
+        # Loops over the payload and iteratively jumps over all encoded values, restoring (decoding) them back
+        # to the delimiter value in the process. Carries on with the process until it reaches the end of the
+        # packet or until it encounters an unencoded delimiter value. These two conditions should coincide for
+        # each well-formed packet.
+        while (read_index + next_index) < size:
+            # Increments the read_index via aggregation for each iteration of the loop
+            read_index += next_index
 
-        Raises:
-            ValueError: If the parameters of the input arguments, such as the size or the datatype of the packet
-                array, are unsupported. Also, if the unencoded delimiter is not found at all or is found before reaching
-                the end of the packet, which indicates a corrupted packet.
-            RuntimeError: If the status code returned by the decoder method is not one of the expected values.
+            # If the value inside the packet array pointed by read_index is an unencoded delimiter, evaluates
+            # whether the delimiter is encountered at the end of the packet
+            if packet[read_index] == delimiter:
+                if read_index == size - 1:
+                    # If the delimiter is found at the end of the packet, extracts and returns the decoded
+                    # packet to the caller.
+                    self.status = self.payload_decoded
+                    return packet[1:-1]
+                else:
+                    # If the delimiter is encountered before reaching the end of the packet, this indicates that
+                    # the packet was corrupted during transmission and the CRC-check failed to recognize the
+                    # data corruption. In this case, returns an error code.
+                    self.status = self.delimiter_found_too_early_error
+                    return np.empty(0, dtype=packet.dtype)
 
-        """
+            # If the read_index pointed value is not an unencoded delimiter, first extracts the value and saves
+            # it to the next_index, as the value is the distance to the next encoded value or the unencoded
+            # delimiter.
+            next_index = packet[read_index]
 
-        # Runtime successful, verification is complete
-        if self._processor.status == self._processor.payload_decoded:
-            pass
+            # Decodes the extracted value by overwriting it with the delimiter value
+            packet[read_index] = delimiter
 
-        # Packet too small
-        elif self._processor.status == self._processor.packet_too_small_error:
-            error_message = (
-                f"The size of the input packet ({packet.size}) is too small to be decoded using COBS scheme. "
-                f"A minimum size of {self._processor.min_packet_size} elements (bytes) is required. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+        # If this point is reached, that means that the method did not encounter an unencoded delimiter before
+        # reaching the end of the packet. While the reasons for this are numerous, overall that means that the
+        # packet is malformed and the data is corrupted, so returns an error code.
+        self.status = self.delimiter_not_found_error
+        return np.empty(0, dtype=packet.dtype)
 
-        # Packet too large
-        elif self._processor.status == self._processor.packet_too_large_error:
-            error_message = (
-                f"The size of the input packet ({packet.size}) is too large to be decoded using COBS scheme. "
-                f"A maximum size of {self._processor.max_packet_size} elements (bytes) is required. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
 
-        # Invalid packet datatype
-        elif self._processor.status == self._processor.invalid_packet_datatype_error:
-            error_message = (
-                f"The datatype of the input packet to be decoded using COBS scheme ({packet.dtype}) is not supported. "
-                f"Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+class COBSProcessor:
+    """Wraps a jit-compiled _COBSProcessor class that provides methods for encoding and decoding data using the
+    Consistent Overhead Byte Stuffing (COBS) scheme.
 
-        # Delimiter isn't found at the end of the packet or 'jumping' does not point at the end of teh packet. Indicates
-        # packet corruption.
-        elif self._processor.status == self._processor.delimiter_not_found_error:
-            error_message = (
-                f"Attempting to decode the packet using COBS scheme does not result in reaching the unencoded delimiter"
-                f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
-                f"because the traversal process does not point at the final index of the packet. Packet is likely "
-                f"corrupted. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+    This class functions as a wrapper that provides a consistent Python API for the internal instance of a
+    jit-compiled _COBSProcessor class. This allows achieving python-like experience when using the class, while
+    simultaneously benefiting from fast compiled code generated through numba jit-optimization. The wrapper
+    automatically converts internal class runtime status codes into exception error messages where appropriate to
+    notify users about runtime errors.
 
-        # Delimiter encountered before reaching the end of the packet. Indicates packet corruption.
-        elif self._processor.status == self._processor.delimiter_found_too_early_error:
-            error_message = (
-                f"Unencoded delimiter found before reaching the end of the packet during COBS-decoding sequence. "
-                f"Packet is likely corrupted. "
-                f"CODE: {self._processor.status}."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+    For the maximum execution speed, you can access the private methods directly via the 'processor' property,
+    although this is highly discouraged.
 
-        # Unknown code
-        else:
-            error_message = (
-                f"Unexpected inner _COBSProcessor class status code ({self._processor.status}) encountered when "
-                f"attempting to COBS-decode the input packet. "
-                f"CODE: 0."
-            )
-            raise RuntimeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+    Notes:
+        See the API documentation for the _COBSProcessor class for more details about the COBS encoding and decoding
+        methodology.
 
-    @property
-    def processor(self):
-        """Returns the private jit-compiled _COBSProcessor class instance. This accessor represents a convenient way of
-        unwrapping the jit-compiled class, so that the fast methods can be used directly (helpful when you want to use
-        them from another jit-method).
-        """
-        return self._processor
+    Attributes:
+        _processor: Stores the jit-compiled _COBSProcessor class, which carries out all computations.
+    """
 
-    @staticmethod
-    def _make_cobs_processor_class():
-        """A template-like private method that instantiates and returns a jit-compiled _COBSProcessor class object.
-
-        Notes:
-            Since COBSProcessor does not use any 'template' parameters, this function only exists to maintain
-            algorithmic similarity with CRCProcessor class that uses template parameters.
-
-            Contains the numba spec-file as internal module variable, which can be edited to control the datatypes
-            used by numba to compile class attributes.
-
-        Returns:
-            A fully configured instance of the jit-compiled _COBSProcessor class.
-        """
-
+    def __init__(self) -> None:
         # The template for the numba compiler to assign specific datatypes to variables used by the COBSProcessor class.
-        # This is necessary for Numba to properly compile the class to C.
+        # This is necessary for Numba to properly compile the class to C. Has to be defined before the class is
+        # instantiated with the jitclass function.
         cobs_spec = [
             ("status", uint8),
-            ("max_payload_size", uint8),
-            ("min_payload_size", uint8),
-            ("max_packet_size", uint16),
-            ("min_packet_size", uint8),
             ("standby", uint8),
+            ("maximum_payload_size", uint8),
+            ("minimum_payload_size", uint8),
+            ("maximum_packet_size", uint16),
+            ("minimum_packet_size", uint8),
             ("payload_too_small_error", uint8),
             ("payload_too_large_error", uint8),
             ("invalid_payload_datatype_error", uint8),
@@ -441,243 +306,538 @@ class COBSProcessor:
             ("payload_decoded", uint8),
         ]
 
-        # Spec has to be available at instantiation as numba needs this information to properly compile class. Hence,
-        # the class is defined at the same level as the spec list.
-        # members.
-        @jitclass(cobs_spec)
-        class _COBSProcessor:
-            """The inner COBSProcessor class that actually implements all method logic.
+        # Instantiates the jit class and saves it to wrapper class attribute. Developer hint: when used as function,
+        # jitclass returns an uninitialized compiled object, so initializing is crucial here.
+        self._processor: _COBSProcessor = jitclass(cls_or_spec=_COBSProcessor, spec=cobs_spec)()
 
-            Notes:
-                This class is optimized using Numba's JIT (Just-In-Time) compilation module to significantly improve
-                the execution speed of all class methods. As an unfortunate side effect, this process interferes with
-                Python's built-in error handling tools. To provide error-handling capacity, a C-driven approach of
-                returning fixed byte error-codes has been implemented. The error codes are available through the class
-                attributes below. Each method returns the status (success or error) code by setting the class 'status'
-                attribute to the latest runtime code, mimicking the functioning of the class version intended for
-                microcontrollers.
+    def __repr__(self) -> str:
+        """Returns a string representation of the COBSProcessor class instance."""
+        representation_string = (
+            f"COBSProcessor(inner_status={self._processor.status}, "
+            f"maximum_payload_size={self._processor.maximum_payload_size}, "
+            f"minimum_payload_size={self._processor.minimum_payload_size}, "
+            f"maximum_packet_size={self._processor.maximum_packet_size}, "
+            f"minimum_packet_size={self._processor.minimum_packet_size})"
+        )
+        return representation_string
 
-            Attributes:
-                status: Dynamically updated during runtime to track the latest method's runtime integer byte-code.
-                max_payload_size: The maximum size of the payload, in bytes. Due to COBS, cannot exceed 254 bytes.
-                min_payload_size: The minimum size of the payload, in bytes. No algorithmic minimum enforced, but does
-                    not make sense to have it less than 1 byte.
-                max_packet_size: The maximum size of the packet, in bytes. Due to COBS, it cannot exceed 256 bytes
-                    (254 payload bytes + 1 overhead + 1 delimiter byte).
-                min_packet_size: The minimum size of the packet, in bytes. Due to COBSm cannot be below 3 bytes.
-                standby: The integer code used during class initialization (before any method is called).
-                payload_too_small_error: The input payload array's size was below the min_payload_size during encoding.
-                payload_too_large_error: The input payload array's size was above the max_payload_size during encoding.
-                invalid_payload_datatype_error: The input payload array's datatype was not valid for the encoding
-                    method (not uint8).
-                payload_encoded: Payload has been successfully encoded (into a packet).
-                packet_too_small_error: The input packet array's size was below the min_packet_size during decoding.
-                packet_too_large_error: The input packet array's size was above the max_packet_size during decoding.
-                delimiter_not_found_error: The decoder method did not encounter an unencoded delimiter during its
-                    runtime.
-                delimiter_found_too_early_error: The decoder method encountered the unencoded delimiter before reaching
-                    the end of the packet.
-                invalid_packet_datatype_error: The input packet array's datatype was not valid for the decoder method
-                    (not uint8).
-                payload_decoded: Packet has been successfully decoded into payload.
-            """
+    def encode_payload(self, payload: NDArray[np.uint8], delimiter: np.uint8 = 0) -> np.ndarray:
+        """Encodes the input payload into a transmittable packet using COBS scheme.
 
-            def __init__(self) -> None:
-                # Constant class parameters (do not modify, they are already optimal for any non-embedded system)
-                self.max_payload_size = 254
-                self.min_payload_size = 1
-                self.max_packet_size = 256
-                self.min_packet_size = 3
+        The encoding produces the following packet structure: [Overhead] ... [COBS Encoded Payload] ... [Delimiter].
 
-                # Status codes. Follow a similar approach as the microcontroller library where the codes are unique
-                # across the entire library and staty in the range of 11 to 50.
-                self.standby = 11
-                self.payload_too_small_error = 12
-                self.payload_too_large_error = 13
-                self.invalid_payload_datatype_error = 14
-                self.payload_encoded = 15
-                self.packet_too_small_error = 16
-                self.packet_too_large_error = 17
-                self.delimiter_not_found_error = 18
-                self.delimiter_found_too_early_error = 19
-                self.invalid_packet_datatype_error = 20
-                self.payload_decoded = 21
+        Args:
+            payload: The numpy array that stores the payload to be encoded using COBS scheme. Has to use uint8
+                datatype and be between 1 and 254 bytes in length.
+            delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter.
 
-                self.status = self.standby  # Initializes to standby
+        Raises:
+            TypeError: If the payload or delimiter arguments are not of the correct numpy datatype.
 
-            def encode_payload(self, payload: np.ndarray, delimiter: np.uint8 = 0) -> np.ndarray:
-                """Encodes the input payload into a transmittable packet using COBS scheme.
+        Returns:
+            The packet uint8 numpy array encoded using COBS scheme.
+        """
 
-                This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-                If possible, only use this method through a wrapper API to ensure proper error handling.
+        # Prevents using the method for unsupported input types
+        if not isinstance(payload, np.ndarray):
+            message = (
+                f"Unable to encode payload using COBS scheme. A numpy ndarray with uint8 datatype expected as "
+                f"payload, but instead encountered {payload} of type {type(payload).__name__}."
+            )
+            console.error(message, error=TypeError)
 
-                Args:
-                    payload: The numpy array that stores the payload to be encoded using COBS scheme. Has to use uint8
-                        datatype and be between 1 and 254 bytes in length.
-                    delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter.
+        elif not isinstance(delimiter, np.uint8):
+            message = (
+                f"Unable to encode payload using COBS scheme. A scalar numpy uint8 (byte) delimiter value expected, "
+                f"but instead encountered {delimiter} of type {type(delimiter).__name__}."
+            )
+            console.error(message, error=TypeError)
 
-                Returns:
-                    The packet uint8 numpy array encoded using COBS scheme, if the method succeeds or an empty
-                    uninitialized numpy array otherwise. Use the status code available through the 'status' attribute
-                    of the class instance to determine if the method succeeded or failed (in this case, the code
-                    provides specific error code).
-                """
+        # Calls the encoding method
+        packet = self._processor.encode_payload(payload, delimiter)
 
-                # Saves payload size to a separate variable
-                # noinspection DuplicatedCode
-                size = payload.size
+        # Resolves method runtime status to see if an error exception needs to be raised or the packet has been encoded
+        # and can be returned to caller
+        self._resolve_encoding_status(payload)
 
-                # Prevents execution if the packet is too small. It is meaningless to send empty packets.
-                if size < self.min_payload_size:
-                    self.status = self.payload_too_small_error
-                    return np.empty(0, dtype=payload.dtype)
+        # If runtime was successful, returns the packet
+        return packet
 
-                # Prevents execution if the payload is too large. Due to using byte-streams and COBS encoding, the
-                # overhead byte can only store a maximum value of 255 and for any payload it should be able to store the
-                # distance to the end of the packet. 254 bytes is the maximum size that still fits that requirement once
-                # overhead and delimiter are added to the payload.
-                elif size > self.max_payload_size:
-                    self.status = self.payload_too_large_error
-                    return np.empty(0, dtype=payload.dtype)
+    def _resolve_encoding_status(self, payload: NDArray[np.uint8]) -> None:
+        """Resolves the status of the encode_payload() method runtime.
 
-                # Ensures that the input payload uses uint8 datatype. Since the library uses byte-streams for
-                # communication, this is an important prerequisite.
-                if payload.dtype is not np.dtype(np.uint8):
-                    self.status = self.invalid_payload_datatype_error
-                    return np.empty(0, dtype=payload.dtype)
+        If the status was not successful, raises the appropriate error message.
 
-                # Initializes the output array, uses payload size + 2 as size to make space for the overhead and
-                # delimiter bytes (see COBS scheme for more details on why this is necessary).
-                packet = np.empty(size + 2, dtype=payload.dtype)
-                packet[-1] = delimiter  # Sets the last byte of the packet to the delimiter byte value
-                packet[1:-1] = (
-                    payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
-                )
+        Args:
+            payload: The payload that was passed to the encoding method.
 
-                # A tracker variable that is used to calculate the distance to the next delimiter value when an
-                # unencoded delimiter is required.
-                next_delimiter_position = packet.size - 1  # Initializes to the index of the delimiter value added above
+        Raises:
+            ValueError: If input payload parameters were not valid.
+            RuntimeError: If the status code returned by the encoder method is not one of the expected values.
+        """
 
-                # Iterates over the payload in reverse and replaces every instance of the delimiter value inside the
-                # payload with the distance to the next delimiter value (or the value added to the end of the payload).
-                # This process ensures that the delimiter value is only found at the end of the packet and, if delimiter
-                # is not 0, potentially also as the overhead byte value. This encodes the payload using COBS scheme.
-                for i in range(size - 1, -1, -1):  # Loops over every index of the payload
-                    if payload[i] == delimiter:
-                        # If any of the payload values match the delimiter value, replaces that value in the packet with
-                        # the distance to the next_delimiter_position. This is either the distance to the next encoded
-                        # value or the distance to the delimiter value located at the end of the packet.
-                        packet[i + 1] = next_delimiter_position - (
-                            i + 1
-                        )  # +1 is to translate for payload to packet index
+        # Success code, verification is complete
+        if self._processor.status == self._processor.payload_encoded:
+            pass
 
-                        # Overwrites the next_delimiter_position with the index of the encoded value
-                        next_delimiter_position = i + 1  # +1 is to translate for payload to packet index
+        # Payload too small
+        elif self._processor.status == self._processor.payload_too_small_error:
+            message = (
+                f"Failed to encode the payload using COBS scheme. The size of the input payload "
+                f"({payload.size}) is too small. A minimum size of {self._processor.minimum_payload_size} elements "
+                f"(bytes) is required. CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
 
-                # Once the runtime above is complete, sets the overhead byte to the value of the
-                # next_delimiter_position. As a worst-case scenario, that would be the index of the delimiter byte
-                # written to the end of the packet, which at maximum can be 255. Otherwise, that would be the distance
-                # to the first encoded delimiter value inside the payload. It is now possible to start with the overhead
-                # byte and 'jump' through all encoded values all the way to the end of the packet, where the only
-                # unencoded delimiter is found.
-                packet[0] = next_delimiter_position
+        # Payload too large
+        elif self._processor.status == self._processor.payload_too_large_error:
+            message = (
+                f"Failed to encode the payload using COBS scheme. The size of the input payload ({payload.size}) is "
+                f"too large. A maximum size of {self._processor.maximum_payload_size} elements (bytes) is required. "
+                f"CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
 
-                # Returns the encoded packet array to caller
-                self.status = self.payload_encoded
-                return packet
+        # Invalid payload datatype
+        elif self._processor.status == self._processor.invalid_payload_datatype_error:
+            message = (
+                f"Failed to encode the payload using COBS scheme. The datatype of the input payload "
+                f"({payload.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as "
+                f"payload inputs. CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
 
-            def decode_payload(self, packet: np.ndarray, delimiter: np.uint8 = 0) -> np.ndarray:
-                """Decodes the COBS-encoded payload from the input packet.
+        # Unknown status code
+        else:  # pragma: no cover
+            message = (
+                f"Failed to encode the payload using COBS scheme. Unexpected inner _COBSProcessor class status code "
+                f"({self._processor.status}) encountered. CODE: 0."
+            )
+            console.error(message, error=RuntimeError)
 
-                This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-                If possible, only use this method through a wrapper API to ensure proper error handling.
+    def decode_payload(self, packet: NDArray[np.uint8], delimiter: np.uint8 = 0) -> NDArray[np.uint8]:
+        """Decodes the COBS-encoded payload from the input packet.
 
-                Args:
-                    packet: The numpy array that stores COBS-encoded packet. The array should be using uint8 datatype
-                        and has to be entirely filled with the packet data. That means that the first index (0) should
-                        store the overhead byte and the last valid index of the packet should store the unencoded
-                        delimiter. The packet should be between 3 and 256 bytes in length.
-                    delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter. It is used to
-                        optimize the decoding flow and to verify the unencoded delimiter at the end of the packet.
+        Expects the input packets to adhere to the following structure:
+        [Overhead] ... [COBS Encoded Payload] ... [Delimiter].
 
-                Returns:
-                    The payload uint8 numpy array decoded from the packet if the method succeeds or an empty
-                    uninitialized numpy array otherwise. Use the status code available through the 'status' attribute of
-                    the class instance to determine if the method succeeded or failed (in this case, the code provides
-                    specific error code).
-                """
-                # noinspection DuplicatedCode
-                size = packet.size  # Extracts packet size for the checks below
+        Args:
+            packet: The numpy array that stores COBS-encoded packet. The array should be using uint8 datatype and has to
+                be entirely filled with the packet data. The first index (0) should store the overhead byte, and the
+                last valid index of the packet should store the unencoded delimiter. The packet should be between 3 and
+                256 bytes in length.
+            delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter. This input is used to
+                optimize the decoding flow and to verify the unencoded delimiter at the end of the packet.
 
-                # This is necessary due to how this method is used by the main class, where the input to this method
-                # happens to be a 'readonly' array. Copying the array removes the readonly flag.
-                packet = packet.copy()
+        Returns:
+            The payload uint8 numpy array decoded from the packet.
 
-                # Prevents execution if the size of the packet is too small. The packet should at minimum have enough
-                # space for the overhead byte, one payload byte and the delimiter byte (3 bytes).
-                # noinspection DuplicatedCode
-                if size < self.min_packet_size:
-                    self.status = self.packet_too_small_error
-                    return np.empty(0, dtype=packet.dtype)
+        Raises:
+            TypeError: If the packet or delimiter arguments are not of a correct numpy datatype.
+        """
 
-                # Also prevents execution if the size of the packet is too large. The maximum size is enforced due to
-                # how the COBS encoding works, as it requires having at most 255 bytes between the overhead byte and the
-                # end of the packet.
-                elif size > self.max_packet_size:
-                    self.status = self.packet_too_large_error
-                    return np.empty(0, dtype=packet.dtype)
+        # Prevents using the method for unsupported input types
+        if not isinstance(packet, np.ndarray):
+            message = (
+                f"Unable to decode payload using COBS scheme. A numpy ndarray packet expected, but instead encountered"
+                f"{packet} of type {type(packet).__name__}."
+            )
+            console.error(message, error=TypeError)
 
-                # Ensures that the input packet uses uint8 datatype. Since the library uses byte-streams for
-                # communication, this is an important prerequisite.
-                if packet.dtype is not np.dtype(np.uint8):
-                    self.status = self.invalid_packet_datatype_error
-                    return np.empty(0, dtype=packet.dtype)
+        elif not isinstance(delimiter, np.uint8):
+            message = (
+                f"Unable to decode payload using COBS scheme. A scalar numpy uint8 (byte) delimiter expected, but "
+                f"instead encountered delimiter of type {type(delimiter).__name__}."
+            )
+            console.error(message, error=TypeError)
 
-                # Tracks the currently evaluated variable's index in the packet array. Initializes to 0 (overhead byte
-                # index).
-                read_index = 0
+        # Calls decoding method
+        payload = self._processor.decode_payload(packet, delimiter)
 
-                # Tracks the distance to the next index to evaluate, relative to the read_index value
-                next_index = packet[read_index]  # Reads the distance stored in the overhead byte into the next_index
+        # Verifies the outcome of decoding method runtime
+        self._resolve_decoding_status(packet)
 
-                # Loops over the payload and iteratively jumps over all encoded values, restoring (decoding) them back
-                # to the delimiter value in the process. Carries on with the process until it reaches the end of the
-                # packet or until it encounters an unencoded delimiter value. These two conditions should coincide for
-                # each well-formed packet.
-                while (read_index + next_index) < size:
-                    # Increments the read_index via aggregation for each iteration of the loop
-                    read_index += next_index
+        # Returns the decoded payload to caller if verification was successful
+        return payload
 
-                    # If the value inside the packet array pointed by read_index is an unencoded delimiter, evaluates
-                    # whether the delimiter is encountered at the end of the packet
-                    if packet[read_index] == delimiter:
-                        if read_index == size - 1:
-                            # If the delimiter is found at the end of the packet, extracts and returns the decoded
-                            # packet to the caller.
-                            self.status = self.payload_decoded
-                            return packet[1:-1]
-                        else:
-                            # If the delimiter is encountered before reaching the end of the packet, this indicates that
-                            # the packet was corrupted during transmission and the CRC-check failed to recognize the
-                            # data corruption. In this case, returns an error code.
-                            self.status = self.delimiter_found_too_early_error
-                            return np.empty(0, dtype=packet.dtype)
+    def _resolve_decoding_status(self, packet: np.ndarray) -> None:
+        """Resolves the status of the decode_payload() method runtime.
 
-                    # If the read_index pointed value is not an unencoded delimiter, first extracts the value and saves
-                    # it to the next_index, as the value is the distance to the next encoded value or the unencoded
-                    # delimiter.
-                    next_index = packet[read_index]
+        If the status was not successful, raises the appropriate error message.
 
-                    # Decodes the extracted value by overwriting it with the delimiter value
-                    packet[read_index] = delimiter
+        Args:
+            packet: The packet array that was passed to the decoding method.
 
-                # If this point is reached, that means that the method did not encounter an unencoded delimiter before
-                # reaching the end of the packet. While the reasons for this are numerous, overall that means that the
-                # packet is malformed and the data is corrupted, so returns an error code.
-                self.status = self.delimiter_not_found_error
-                return np.empty(0, dtype=packet.dtype)
+        Raises:
+            ValueError: If the parameters of the input packet are not valid. This includes the case of the packet being
+                corrupted.
+            RuntimeError: If the status code returned by the decoder method is not one of the expected values.
 
-        return _COBSProcessor()
+        """
+
+        # Runtime successful, verification is complete
+        if self._processor.status == self._processor.payload_decoded:
+            pass
+
+        # Packet too small
+        elif self._processor.status == self._processor.packet_too_small_error:
+            message = (
+                f"Failed to decode payload using COBS scheme. The size of the input packet ({packet.size}) is too "
+                f"small. A minimum size of {self._processor.minimum_packet_size} elements (bytes) is required. "
+                f"CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
+
+        # Packet too large
+        elif self._processor.status == self._processor.packet_too_large_error:
+            message = (
+                f"Failed to decode payload using COBS scheme. The size of the input packet ({packet.size}) is too "
+                f"large. A maximum size of {self._processor.maximum_packet_size} elements (bytes) is required. "
+                f"CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
+
+        # Invalid packet datatype
+        elif self._processor.status == self._processor.invalid_packet_datatype_error:
+            message = (
+                f"Failed to decode payload using COBS scheme. The datatype of the input packet ({packet.dtype}) is "
+                f"not supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
+                f"CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
+
+        # Delimiter isn't found at the end of the packet or 'jumping' does not point at the end of teh packet. Indicates
+        # packet corruption.
+        elif self._processor.status == self._processor.delimiter_not_found_error:
+            message = (
+                f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter"
+                f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
+                f"because the decoding does not end at the final index of the packet. Packet is likely "
+                f"corrupted. CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
+
+        # Delimiter encountered before reaching the end of the packet. Indicates packet corruption.
+        elif self._processor.status == self._processor.delimiter_found_too_early_error:
+            message = (
+                f"Failed to decode payload using COBS scheme. Found unencoded delimiter before reaching the end of "
+                f"the packet. Packet is likely corrupted. CODE: {self._processor.status}."
+            )
+            console.error(message, error=ValueError)
+
+        # Unknown code
+        else:  # pragma: no cover
+            message = (
+                f"Failed to decode payload using COBS scheme. Unexpected inner _COBSProcessor class status code "
+                f"({self._processor.status}) encountered. CODE: 0."
+            )
+            console.error(message, error=RuntimeError)
+
+    @property
+    def processor(self) -> _COBSProcessor:
+        """Returns the jit-compiled _COBSProcessor class instance.
+
+        This accessor represents a convenient way of unwrapping the jit-compiled class, so that its methods can be
+        used directly (helpful for using them from other jit-methods or to bypass the overhead of error checking).
+        """
+        return self._processor
+
+
+class _CRCProcessor:
+    """The inner CRCProcessor class that actually implements all method logic.
+
+    Notes:
+        This class is optimized using Numba's JIT (Just-In-Time) compilation module to significantly improve
+        the execution speed of all class methods. As an unfortunate side effect, this process interferes with
+        Python's built-in error handling tools. To provide error-handling capacity, a C-driven approach of
+        returning fixed byte error-codes has been implemented. The error codes are available through the class
+        attributes below. Each method returns the status (success or error) code by setting the class 'status'
+        attribute to the latest runtime code, mimicking the functioning of the class version intended for
+        microcontrollers.
+
+    Attributes:
+        status: Stores the last-called method's runtime status code.
+        polynomial: Stores the polynomial used for the CRC checksum calculation. Only used for the wrapper class
+            __repr__ method as the inner class immediately converts the polynomial to a static crc_table upon
+            initialization.
+        initial_crc_value: Stores the initial value used for the CRC checksum calculation. Specifically, this is
+            the value that the CRC checksum variable is initialized to at the beginning of each
+            calculate_packet_crc_checksum() method runtime.
+        final_xor_value: Stores the final XOR value used for the CRC checksum calculation. Specifically, this is
+            the value that the CRC checksum variable is XORed with prior to being returned to caller at the end
+            of each calculate_packet_crc_checksum() method runtime.
+        crc_byte_length: Stores the length of the CRC polynomial in bytes. This is used across most methods of
+            the class to automatically scale processing to the number of bytes used to store the CRC checksum
+            value.
+        crc_table: The array that stores the CRC lookup table. The lookup table is used to speed up CRC checksum
+            calculation by pre-computing the checksum value for each possible byte-value (from 0 through 255:
+            256 values total). The table is filled automatically during class instantiation and reserves 256,
+            512, or 1024 bytes of RAM for the entire lifetime of the class, depending on the numpy datatype of
+            the polynomial.
+        standby: The integer code used during class initialization (before any method is called).
+        calculate_checksum_buffer_datatype_error: The buffer provided to the calculate_packet_crc_checksum()
+            method was not of the required uint8 numpy datatype.
+        checksum_calculated: The CRC checksum has been successfully calculated.
+        checksum_converted_to_bytes: The CRC checksum has been successfully converted to an uint8 numpy array.
+        convert_checksum_invalid_buffer_datatype_error: The buffer provided to the
+            convert_crc_checksum_to_integer() method was not of the required uint8 numpy datatype.
+        convert_checksum_invalid_buffer_size_error: The buffer provided to the convert_crc_checksum_to_integer()
+            method was not of the byte-size required to store the byte-converted crc checksum value.
+        checksum_converted_to_integer: The CRC checksum has been successfully converted from an uint8 numpy
+            array of bytes to an appropriate numpy unsigned integer (uint8, uint16, or uint32).
+
+    Args:
+        polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
+            appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials are
+            supported.
+        polynomial_size: The size of the polynomial in bytes. This is used to support the manipulations
+            necessary to calculate the CRC checksum and add / read it from storage buffers.
+        initial_crc_value: The initial value to which the CRC checksum variable is initialized during
+            calculation. This value is based on the polynomial parameter. Can be provided as an appropriately
+            sized HEX number (e.g., 0xFFFF).
+        final_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value is
+            based on the polynomial parameter. Can be provided as an appropriately sized HEX number
+            (e.g., 0x0000).
+    """
+
+    def __init__(
+            self,
+            polynomial: Union[np.uint8, np.uint16, np.uint32],
+            polynomial_size: np.uint8,
+            initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
+            final_xor_value: Union[np.uint8, np.uint16, np.uint32],
+            crc_type: np.dtype
+    ) -> None:
+        # Local variables
+        self.polynomial = polynomial
+        self.initial_crc_value = initial_crc_value
+        self.final_xor_value = final_xor_value
+        self.crc_byte_length = polynomial_size
+        self.crc_table = np.empty(256, dtype=crc_type)  # Initializes to empty for efficiency
+
+        # Static status_codes
+        self.standby = 51  # The code used right after class initialization (before any other method is called)
+        self.calculate_checksum_buffer_datatype_error = 52
+        self.checksum_calculated = 53
+        self.checksum_converted_to_bytes = 54
+        self.convert_checksum_invalid_buffer_datatype_error = 55
+        self.convert_checksum_invalid_buffer_size_error = 56
+        self.checksum_converted_to_integer = 57
+
+        self.status = self.standby  # Dynamically updated to track the latest method runtime status
+
+        # Calls table generation method that generates a lookup table based on the target polynomial
+        # parameters and iteratively sets each variable inside the crc_table placeholder to the calculated
+        # values.
+        self.generate_crc_table(_polynomial=polynomial)
+
+    # noinspection DuplicatedCode
+    def calculate_packet_crc_checksum(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
+        """Calculates the checksum for the (entire) input buffer.
+
+        This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
+        If possible, only use this method through a wrapper API to ensure proper error handling.
+
+        Notes:
+            While error runtimes always return 0, any 0-value returned by this method is potentially a valid
+            value. To determine if the method runtime was successful or failed, use 'status' class attribute.
+            The returned value is not meaningful until it is verified using the status code!
+
+        Args:
+            buffer: The uint8 numpy array that stores the data to be checksummed.
+
+        Returns:
+            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
+            class initialization) that represents the calculated CRC checksum value. Also sets the 'status'
+            class attribute to communicate the status of the method's runtime.
+        """
+
+        # Verifies that the buffer is using an appropriate datatype (uint8). This method is intended to work
+        # with buffers storing byte-serialized data, so explicitly controls for that here.
+        if buffer.dtype is not np.dtype(np.uint8):
+            self.status = self.calculate_checksum_buffer_datatype_error
+            return np.uint8(0)
+
+        # Initializes the checksum. The datatype is already correct as it is inferred from the initial_crc_value
+        # datatype
+        crc_checksum = self.initial_crc_value
+
+        # Loops over each byte inside the buffer and iteratively calculates CRC checksum for the buffer
+        for byte in buffer:
+            # Calculates the index to retrieve from CRC table. To do so, combines the high byte of the CRC
+            # checksum with the (possibly) modified (corrupted) data_byte using bitwise XOR.
+            table_index = (crc_checksum >> (8 * (self.crc_byte_length - 1))) ^ byte
+
+            # Extracts the byte-specific CRC value from the table using the result of the operation above. The
+            # retrieved CRC value from the table is then XORed with the checksum that is shifted back to the
+            # original position to generate an updated checksum.
+            crc_checksum = self.make_polynomial_type((crc_checksum << 8) ^ self.crc_table[table_index])
+
+        # The Final XOR operation may or may not be used (depending on the polynomial). The default
+        # polynomial 0x1021 has it set to 0x0000 (0), so it is actually not used. Other polynomials may require
+        # this step, so it is kept here for compatibility reasons. The exact algorithmic purpose of the XOR
+        # depends on the specific polynomial used.
+        crc_checksum ^= self.final_xor_value
+
+        # Sets the status to indicate runtime success and returns calculated checksum to the caller.
+        self.status = self.checksum_calculated
+        return self.make_polynomial_type(crc_checksum)
+
+    def convert_crc_checksum_to_bytes(self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]) -> np.ndarray:
+        """Converts the input checksum value into a numpy array of bytes.
+
+        This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
+        If possible, only use this method through a wrapper API to ensure proper error handling.
+
+        Returns:
+            A uint8 numpy array entirely filled with the CRC checksum bytes. Also sets the 'status' class
+            attribute to communicate method runtime status.
+        """
+
+        # Precreates the buffer array to store the byte-converted checksum
+        buffer = np.empty(self.crc_byte_length, dtype=np.uint8)
+
+        # Appends the CRC checksum to the buffer, starting with the most significant byte (loops over each byte
+        # and iteratively adds it to the buffer).
+        for i in range(self.crc_byte_length):
+            # Extracts the byte from the checksum and inserts it into the buffer. Most of this instruction
+            # controls which byte making up the CRC checksum is processed by each iteration of the loop
+            buffer[i] = (crc_checksum >> (8 * (self.crc_byte_length - i - 1))) & 0xFF
+
+        # Returns the filled buffer to caller and sets the status to communicate runtime success.
+        self.status = self.checksum_converted_to_bytes
+        return buffer
+
+    def convert_crc_checksum_to_integer(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
+        """Converts the crc checksum stored in the (entire!) input buffer to an unsigned numpy integer value.
+
+        This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
+        If possible, only use this method through a wrapper API to ensure proper error handling.
+
+        Notes:
+            While error runtimes always return 0, any 0-value returned by this method is potentially a valid
+            value. To determine if the method runtime was successful or failed, use 'status' class attribute.
+            The returned value is not meaningful until it is verified using the status code!
+
+        Returns:
+            A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
+            class initialization) that represents the converted CRC checksum value. Also sets the 'status' class
+            attribute to communicate method runtime status.
+        """
+
+        # Verifies that the input buffer uses an appropriate (uint8) datatype. This method is intended to decode
+        # CRC checksum values from serialized byte-streams and will not work properly with any other data types.
+        if buffer.dtype is not np.dtype(np.uint8):
+            self.status = self.convert_checksum_invalid_buffer_datatype_error
+            # Note, 0 is a valid value. The only way to know if it comes from a successful or failed runtime is
+            # to check the class 'status' attribute that communicates the latest runtime success or error code.
+            return np.uint8(0)
+
+        # Ensures that the buffer size exactly matches the number of bytes required to store the CRC checksum.
+        if buffer.size != self.crc_byte_length:
+            self.status = self.convert_checksum_invalid_buffer_size_error
+            return np.uint8(0)
+
+        # Precreates the variable to store the extracted checksum and initializes it to zero
+        extracted_crc = self.make_polynomial_type(0)
+
+        # Loops over the input buffer and extracts the CRC checksum from the bytes inside the buffer. Assumes
+        # the buffer is entirely filled with the checksum bytes and uses crc_byte_length to constrain processing
+        # to the exact number of bytes required.
+        for i in range(self.crc_byte_length):
+            # Constructs the CRC checksum from the buffer, starting from the most significant byte and moving
+            # towards the least significant byte. This matches the process of how it was converted to bytes by
+            # the convert_crc_checksum_to_bytes() or an equivalent microcontroller method.
+            extracted_crc |= self.make_polynomial_type(buffer[i] << (8 * (self.crc_byte_length - i - 1)))
+
+        # Returns the extracted CRC checksum to caller and sets the status to communicate runtime success.
+        self.status = self.checksum_converted_to_integer
+        return extracted_crc
+
+    def generate_crc_table(self, _polynomial: Union[np.uint8, np.uint16, np.uint32]) -> None:
+        """Uses the polynomial specified during class instantiation to compute the CRC checksums for each
+        possible uint8 (byte) value.
+
+        The method updates the precompiled empty crc_table with polynomial-derived CRC values. Note, the
+        crc_table has to be initialized correctly for this method to work properly. Use
+        make_crc_processor_class() wrapper class method to initialize the class and the crc_table as it
+        automatically resolves all type dependencies. Additionally, this method is ONLY intended to be called by
+        the class initialization method. Do not use this method outside the class initialization context!
+
+        Notes:
+            While the PC is fast enough to work without a pregenerated table, this method is used to
+            maintain algorithmic similarity to the version of the library used for microcontrollers. Also, using
+            a static table is still faster even for PCs.
+
+        Args:
+            _polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
+                appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials are
+                supported.
+        """
+
+        # Determines the number of bits in the CRC type
+        crc_bits = np.uint8(self.crc_byte_length * 8)
+
+        # Determines the Most Significant Bit (MSB) mask based on the CRC type
+        msb_mask = self.make_polynomial_type(np.left_shift(1, crc_bits - 1))
+
+        # Iterates over each possible value of a byte variable
+        for byte in np.arange(256, dtype=np.uint8):
+            # Casts crc to the appropriate type based on the polynomial type
+            crc = self.make_polynomial_type(byte)
+
+            # Shifts the CRC value left by the appropriate number of bits based on the CRC type to align the
+            # initial value to the highest byte of the CRC variable.
+            if crc_bits > 8:
+                crc <<= crc_bits - 8
+
+            # Loops over each of the 8 bits making up the byte-value being processed
+            for _ in range(8):
+                # Checks if the top bit (MSB) is set
+                if crc & msb_mask:
+                    # If the top bit is set, shifts the crc value left to bring the next bit into the top
+                    # position, then XORs it with the polynomial. This simulates polynomial division where bits
+                    # are checked from top to bottom.
+                    crc = self.make_polynomial_type((crc << 1) ^ _polynomial)
+                else:
+                    # If the top bit is not set, simply shifts the crc value left. This moves to the next bit
+                    # without changing the current crc value, as division by polynomial wouldn't modify it.
+                    crc <<= 1
+
+            # Adds the calculated CRC value for the byte to the storage table using byte-value as the key
+            # (index). This value is the remainder of the polynomial division of the byte (treated as a
+            # CRC-sized number), by the CRC polynomial.
+            self.crc_table[byte] = crc
+
+    def make_polynomial_type(self, value: Any) -> Union[np.uint8, np.uint16, np.uint32]:
+        """Converts the input value to the appropriate numpy unsigned integer type based on the class instance
+        polynomial datatype.
+
+        This is a minor helper method designed to be used exclusively by other class methods. It allows
+        resolving typing issues originating from the fact that, at the time of writing, numba is unable to use
+        '.itemsize' and other properties of scalar numpy types.
+
+        Notes:
+            The datatype of the polynomial is inferred based on the byte-length of the polynomial as either
+            uint8, uint16, or uint32 (uses 'crc_byte_length' attribute of the class).
+
+        Args:
+            value: The value to convert to the appropriate type.
+
+        Returns:
+            The value converted to the appropriate numpy unsigned integer datatype
+        """
+        if self.crc_byte_length == 1:
+            return np.uint8(value)
+        elif self.crc_byte_length == 2:
+            return np.uint16(value)
+        elif self.crc_byte_length == 4:
+            return np.uint32(value)
+        # Empty errors are currently supported by Numba. Not the most informative way of doing this, but this
+        # error should never occur unless the entire class is changed to add support for more polynomial types,
+        # there this error will remind the developers to adjust this method.
+        else:
+            raise RuntimeError()
 
 
 class CRCProcessor:
@@ -726,71 +886,79 @@ class CRCProcessor:
     """
 
     def __init__(
-        self,
-        polynomial: Union[np.uint8, np.uint16, np.uint32],
-        initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
-        final_xor_value: Union[np.uint8, np.uint16, np.uint32],
+            self,
+            polynomial: Union[np.uint8, np.uint16, np.uint32],
+            initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
+            final_xor_value: Union[np.uint8, np.uint16, np.uint32],
     ) -> None:
         # Ensures that all inputs use the same valid type. Note, uint64 is currently not supported primarily to maintain
         # implicit compatibility with older AVR boards that do not support uint64 type. That said, both the C++ and this
         # Python codebase are written in a way that will natively scale to uint 64 if this static guard is modified to
         # allow it.
         if not isinstance(polynomial, (np.uint8, np.uint16, np.uint32)):
-            error_message = (
+            message = (
                 f"Unsupported 'polynomial' argument type '{type(polynomial)}' encountered when instantiating "
                 f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-        elif not isinstance(initial_crc_value, (np.uint8, np.uint16, np.uint32)):
-            error_message = (
+            console.error(message, error=TypeError)
+
+        if not isinstance(initial_crc_value, (np.uint8, np.uint16, np.uint32)):
+            message = (
                 f"Unsupported 'initial_crc_value' argument type {type(initial_crc_value)} encountered when "
                 f"instantiating CRCProcessor class. Use numpy uint8, uint16, or uint32."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-        elif not isinstance(final_xor_value, (np.uint8, np.uint16, np.uint32)):
-            error_message = (
+            console.error(message, error=TypeError)
+
+        if not isinstance(final_xor_value, (np.uint8, np.uint16, np.uint32)):
+            message = (
                 f"Unsupported 'final_xor_value' argument type {type(final_xor_value)} encountered when instantiating "
                 f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-        elif not (polynomial.dtype == initial_crc_value.dtype == final_xor_value.dtype):
-            error_message = (
+            console.error(message, error=TypeError)
+
+        if not (polynomial.dtype == initial_crc_value.dtype == final_xor_value.dtype):
+            message = (
                 "All arguments ('polynomial', 'initial_crc_value', 'final_xor_value') must have the same type when "
                 "instantiating CRCProcessor class."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=TypeError)
+
+        # Converts the input polynomial type from numpy to numba format so that it can be used in the spec array below
+        if polynomial.dtype is np.dtype(np.uint8):
+            crc_type = uint8
+        elif polynomial.dtype is np.dtype(np.uint16):
+            crc_type = uint16
+        else:
+            crc_type = uint32
+
+        # The template for the numba compiler to assign specific datatypes to variables used by CRCProcessor class.
+        crc_spec = [
+            ("status", uint8),
+            ("polynomial", crc_type),
+            ("initial_crc_value", crc_type),
+            ("final_xor_value", crc_type),
+            ("crc_byte_length", uint8),
+            ("crc_table", crc_type[:]),
+            ("standby", uint8),
+            ("calculate_checksum_buffer_datatype_error", uint8),
+            ("checksum_calculated", uint8),
+            ("checksum_converted_to_bytes", uint8),
+            ("convert_checksum_invalid_buffer_datatype_error", uint8),
+            ("convert_checksum_invalid_buffer_size_error", uint8),
+            ("checksum_converted_to_integer", uint8),
+            ("calculate_and_append_checksum_buffer_datatype_error", uint8),
+            ("checksum_calculated_and_appended_to_buffer", uint8),
+        ]
 
         # Initializes and compiles the internal _CRCProcessor class. This automatically generates the static CRC lookup
         # table
-        self._processor = self._make_crc_processor_class(polynomial, initial_crc_value, final_xor_value)
+        self._processor: _CRCProcessor = jitclass(cls_or_spec=_CRCProcessor, spec=crc_spec)(
+            polynomial=polynomial,
+            polynomial_size=np.uint8(polynomial.itemsize),
+            initial_crc_value=initial_crc_value,
+            final_xor_value=final_xor_value,
+            crc_type=crc_type,
+        )
 
     def __repr__(self) -> str:
         repr_message = (
@@ -824,18 +992,11 @@ class CRCProcessor:
 
         # Prevents using the method for unsupported input types
         if not isinstance(buffer, np.ndarray):
-            error_message = (
+            message = (
                 f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(buffer)}' when calculating the "
                 f"CRC checksum for the input buffer."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=TypeError)
 
         # Calls the appropriate _CRCProcessor method to calculate the crc checksum
         checksum = self._processor.calculate_packet_crc_checksum(buffer)
@@ -853,18 +1014,11 @@ class CRCProcessor:
         elif self._processor.crc_byte_length == 4:
             return np.uint32(checksum)
         else:
-            error_message = (
+            message = (
                 f"Unsupported 'crc_byte_length' value ({self._processor.crc_byte_length}) encountered when "
                 f"calculating the CRC checksum for the input buffer."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=ValueError)
 
     def _verify_checksum_calculation_outcome(self, buffer: np.ndarray) -> None:
         """Verifies that calculate_packet_crc_checksum() method runtime was successful. If not, raises the appropriate
@@ -888,35 +1042,21 @@ class CRCProcessor:
 
         # Incorrect buffer datatype
         elif self._processor.status == self._processor.calculate_checksum_buffer_datatype_error:
-            error_message = (
+            message = (
                 f"The datatype of the input buffer to be CRC-checksummed ({buffer.dtype}) is not supported. "
                 f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs. "
                 f"CODE: {self._processor.status}."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=ValueError)
 
         # Unexpected status code
         else:
-            error_message = (
+            message = (
                 f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
                 f"attempting to calculate the CRC checksum for the input buffer. "
                 f"CODE: 0."
             )
-            raise RuntimeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=RuntimeError)
 
     def convert_crc_checksum_to_bytes(self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]) -> np.ndarray:
         """Converts the input numpy integer checksum into a byte numpy array.
@@ -932,18 +1072,11 @@ class CRCProcessor:
         """
         # Prevents using the method for unsupported input types
         if not isinstance(crc_checksum, (np.uint8, np.uint16, np.uint32)):
-            error_message = (
+            message = (
                 f"A uint8, uint16 or uint32 crc_checksum expected, but instead encountered '{type(crc_checksum)}', "
                 f"when converting the unsigned integer CRC checksum to an array of bytes."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=TypeError)
 
         # Calls the appropriate _CRCProcessor method to convert the crc checksum to an array of bytes
         checksum_bytes = self._processor.convert_crc_checksum_to_bytes(crc_checksum)
@@ -972,18 +1105,11 @@ class CRCProcessor:
 
         # Unknown status code
         else:
-            error_message = (
+            message = (
                 f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
                 f"converting the unsigned integer CRC checksum to an array of bytes. CODE: 0."
             )
-            raise RuntimeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=RuntimeError)
 
     def convert_crc_checksum_to_integer(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
         """Converts the input buffer that stores crc checksum bytes to an unsigned numpy integer value.
@@ -1005,18 +1131,11 @@ class CRCProcessor:
 
         # Prevents using the method for unsupported input types
         if not isinstance(buffer, np.ndarray):
-            error_message = (
+            message = (
                 f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(buffer)}' type when converting "
                 f"the array of CRC checksum bytes to the unsigned integer value."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=TypeError)
 
         # Calls the appropriate _CRCProcessor method to convert the aray of crc checksum bytes to an integer value
         checksum = self._processor.convert_crc_checksum_to_integer(buffer)
@@ -1034,18 +1153,11 @@ class CRCProcessor:
         elif self._processor.crc_byte_length == 4:
             return np.uint32(checksum)
         else:
-            error_message = (
+            message = (
                 f"Unsupported 'crc_byte_length' value ({self._processor.crc_byte_length}) encountered when "
                 f"calculating the CRC checksum for the input buffer."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=ValueError)
 
     def _verify_crc_to_integer_conversion(self, buffer: np.ndarray) -> None:
         """Verifies that convert_crc_checksum_to_integer() method runtime was successful. If not, raises the appropriate
@@ -1073,50 +1185,29 @@ class CRCProcessor:
 
         # Invalid buffer datatype
         elif self._processor.status == self._processor.convert_checksum_invalid_buffer_datatype_error:
-            error_message = (
+            message = (
                 f"The datatype of the input buffer to be converted to the unsigned integer CRC checksum "
                 f"({buffer.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer "
                 f"inputs. CODE: {self._processor.status}."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=ValueError)
 
         # The size of the buffer does not match the number of bytes required to represent the checksum datatype
         elif self._processor.status == self._processor.convert_checksum_invalid_buffer_size_error:
-            error_message = (
+            message = (
                 f"The byte-size of the input buffer to be converted to the unsigned integer CRC checksum "
                 f"({buffer.size}) does not match the size required to represent the specified checksum datatype "
                 f"({self._processor.crc_byte_length}). CODE: {self._processor.status}."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=ValueError)
 
         # Unknown status code
         else:
-            error_message = (
+            message = (
                 f"Unexpected inner _CRCProcessor class status code ({self._processor.status}) encountered when "
                 f"converting the array of CRC checksum bytes to the unsigned integer value. CODE: 0."
             )
-            raise RuntimeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message, error=RuntimeError)
 
     @property
     def crc_byte_length(self) -> np.uint8:
@@ -1150,393 +1241,6 @@ class CRCProcessor:
     def final_xor_value(self) -> Union[np.uint8, np.uint16, np.uint32]:
         """Returns the final XOR value used by the class instance during checksum calculation."""
         return self._processor.final_xor_value
-
-    @staticmethod
-    def _make_crc_processor_class(
-        polynomial: Union[np.uint8, np.uint16, np.uint32],
-        initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
-        final_xor_value: Union[np.uint8, np.uint16, np.uint32],
-    ):
-        """Instantiates an appropriately configured CRCProcessor class to work with the polynomial of the requested
-        type.
-
-        Notes:
-            This setup method mimics the operation of the CRCProcessor's template method used in the microcontroller
-            version of this library. Since Numba is used to speed up class methods for the PC version of the library, it
-            has to be provided with appropriately typed class attributes (polynomial, crc_table, etc.) at compile-time.
-            To make that possible, this template-like function written in python resolves the necessary dependencies and
-            initializes and returns the properly configured CRCProcessor class instance.
-
-            This method relies on the fact that the input polynomial and other supporting arguments are type-checked
-            by the initializer method of the wrapper CRCProcessor class and, as such, has no mechanisms for checking
-            these inputs for validity or cross-compatibility.
-
-        Args:
-            polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
-                appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials of numpy
-                uint8, uint16, and uint32 datatype are supported.
-            initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
-                This value depends on the chosen polynomial algorithm ('polynomial' argument) and, as such, should use
-                the same datatype as the polynomial argument. It can be provided as an appropriately sized HEX number
-                (e.g., 0xFFFF).
-            final_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value depends
-                on the chosen polynomial algorithm ('polynomial' argument) and, as such, should use the same datatype as
-                the polynomial argument. It can be provided as an appropriately sized HEX number (e.g., 0x0000).
-
-        Returns:
-            A fully configured CRCProcessor class instance. The class is configured to work with a specific
-            datatype (uint8, uint16, or uint32) of the polynomial and, by extension, crc_checksums. Using the class with
-            the crc checksums of an unsupported type is likely to result in undefined behavior.
-        """
-
-        # Converts the input polynomial type from numpy to numba format so that it can be used in the spec array below
-        if polynomial.dtype is np.dtype(np.uint8):
-            crc_type = uint8
-        elif polynomial.dtype is np.dtype(np.uint16):
-            crc_type = uint16
-        elif polynomial.dtype is np.dtype(np.uint32):
-            crc_type = uint32
-        # Generally this is redundant due to a static guard inside the wrapper class initialization function. However,
-        # this may be helpful if the class ever needs to be adjusted to support uint64 polynomials as this template
-        # method needs to be adjusted in addition to the static guard. The code inside class methods will scale
-        # automatically
-        else:
-            error_message = (
-                f"Unsupported 'polynomial' type ({polynomial.dtype}) encountered when resolving the inner "
-                f"_CRCProcessor jit-compiled class specification."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-
-        # The template for the numba compiler to assign specific datatypes to variables used by CRCProcessor class.
-        crc_spec = [
-            ("status", uint8),
-            ("polynomial", crc_type),
-            ("initial_crc_value", crc_type),
-            ("final_xor_value", crc_type),
-            ("crc_byte_length", uint8),
-            ("crc_table", crc_type[:]),
-            ("standby", uint8),
-            ("calculate_checksum_buffer_datatype_error", uint8),
-            ("checksum_calculated", uint8),
-            ("checksum_converted_to_bytes", uint8),
-            ("convert_checksum_invalid_buffer_datatype_error", uint8),
-            ("convert_checksum_invalid_buffer_size_error", uint8),
-            ("checksum_converted_to_integer", uint8),
-            ("calculate_and_append_checksum_buffer_datatype_error", uint8),
-            ("checksum_calculated_and_appended_to_buffer", uint8),
-        ]
-
-        # Uses the spec from above to define and compile the appropriate CRCProcessor class instance
-        @jitclass(crc_spec)
-        class _CRCProcessor:
-            """The inner CRCProcessor class that actually implements all method logic.
-
-            Notes:
-                This class is optimized using Numba's JIT (Just-In-Time) compilation module to significantly improve
-                the execution speed of all class methods. As an unfortunate side effect, this process interferes with
-                Python's built-in error handling tools. To provide error-handling capacity, a C-driven approach of
-                returning fixed byte error-codes has been implemented. The error codes are available through the class
-                attributes below. Each method returns the status (success or error) code by setting the class 'status'
-                attribute to the latest runtime code, mimicking the functioning of the class version intended for
-                microcontrollers.
-
-            Attributes:
-                status: Stores the last-called method's runtime status code.
-                polynomial: Stores the polynomial used for the CRC checksum calculation. Only used for the wrapper class
-                    __repr__ method as the inner class immediately converts the polynomial to a static crc_table upon
-                    initialization.
-                initial_crc_value: Stores the initial value used for the CRC checksum calculation. Specifically, this is
-                    the value that the CRC checksum variable is initialized to at the beginning of each
-                    calculate_packet_crc_checksum() method runtime.
-                final_xor_value: Stores the final XOR value used for the CRC checksum calculation. Specifically, this is
-                    the value that the CRC checksum variable is XORed with prior to being returned to caller at the end
-                    of each calculate_packet_crc_checksum() method runtime.
-                crc_byte_length: Stores the length of the CRC polynomial in bytes. This is used across most methods of
-                    the class to automatically scale processing to the number of bytes used to store the CRC checksum
-                    value.
-                crc_table: The array that stores the CRC lookup table. The lookup table is used to speed up CRC checksum
-                    calculation by pre-computing the checksum value for each possible byte-value (from 0 through 255:
-                    256 values total). The table is filled automatically during class instantiation and reserves 256,
-                    512, or 1024 bytes of RAM for the entire lifetime of the class, depending on the numpy datatype of
-                    the polynomial.
-                standby: The integer code used during class initialization (before any method is called).
-                calculate_checksum_buffer_datatype_error: The buffer provided to the calculate_packet_crc_checksum()
-                    method was not of the required uint8 numpy datatype.
-                checksum_calculated: The CRC checksum has been successfully calculated.
-                checksum_converted_to_bytes: The CRC checksum has been successfully converted to an uint8 numpy array.
-                convert_checksum_invalid_buffer_datatype_error: The buffer provided to the
-                    convert_crc_checksum_to_integer() method was not of the required uint8 numpy datatype.
-                convert_checksum_invalid_buffer_size_error: The buffer provided to the convert_crc_checksum_to_integer()
-                    method was not of the byte-size required to store the byte-converted crc checksum value.
-                checksum_converted_to_integer: The CRC checksum has been successfully converted from an uint8 numpy
-                    array of bytes to an appropriate numpy unsigned integer (uint8, uint16, or uint32).
-
-            Args:
-                _polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
-                    appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials are
-                    supported.
-                _polynomial_size: The size of the polynomial in bytes. This is used to support the manipulations
-                    necessary to calculate the CRC checksum and add / read it from storage buffers.
-                _initial_crc_value: The initial value to which the CRC checksum variable is initialized during
-                    calculation. This value is based on the polynomial parameter. Can be provided as an appropriately
-                    sized HEX number (e.g., 0xFFFF).
-                _final_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value is
-                    based on the polynomial parameter. Can be provided as an appropriately sized HEX number
-                    (e.g., 0x0000).
-            """
-
-            def __init__(
-                self,
-                _polynomial: Union[np.uint8, np.uint16, np.uint32],
-                _polynomial_size: np.uint8,
-                _initial_crc_value: Union[np.uint8, np.uint16, np.uint32],
-                _final_xor_value: Union[np.uint8, np.uint16, np.uint32],
-            ) -> None:
-                # Local variables
-                self.polynomial = _polynomial
-                self.initial_crc_value = _initial_crc_value
-                self.final_xor_value = _final_xor_value
-                self.crc_byte_length = _polynomial_size
-                self.crc_table = np.empty(256, dtype=crc_type)  # Initializes to empty for efficiency
-
-                # Static status_codes
-                self.standby = 51  # The code used right after class initialization (before any other method is called)
-                self.calculate_checksum_buffer_datatype_error = 52
-                self.checksum_calculated = 53
-                self.checksum_converted_to_bytes = 54
-                self.convert_checksum_invalid_buffer_datatype_error = 55
-                self.convert_checksum_invalid_buffer_size_error = 56
-                self.checksum_converted_to_integer = 57
-
-                self.status = self.standby  # Dynamically updated to track the latest method runtime status
-
-                # Calls table generation method that generates a lookup table based on the target polynomial
-                # parameters and iteratively sets each variable inside the crc_table placeholder to the calculated
-                # values.
-                self.generate_crc_table(_polynomial=_polynomial)
-
-            # noinspection DuplicatedCode
-            def calculate_packet_crc_checksum(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
-                """Calculates the checksum for the (entire) input buffer.
-
-                This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-                If possible, only use this method through a wrapper API to ensure proper error handling.
-
-                Notes:
-                    While error runtimes always return 0, any 0-value returned by this method is potentially a valid
-                    value. To determine if the method runtime was successful or failed, use 'status' class attribute.
-                    The returned value is not meaningful until it is verified using the status code!
-
-                Args:
-                    buffer: The uint8 numpy array that stores the data to be checksummed.
-
-                Returns:
-                    A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
-                    class initialization) that represents the calculated CRC checksum value. Also sets the 'status'
-                    class attribute to communicate the status of the method's runtime.
-                """
-
-                # Verifies that the buffer is using an appropriate datatype (uint8). This method is intended to work
-                # with buffers storing byte-serialized data, so explicitly controls for that here.
-                if buffer.dtype is not np.dtype(np.uint8):
-                    self.status = self.calculate_checksum_buffer_datatype_error
-                    return np.uint8(0)
-
-                # Initializes the checksum. The datatype is already correct as it is inferred from the initial_crc_value
-                # datatype
-                crc_checksum = self.initial_crc_value
-
-                # Loops over each byte inside the buffer and iteratively calculates CRC checksum for the buffer
-                for byte in buffer:
-                    # Calculates the index to retrieve from CRC table. To do so, combines the high byte of the CRC
-                    # checksum with the (possibly) modified (corrupted) data_byte using bitwise XOR.
-                    table_index = (crc_checksum >> (8 * (self.crc_byte_length - 1))) ^ byte
-
-                    # Extracts the byte-specific CRC value from the table using the result of the operation above. The
-                    # retrieved CRC value from the table is then XORed with the checksum that is shifted back to the
-                    # original position to generate an updated checksum.
-                    crc_checksum = self.make_polynomial_type((crc_checksum << 8) ^ self.crc_table[table_index])
-
-                # The Final XOR operation may or may not be used (depending on the polynomial). The default
-                # polynomial 0x1021 has it set to 0x0000 (0), so it is actually not used. Other polynomials may require
-                # this step, so it is kept here for compatibility reasons. The exact algorithmic purpose of the XOR
-                # depends on the specific polynomial used.
-                crc_checksum ^= self.final_xor_value
-
-                # Sets the status to indicate runtime success and returns calculated checksum to the caller.
-                self.status = self.checksum_calculated
-                return self.make_polynomial_type(crc_checksum)
-
-            def convert_crc_checksum_to_bytes(self, crc_checksum: Union[np.uint8, np.uint16, np.uint32]) -> np.ndarray:
-                """Converts the input checksum value into a numpy array of bytes.
-
-                This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-                If possible, only use this method through a wrapper API to ensure proper error handling.
-
-                Returns:
-                    A uint8 numpy array entirely filled with the CRC checksum bytes. Also sets the 'status' class
-                    attribute to communicate method runtime status.
-                """
-
-                # Precreates the buffer array to store the byte-converted checksum
-                buffer = np.empty(self.crc_byte_length, dtype=np.uint8)
-
-                # Appends the CRC checksum to the buffer, starting with the most significant byte (loops over each byte
-                # and iteratively adds it to the buffer).
-                for i in range(self.crc_byte_length):
-                    # Extracts the byte from the checksum and inserts it into the buffer. Most of this instruction
-                    # controls which byte making up the CRC checksum is processed by each iteration of the loop
-                    buffer[i] = (crc_checksum >> (8 * (self.crc_byte_length - i - 1))) & 0xFF
-
-                # Returns the filled buffer to caller and sets the status to communicate runtime success.
-                self.status = self.checksum_converted_to_bytes
-                return buffer
-
-            def convert_crc_checksum_to_integer(self, buffer: np.ndarray) -> Union[np.uint8, np.uint16, np.uint32]:
-                """Converts the crc checksum stored in the (entire!) input buffer to an unsigned numpy integer value.
-
-                This is a jit method that is very fast but requires strict input / output typing as it is compiled to C.
-                If possible, only use this method through a wrapper API to ensure proper error handling.
-
-                Notes:
-                    While error runtimes always return 0, any 0-value returned by this method is potentially a valid
-                    value. To determine if the method runtime was successful or failed, use 'status' class attribute.
-                    The returned value is not meaningful until it is verified using the status code!
-
-                Returns:
-                    A numpy uint8, uint16, or uint32 integer (depends on the polynomial datatype that was used during
-                    class initialization) that represents the converted CRC checksum value. Also sets the 'status' class
-                    attribute to communicate method runtime status.
-                """
-
-                # Verifies that the input buffer uses an appropriate (uint8) datatype. This method is intended to decode
-                # CRC checksum values from serialized byte-streams and will not work properly with any other data types.
-                if buffer.dtype is not np.dtype(np.uint8):
-                    self.status = self.convert_checksum_invalid_buffer_datatype_error
-                    # Note, 0 is a valid value. The only way to know if it comes from a successful or failed runtime is
-                    # to check the class 'status' attribute that communicates the latest runtime success or error code.
-                    return np.uint8(0)
-
-                # Ensures that the buffer size exactly matches the number of bytes required to store the CRC checksum.
-                if buffer.size != self.crc_byte_length:
-                    self.status = self.convert_checksum_invalid_buffer_size_error
-                    return np.uint8(0)
-
-                # Precreates the variable to store the extracted checksum and initializes it to zero
-                extracted_crc = self.make_polynomial_type(0)
-
-                # Loops over the input buffer and extracts the CRC checksum from the bytes inside the buffer. Assumes
-                # the buffer is entirely filled with the checksum bytes and uses crc_byte_length to constrain processing
-                # to the exact number of bytes required.
-                for i in range(self.crc_byte_length):
-                    # Constructs the CRC checksum from the buffer, starting from the most significant byte and moving
-                    # towards the least significant byte. This matches the process of how it was converted to bytes by
-                    # the convert_crc_checksum_to_bytes() or an equivalent microcontroller method.
-                    extracted_crc |= self.make_polynomial_type(buffer[i] << (8 * (self.crc_byte_length - i - 1)))
-
-                # Returns the extracted CRC checksum to caller and sets the status to communicate runtime success.
-                self.status = self.checksum_converted_to_integer
-                return extracted_crc
-
-            def generate_crc_table(self, _polynomial: Union[np.uint8, np.uint16, np.uint32]) -> None:
-                """Uses the polynomial specified during class instantiation to compute the CRC checksums for each
-                possible uint8 (byte) value.
-
-                The method updates the precompiled empty crc_table with polynomial-derived CRC values. Note, the
-                crc_table has to be initialized correctly for this method to work properly. Use
-                make_crc_processor_class() wrapper class method to initialize the class and the crc_table as it
-                automatically resolves all type dependencies. Additionally, this method is ONLY intended to be called by
-                the class initialization method. Do not use this method outside the class initialization context!
-
-                Notes:
-                    While the PC is fast enough to work without a pregenerated table, this method is used to
-                    maintain algorithmic similarity to the version of the library used for microcontrollers. Also, using
-                    a static table is still faster even for PCs.
-
-                Args:
-                    _polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as an
-                        appropriately sized HEX number (e.g., 0x1021). Note, currently only non-reversed polynomials are
-                        supported.
-                """
-
-                # Determines the number of bits in the CRC type
-                crc_bits = np.uint8(self.crc_byte_length * 8)
-
-                # Determines the Most Significant Bit (MSB) mask based on the CRC type
-                msb_mask = self.make_polynomial_type(np.left_shift(1, crc_bits - 1))
-
-                # Iterates over each possible value of a byte variable
-                for byte in np.arange(256, dtype=np.uint8):
-                    # Casts crc to the appropriate type based on the polynomial type
-                    crc = self.make_polynomial_type(byte)
-
-                    # Shifts the CRC value left by the appropriate number of bits based on the CRC type to align the
-                    # initial value to the highest byte of the CRC variable.
-                    if crc_bits > 8:
-                        crc <<= crc_bits - 8
-
-                    # Loops over each of the 8 bits making up the byte-value being processed
-                    for _ in range(8):
-                        # Checks if the top bit (MSB) is set
-                        if crc & msb_mask:
-                            # If the top bit is set, shifts the crc value left to bring the next bit into the top
-                            # position, then XORs it with the polynomial. This simulates polynomial division where bits
-                            # are checked from top to bottom.
-                            crc = self.make_polynomial_type((crc << 1) ^ _polynomial)
-                        else:
-                            # If the top bit is not set, simply shifts the crc value left. This moves to the next bit
-                            # without changing the current crc value, as division by polynomial wouldn't modify it.
-                            crc <<= 1
-
-                    # Adds the calculated CRC value for the byte to the storage table using byte-value as the key
-                    # (index). This value is the remainder of the polynomial division of the byte (treated as a
-                    # CRC-sized number), by the CRC polynomial.
-                    self.crc_table[byte] = crc
-
-            def make_polynomial_type(self, value: Any) -> Union[np.uint8, np.uint16, np.uint32]:
-                """Converts the input value to the appropriate numpy unsigned integer type based on the class instance
-                polynomial datatype.
-
-                This is a minor helper method designed to be used exclusively by other class methods. It allows
-                resolving typing issues originating from the fact that, at the time of writing, numba is unable to use
-                '.itemsize' and other properties of scalar numpy types.
-
-                Notes:
-                    The datatype of the polynomial is inferred based on the byte-length of the polynomial as either
-                    uint8, uint16, or uint32 (uses 'crc_byte_length' attribute of the class).
-
-                Args:
-                    value: The value to convert to the appropriate type.
-
-                Returns:
-                    The value converted to the appropriate numpy unsigned integer datatype
-                """
-                if self.crc_byte_length == 1:
-                    return np.uint8(value)
-                elif self.crc_byte_length == 2:
-                    return np.uint16(value)
-                elif self.crc_byte_length == 4:
-                    return np.uint32(value)
-                # Empty errors are currently supported by Numba. Not the most informative way of doing this, but this
-                # error should never occur unless the entire class is changed to add support for more polynomial types,
-                # there this error will remind the developers to adjust this method.
-                else:
-                    raise RuntimeError()
-
-        # Returns fully configured CRCProcessor class instance
-        return _CRCProcessor(
-            _polynomial=polynomial,
-            _polynomial_size=np.uint8(polynomial.itemsize),
-            _initial_crc_value=initial_crc_value,
-            _final_xor_value=final_xor_value,
-        )
 
 
 class SerialMock:
