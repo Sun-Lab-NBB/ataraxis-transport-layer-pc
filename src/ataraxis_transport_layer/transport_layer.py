@@ -12,8 +12,8 @@ from dataclasses import fields, is_dataclass
 
 from numba import njit  # type: ignore
 import numpy as np
-from numpy import unsignedinteger
 import serial
+from numpy.typing import NDArray
 from serial.tools import list_ports
 from ataraxis_time import PrecisionTimer
 
@@ -189,6 +189,7 @@ class TransportLayer:
         start_byte: int = 129,
         delimiter_byte: int = 0,
         timeout: int = 20000,
+        *,
         test_mode: bool = False,
         allow_start_byte_errors: bool = False,
     ) -> None:
@@ -259,11 +260,13 @@ class TransportLayer:
 
         # The buffers are always set to maximum payload size + 2 + postamble to be large enough to store packets. This
         # is necessary to support _parse_packet() method functioning.
-        self._transmission_buffer = np.zeros(shape=buffer_size, dtype=np.uint8)
-        self._reception_buffer = np.empty(self._max_rx_payload_size + 2 + self._postamble_size, dtype=np.uint8)
-        self._bytes_in_transmission_buffer = 0
-        self._bytes_in_reception_buffer = 0
-        self._leftover_bytes = bytes()  # Placeholder
+        self._transmission_buffer: NDArray[np.uint8] = np.zeros(shape=buffer_size, dtype=np.uint8)
+        self._reception_buffer: NDArray[np.uint8] = np.empty(
+            self._max_rx_payload_size + 2 + self._postamble_size, dtype=np.uint8
+        )
+        self._bytes_in_transmission_buffer: int = 0
+        self._bytes_in_reception_buffer: int = 0
+        self._leftover_bytes: bytes = bytes()  # Placeholder
         self._accepted_numpy_scalars = (
             np.uint8,
             np.uint16,
@@ -275,7 +278,7 @@ class TransportLayer:
             np.int64,
             np.float32,
             np.float64,
-            np.bool_,
+            np.bool,
         )  # Used to verify scalar and numpy array input datatypes and for error messages
         self._minimum_packet_size = max(1, minimum_received_payload_size) + 4 + self._postamble_size
 
@@ -1528,7 +1531,7 @@ class TransportLayer:
         read_bytes: bytes,
         start_byte: np.uint8,
         max_payload_size: int,
-        postamble_size: int | unsignedinteger[Any],
+        postamble_size: int | np.unsignedinteger[Any],
         allow_start_byte_errors: bool,
         start_found: bool = False,
         packet_size: int = 0,
