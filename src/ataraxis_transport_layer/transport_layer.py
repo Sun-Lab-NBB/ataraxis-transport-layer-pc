@@ -12,10 +12,11 @@ from dataclasses import fields, is_dataclass
 
 from numba import njit  # type: ignore
 import numpy as np
-import serial
+from serial import Serial
 from numpy.typing import NDArray
 from serial.tools import list_ports
 from ataraxis_time import PrecisionTimer
+from ataraxis_base_utilities import console
 
 # noinspection PyProtectedMember
 from ataraxis_transport_layer.helper_modules import (
@@ -27,11 +28,11 @@ from ataraxis_transport_layer.helper_modules import (
 )
 
 
-class TransportLayer:
-    """Provides the high-level API that encapsulates all methods necessary to bidirectionally communicate with
-    microcontrollers running the C-version of the SerializedTransferProtocol library.
+class SerialTransportLayer:
+    """Provides methods to bidirectionally communicate with Microcontrollers running the C++ version of the
+    TransportLayer class over the UART or USB Serial interface.
 
-    This class functions as a central hub that calls various internal and external helper methods and fully encapsulates
+    This class functions as a central hub that calls various internal and external helper classes and fully encapsulates
     the serial port interface (via pySerial third-party library). Most of this class is hidden behind private attributes
     and methods, and any part of the class that is publicly exposed is generally safe to use and should be enough
     to realize the full functionality of the library.
@@ -39,143 +40,118 @@ class TransportLayer:
     Notes:
         This class contains 4 main methods: write_data(), send_data(), receive_data() and read_data(). Write and read
         methods are used to manipulate the class-specific 'staging' buffers that aggregate the data to be sent to the
-        microcontroller and store the data received from the microcontroller. Send and receive methods operate on the
+        Microcontroller and store the data received from the Microcontroller. Send and receive methods operate on the
         class buffers and trigger the sequences of steps needed to construct and send a serial packet to the controller
-        or receive and decode the data sent as a packet from the controller. See method descriptions for more details.
+        or receive and decode the data sent as a packet from the controller.
 
         Most class inputs and arguments are configured to require a numpy scalar or array input to enforce typing,
         which is not done natively in python. Type enforcement is notably 'unpythonic', but very important for this
-        library as it communicates with microcontrollers that do use a strictly typed ecosystem (C++). Additionally,
+        library as it communicates with Microcontrollers that do use a strictly typed language (C++). Additionally,
         enforcing typing allows using efficient numpy and numba operations to optimize most of the custom library code
-        to run at C++ speeds, which is one of the notable advantages of this library.
+        to run at C speeds, which is one of the notable advantages of this library.
 
-        All class attributes are private by design and documented primarily for the developers willing to contribute to
-        the library or use library assets in their own projects. Users can safely ignore that entire section.
+    Args:
+        port: The name of the serial port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. You can use the
+            list_available_ports() class method to get a list of discoverable serial port names.
+        baudrate: The baudrate to be used to communicate with the Microcontroller. Should match the value used by
+            the microcontroller for UART ports, ignored for USB ports. Note, the appropriate baudrate for any UART-using
+            controller partially depends on its CPU clock!
+        polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as a HEX
+            number (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32
+            datatype are supported.
+        initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
+            This value depends on the chosen polynomial algorithm and should use the same datatype as the 'polynomial'
+            argument. It can be provided as a HEX number (e.g., 0xFFFF).
+        final_crc_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value
+            depends on the chosen polynomial algorithm and should use the same datatype as the 'polynomial' argument.
+            It can be provided as a HEX number (e.g., 0x0000).
+        maximum_transmitted_payload_size: The maximum number of bytes that are expected to be transmitted to the
+            Microcontroller as a single payload. This has to match the maximum_received_payload_size value used by
+            the Microcontroller. Due to COBS encoding, this value has to be between 1 and 254 bytes.
+        minimum_received_payload_size: The minimum number of bytes that are expected to be received from the
+            Microcontroller as a single payload. This number is used to calculate the threshold for entering
+            incoming data reception cycle. In turn, this is used to minimize the number of calls made to costly
+            methods required to receive data. Due to COBS encoding, this value has to be between 1 and 254 bytes.
+        start_byte: The value used to mark the beginning of the packet. Has to match the value used by the
+            Microcontroller. Can be any value in the uint8 range (0 to 255). It is advised to use the value that is
+            unlikely to occur as noise.
+        delimiter_byte: The value used to denote the end of the packet. Has to match the value used by the
+            Microcontroller. Due to how COBS works, it is advised to use '0' as the delimiter byte. Zero is the only
+            value guaranteed to be exclusive when used as a delimiter.
+        timeout: The maximum number of microseconds that can separate receiving any two consecutive bytes of the
+            packet. This is used to detect and resolve stale packet reception attempts. While this defaults to 20000
+            (20 ms), the library can resolve intervals in the range of ~50-100 microseconds, so the number can
+            be made considerably smaller than that.
+        test_mode: Determines whether the library uses a real pySerial Stream class or a StreamMock class. Only used
+            during testing and should always be disabled otherwise.
+        allow_start_byte_errors: Determines whether the class raises errors when it is unable to find the start value
+            in the incoming byte-stream. It is advised to keep this set to False for most use cases. This is because it
+            is fairly common to see noise-generated bytes inside the reception buffer. These bytes are silently cleared
+            by the reception algorithm until a real packet becomes available. However, enabling this option may be
+            helpful for certain debugging scenarios.
 
     Attributes:
-        _port: Depending on the test_mode flag, this is either a SerialMock object or a pySerial Serial object. During
-            'production' runtime, this object provides low-level access to USB / UART ports using OS-specific APIs.
-        _crc_processor: CRCProcessor class object that provides the methods to manipulate (calculate and serialize)
-            CRC checksums for the transmitted and received data packets.
-        _cobs_processor: COBSProcessor class object that provides the methods to encode and decode the payloads to and
-            from the transmitted and received packets.
-        _timer: PrecisionTimer class object that provides an easy-to-use interface to measure time intervals, most
-            notably used to detect and escape staled packet reception sequences.
-        _start_byte: The value that marks the beginning of all transmitted and received packets. Encountering this
-            value is the only condition for entering packet reception mode.
-        _delimiter_byte: The value that marks the end of all transmitted and received packets. This value is necessary
-            for the proper functioning of the microcontroller's packet reception sequence, and it's presence at the end
-            of the packet is used as the packet integrity marker.
-        _timeout: The number of microseconds to wait between receiving any two consecutive bytes of the packet. Note,
-            this value specifically concerns the interval between two bytes of the packet, not the whole packet.
-        _allow_start_byte_errors: A boolean flag that determines whether to raise errors when the start byte is not
-            found among the available bytes when receive_data() method is called. The default behavior is to ignore
-            such errors as communication line noise can create 'fake' data bytes that are routinely cleared by the
-            reception method. However, enabling this option may be helpful in certain debugging scenarios.
-        _max_tx_payload_size: The maximum number of bytes that are expected to be transmitted as a single payload. This
-            number is statically capped at 254 bytes due to COBS encoding. The value of this attribute should always
-            match the value of the similar attribute used in the microcontroller library, which is why it is
-            user-addressable through initialization arguments.
-        _max_rx_payload_size: The maximum number of bytes expected to be received from the microcontroller as a single
-            payload. Similar restrictions and considerations apply as with the _max_tx_payload_size. Since PCs do not
-            have the same memory restrictions as controllers, this is always statically set to 254 (maximum possible
-            size).
-        _postamble_size: The byte-size of the CRC checksum. Calculated automatically based on the number of bytes used
-            by the polynomial argument. This attribute is used to optimize packet reception and data buffering and
-            de-buffering.
-        _transmission_buffer: The private buffer used to stage the data to be sent to the microcontroller.
-            Specifically, the write_data() method adds input data to this buffer as a sequence of bytes. When
-            send_data() method is called, the contents of the buffer are packaged and sent to the microcontroller.
-            The buffer is statically allocated at instantiation and relies on the _bytes_in_transmission_buffer tracker
-            to specify which portion of the buffer is filled with payload bytes any given time.
-        _reception_buffer: The private buffer that stores the decoded data received from the microcontroller. The
-            buffer is filled by calling receive_data() method, and the received payload can then be read into objects by
-            calling read_data() method. Like _transmission_buffer, the _reception buffer is statically allocated at
-            instantiation and relies on the _bytes_in_reception_buffer tracker to specify which portion of the buffer
-            is used at any given time to store the received payload.
+        _port: Depending on the test_mode flag, stores either a SerialMock or Serial object that provides serial port
+            interface.
+        _crc_processor: Stores the CRCProcessor class object that provides methods for working CRC checksums.
+        _cobs_processor: Stores the COBSProcessor class object that provides methods for encoding and decoding
+            transmitted payloads.
+        _timer: Stores the PrecisionTimer class object that provides a microsecond-precise GIL-releasing timer.
+        _start_byte: Stores the byte-value that marks the beginning of transmitted and received packets.
+        _delimiter_byte: Stores the byte-value that marks the end of transmitted and received packets.
+        _timeout: The number of microseconds to wait between receiving any two consecutive bytes of a packet.
+        _allow_start_byte_errors: Determines whether to raise errors when the start_byte value is not found among the
+            available bytes during receive_data() runtime.
+        _max_tx_payload_size: Stores the maximum number of bytes that can be transmitted as a single payload. This value
+            cannot exceed 254 bytes due to COBS encoding.
+        _max_rx_payload_size: Stores the maximum number of bytes that can be received from the microcontroller as a
+            single payload. This value cannot exceed 254 bytes due to COBS encoding.
+        _postamble_size: Stores the byte-size of the CRC checksum.
+        _transmission_buffer: The buffer used to stage the data to be sent to the Microcontroller.
+        _reception_buffer: The buffer used to store the decoded data received from the Microcontroller.
         _bytes_in_transmission_buffer: Tracks how many bytes (relative to index 0) of the _transmission_buffer are
-            currently used to store the payload to be transmitted. This allows efficient data buffering by overwriting
-            and working with the minimal number of bytes necessary to store the payload. When the _transmission_buffer
-            is 'reset' the buffer itself is not changed in any way, but this tracker is set to 0. The tracker is
-            conditionally incremented by each write_data() method call and reset by send_data() method calls. This
-            attribute can also be reset using reset_transmission_buffer() method.
-        _bytes_in_reception_buffer: Same as _bytes_in_transmission_buffer, but for the _reception_buffer. However,
-            read_data() method calls do not modify the value of this attribute. Only receive_data() or
-            reset_reception_buffer() methods can modify this attribute.
-        _leftover_bytes: A private buffer used to preserve any 'unconsumed' bytes that were read from the serial port
-            but not used to reconstruct the payload sent from the microcontroller. Since pySerial read() method calls
-            are very costly, to improve runtime speed, this class does everything it can to minimize the number of
-            such calls. Part of this strategy involves always reading as many bytes as available and 'stashing' any
-            'excessive' bytes to be re-used by the next receive_data() calls.
-        _accepted_numpy_scalars: A tuple of numpy types (classes) that can be used as scalar inputs or as 'dtype'
-            fields of the numpy arrays that are provided to the read_data() and write_data() methods. This class only
-            works with these datatypes and will raise errors if it encounters any other input. The only exceptions to
-            this rule are dataclasses made up entirely of supported numpy scalars or arrays (Python's equivalent for
-            C-structures), such dataclasses are also valid inputs and will be processed correctly.
-        _minimum_packet_size: The minimum number of bytes that can represent a valid packet. This number is statically
-            determined at class initialization and is subsequently used to optimize packet reception logic (minimizes
-            wasting time by calling 'expensive' methods that evaluate the state of the communication hardware (reception
-            buffers, etc.). The user can optionally overwrite this number (via minimum_received_payload_size argument),
-            instead of using the baseline calculation to further minimize the time wasted on running futile serial port
-            operations. The minimum value this can take is 5 + postamble_size: 1 payload byte, 2 preamble bytes,
-            2 COBS bytes and however many bytes are needed to store the CRC postamble. Note, when user overwrites the
-            minimum_received_payload_size, specifically the '1' payload value is changed, keeping the other values the
-            same.
-
-        Args:
-            port: The name of the serial port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. You can use the
-                list_available_ports() class method to get a list of discoverable serial port names.
-            baudrate: The baudrate to be used to communicate with the microcontroller. Should match the value used by
-                the microcontroller for UART ports, ignored for USB ports. Defaults to 115200, which is
-                a fairly fast rate supported by most microcontroller boards (many can use faster rates!).
-            polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as a HEX
-                number (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32
-                datatype are supported. Defaults to 0x1021 (CRC-16 CCITT-FALSE).
-            initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
-                This value depends on the chosen polynomial algorithm ('polynomial' argument) and should use the same
-                datatype as the polynomial argument. It can be provided as a HEX number (e.g., 0xFFFF).
-                Defaults to 0xFFFF (CRC-16 CCITT-FALSE).
-            final_crc_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value
-                depends on the chosen polynomial algorithm ('polynomial' argument) and should use the same datatype as
-                the polynomial argument. It can be provided as an appropriately sized HEX number (e.g., 0x0000).
-                Defaults to 0x0000 (CRC-16 CCITT-FALSE).
-            maximum_transmitted_payload_size: The maximum number of bytes that are expected to be transmitted to the
-                microcontroller as a single payload. This HAS to match the maximum_received_payload_size value used by
-                the microcontroller to ensure that it has the buffer space to accept all payloads. In fact, the only
-                reason this parameter is user-addressable is so that the user ensures it matches the
-                microcontroller settings. Defaults to 254.
-            minimum_received_payload_size: The minimum number of bytes that can be expected to be received from the
-                microcontroller as a single payload. This number is used to calculate the threshold for entering
-                incoming data reception cycle to minimize the number of calls made to costly operations required to
-                receive data. Cannot exceed 254 bytes and cannot be less than 1 byte.
-            start_byte: The value used to mark the beginning of the packet. Has to match the value used by the
-                microcontroller. Can be any value in the uint8 range (0 to 255). It is advised to use the value that is
-                unlikely to occur as noise. Defaults to 129.
-            delimiter_byte: The value used to denote the end of the packet. Has to match the value used by the
-                microcontroller. Due to how COBS works, it is advised to use '0' as the delimiter byte. Zero is the only
-                value guaranteed to be exclusive when used as a delimiter. Defaults to 0.
-            timeout: The maximum number of microseconds(!) that can separate receiving any two consecutive bytes of the
-                packet. This is used to detect and resolve stale packet reception attempts. While this defaults to 20000
-                (20 ms), the library can resolve intervals in the range of dozen(s) of microseconds, so the number can
-                be made considerably smaller than that. Defaults to 20000.
-            test_mode: The boolean flag that determines whether the library uses a real pySerial Stream class or a
-                helper StreamMock class. Only used during testing and should always be disabled otherwise. Defaults to
-                False.
-            allow_start_byte_errors: The boolean flag that determines whether the class raises errors when it is unable
-                to find the start value in the incoming byte-stream. It is advised to keep this set to False for most
-                use cases. This is because it is fairly common to see noise-generated bytes inside the reception buffer
-                that are then silently cleared by the algorithm until a real packet becomes available. However, enabling
-                this option may be helpful for certain debugging scenarios. Defaults to False.
+            currently used to store the payload to be transmitted.
+        _bytes_in_reception_buffer: Same as _bytes_in_transmission_buffer, but for the _reception_buffer.
+        _leftover_bytes: A buffer used to preserve any 'unconsumed' bytes that were read from the serial port
+            but not used to reconstruct the payload sent from the Microcontroller. This is used to minimize the number
+            of calls to pySerial methods, as they are costly to run.
+        _accepted_numpy_scalars: Stores numpy types (classes) that can be used as scalar inputs or as 'dtype'
+            fields of the numpy arrays that are provided to class methods. Currently, these are the only types
+            supported by the library.
+        _minimum_packet_size: Stores the minimum number of bytes that can represent a valid packet. This value is used
+            to optimize packet reception logic.
 
         Raises:
-            ValueError: If maximum_transmitted_payload_size argument exceeds 254 (this is the hard limit due to COBS
-                encoding). If the minimum_received_payload_size is below 1 or above 254. Also, if the start_byte is set
-                to the same value as the delimiter_byte.
-            SerialException: Originate from the pySerial class used to connect to the USB / UART port interface.
-                Primarily, these exceptions will be raised when the requested port does not exist or the user lacks
-                permissions to overtake whatever uses the port at the time (or access it at all). See pySerial
-                documentation if you need help understanding what the exceptions mean.
+            TypeError: If any of the input arguments is not of the expected type.
+            ValueError: If any of the input arguments have invalid values.
+            SerialException: If wrapped pySerial class runs into an error.
     """
+
+    _accepted_numpy_scalars: tuple[
+        Type[np.uint8],
+        Type[np.uint16],
+        Type[np.uint32],
+        Type[np.uint64],
+        Type[np.int8],
+        Type[np.int16],
+        Type[np.int32],
+        Type[np.int64],
+        Type[np.float32],
+        Type[np.float64],
+        Type[bool],
+    ] = (
+        np.uint8,
+        np.uint16,
+        np.uint32,
+        np.uint64,
+        np.int8,
+        np.int16,
+        np.int32,
+        np.int64,
+        np.float32,
+        np.float64,
+        np.bool,
+    )  # Sets up a tuple of types used to verify transmitted data
 
     def __init__(
         self,
@@ -193,186 +169,215 @@ class TransportLayer:
         test_mode: bool = False,
         allow_start_byte_errors: bool = False,
     ) -> None:
-        # Ensures that the class is initialized properly by catching possible class configuration argument errors.
+        # Verifies that input arguments are valid. Does not check polynomial parameters, that is offloaded to the
+        # CRCProcessor class.
+        if not isinstance(port, str):
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but "
+                f"encountered {port} of type {type(port).__name__}."
+            )
+            console.error(message=message, error=TypeError)
+        if 0 <= baudrate:
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
+                f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
+            )
+            console.error(message=message, error=ValueError)
+        if not 0 <= start_byte <= 255:
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
+                f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
+            )
+            console.error(message=message, error=ValueError)
+        if not 0 <= delimiter_byte <= 255:
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
+                f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
+            )
+            console.error(message=message, error=ValueError)
+        if 0 < timeout:
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
+                f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
+            )
+            console.error(message=message, error=ValueError)
         if start_byte == delimiter_byte:
-            error_message = (
-                f"Unable to initialize SerializedTransferProtocol class. 'start_byte' and 'delimiter_byte' arguments "
-                f"cannot be set to the same value ({start_byte})."
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected 'start_byte' and 'delimiter_byte' "
+                f"arguments to have different values, but both are set to the same value ({start_byte})."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
+            console.error(message=message, error=ValueError)
+        if not 0 < maximum_transmitted_payload_size <= 254:
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 1 and 254 for the "
+                f"'maximum_transmitted_payload_size' argument, but encountered {maximum_transmitted_payload_size} "
+                f"of type {type(maximum_transmitted_payload_size).__name__}."
             )
+            console.error(message=message, error=ValueError)
+        if not 0 < minimum_received_payload_size <= 254:
+            message = (
+                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 1 and 254 for the "
+                f"'minimum_received_payload_size' argument, but encountered {minimum_received_payload_size} "
+                f"of type {type(minimum_received_payload_size).__name__}."
+            )
+            console.error(message=message, error=ValueError)
 
-        if maximum_transmitted_payload_size > 254:
-            error_message = (
-                f"Unable to initialize SerializedTransferProtocol class. 'maximum_transmitted_payload_size' argument "
-                f"value ({maximum_transmitted_payload_size}) cannot exceed 254."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-
-        if not (1 <= minimum_received_payload_size <= 254):
-            error_message = (
-                f"Unable to initialize SerializedTransferProtocol class. 'minimum_received_payload_size' argument "
-                f"value ({minimum_received_payload_size}) must be between 1 and 254 (inclusive)."
-            )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
-
-        # Initializes subclasses
+        # Based on the class runtime selector, initializes a real or mock serial port manager class
+        self._port: SerialMock | Serial
         if not test_mode:
-            self._port = serial.Serial(port, baudrate, timeout=0)
+            # Statically disables built-in timeout. Our jit- and c-extension classes are more optimized for this job
+            # than Serial's built-in timeout.
+            self._port = Serial(port, baudrate, timeout=0)
         else:
             self._port = SerialMock()
 
+        # This verifies input polynomial parameters at class initialization time
         self._crc_processor = CRCProcessor(polynomial, initial_crc_value, final_crc_xor_value)
         self._cobs_processor = COBSProcessor()
-        self._timer = PrecisionTimer("us")  # Times packet reception steps to timeout if packet reception stales
 
-        # Initializes user-defined attributes
-        self._start_byte = np.uint8(start_byte)
-        self._delimiter_byte = np.uint8(delimiter_byte)
-        self._timeout = np.uint64(timeout)
-        self._allow_start_byte_errors = allow_start_byte_errors
-        self._postamble_size = self._crc_processor.crc_byte_length
+        # On very fast CPUs, the timer can be sub-microsecond precise. On older systems, this may not necessarily hold.
+        # Either way, microsecond precision is safe for most target systems.
+        self._timer = PrecisionTimer("us")
 
-        # Initializes automatically calculated and static attributes
-        self._max_tx_payload_size: int = maximum_transmitted_payload_size  # Capped at 254 due to COBS encoding
-        self._max_rx_payload_size: int = 254  # Capped at 254 due to COBS encoding
-        buffer_size: int = self._max_tx_payload_size + self._postamble_size
+        # Initializes serial packet attributes and casts all to numpy types. With the checks above, there should be
+        # no overflow or casting issues.
+        self._start_byte: np.uint8 = np.uint8(start_byte)
+        self._delimiter_byte: np.uint8 = np.uint8(delimiter_byte)
+        self._timeout: np.uint64 = np.uint64(timeout)
+        self._allow_start_byte_errors: bool = allow_start_byte_errors
+        self._postamble_size: np.uint8 = self._crc_processor.crc_byte_length
 
-        # The buffers are always set to maximum payload size + 2 + postamble to be large enough to store packets. This
-        # is necessary to support _parse_packet() method functioning.
-        self._transmission_buffer: NDArray[np.uint8] = np.zeros(shape=buffer_size, dtype=np.uint8)
-        self._reception_buffer: NDArray[np.uint8] = np.empty(
-            self._max_rx_payload_size + 2 + self._postamble_size, dtype=np.uint8
-        )
+        # Uses payload size arguments to initialize reception and transmission buffers.
+        self._max_tx_payload_size: np.uint8 = np.uint8(maximum_transmitted_payload_size)
+        self._max_rx_payload_size: np.uint8 = np.uint8(254)  # Statically capped at 254 due to COBS encoding
+
+        # Buffer sizes are up-case to uint16, as they may need to exceed the 256-size limit. They include the respective
+        # payload size, the postamble size (1 to 4 bytes) and 4 static bytes for the preamble and packet metadata.
+        # These 4 bytes are: start_byte, delimiter_byte, overhead_byte, and packet_size byte.
+        tx_buffer_size: np.uint16 = np.uint16(self._max_tx_payload_size) + 4 + np.uint16(self._postamble_size)
+        rx_buffer_size: np.uint16 = np.uint16(self._max_rx_payload_size) + 4 + np.uint16(self._postamble_size)
+        self._transmission_buffer: NDArray[np.uint8] = np.zeros(shape=tx_buffer_size, dtype=np.uint8)
+        self._reception_buffer: NDArray[np.uint8] = np.empty(shape=rx_buffer_size, dtype=np.uint8)
+
+        # Based on the minimum expected payload size, calculates the minimum number of bytes that can fully represent
+        # a packet. This is sued to avoid costly pySerial calls unless there is a high chance that the call will return
+        # a parsable packet.
+        self._minimum_packet_size: int = max(1, minimum_received_payload_size) + 4 + int(self._postamble_size)
+
+        # Sets up various tracker and temporary storage variables that supplement class runtime.
         self._bytes_in_transmission_buffer: int = 0
         self._bytes_in_reception_buffer: int = 0
-        self._leftover_bytes: bytes = bytes()  # Placeholder
-        self._accepted_numpy_scalars = (
-            np.uint8,
-            np.uint16,
-            np.uint32,
-            np.uint64,
-            np.int8,
-            np.int16,
-            np.int32,
-            np.int64,
-            np.float32,
-            np.float64,
-            np.bool,
-        )  # Used to verify scalar and numpy array input datatypes and for error messages
-        self._minimum_packet_size = max(1, minimum_received_payload_size) + 4 + self._postamble_size
+        self._leftover_bytes: bytes = bytes()  # Placeholder, this is re-initialized as needed during data reception.
 
-        # Opens (connects to) the serial port. Cycles closing and opening to ensure the port is opened if it exists at
-        # the cost of potentially non-graciously replacing whatever is using the port at the time of instantiating
-        # SerializedTransferProtocol class. This may not be required on all platforms, but the original developer used
-        # the combination of platformio and Windows which was notoriously bad at releasing the port ownership after
-        # uploading controller firmware.
+        # Opens (connects to) the serial port. Cycles closing and opening to ensure the port is opened,
+        # non-graciously replacing whatever is using the port at the time of instantiating SerialTransportLayer class.
+        # This non-safe procedure was implemented to avoid a frequent issue with Windows taking a long time to release
+        # COM ports, preventing quick connection cycling.
         self._port.close()
         self._port.open()
 
     def __del__(self) -> None:
-        # Closes the port before deleting the class instance. Not strictly required, but seeing how unreliable Windows
-        # is about releasing port handles it doesn't hurt, to say the least.
+        """Ensures proper resource release prior to garbage-collecting class instance."""
+
+        # Closes the port before deleting the class instance. Not strictly required, but helpful to ensure resources
+        # are released
         self._port.close()
 
     def __repr__(self) -> str:
-        if isinstance(self._port, serial.Serial):
-            repr_message = (
-                f"SerializedTransferProtocol(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
-                f"{self._crc_processor.polynomial}, initial_crc_value={self._crc_processor.initial_crc_value}, "
-                f"final_xor_value={self._crc_processor.final_xor_value}, crc_byte_length="
-                f"{self._crc_processor.crc_byte_length} start_byte={self._start_byte}, delimiter_byte="
-                f"{self._delimiter_byte}, timeout={self._timeout} us, allow_start_byte_errors="
-                f"{self._allow_start_byte_errors}, maximum_tx_payload_size = {self._max_tx_payload_size}, "
+        """Returns a string representation of the SerialTransportLayer class instance."""
+        if isinstance(self._port, Serial):
+            representation_string = (
+                f"SerialTransportLayer(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
+                f"{self._crc_processor.polynomial}, start_byte={self._start_byte}, "
+                f"delimiter_byte={self._delimiter_byte}, timeout={self._timeout} us, "
+                f"maximum_tx_payload_size = {self._max_tx_payload_size}, "
                 f"maximum_rx_payload_size={self._max_rx_payload_size})"
             )
         else:
-            repr_message = (
-                f"SerializedTransferProtocol(port & baudrate=MOCKED, polynomial={self._crc_processor.polynomial}, "
-                f"initial_crc_value={self._crc_processor.initial_crc_value}, final_xor_value="
-                f"{self._crc_processor.final_xor_value}, crc_byte_length={self._crc_processor.crc_byte_length}, "
+            representation_string = (
+                f"SerialTransportLayer(port & baudrate=MOCKED, polynomial={self._crc_processor.polynomial}, "
                 f"start_byte={self._start_byte}, delimiter_byte={self._delimiter_byte}, timeout={self._timeout} us, "
-                f"allow_start_byte_errors={self._allow_start_byte_errors}, maximum_tx_payload_size="
-                f"{self._max_tx_payload_size}, maximum_rx_payload_size={self._max_rx_payload_size})"
+                f"maximum_tx_payload_size = {self._max_tx_payload_size}, "
+                f"maximum_rx_payload_size={self._max_rx_payload_size})"
             )
-        return textwrap.fill(repr_message, width=120, break_long_words=False, break_on_hyphens=False)
+        return representation_string
 
     @staticmethod
-    def list_available_ports() -> None:
-        """Surveys and prints the information about each serial port discoverable using pySerial library.
+    def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
+        """Provides the information about each serial port addressable through the pySerial library.
 
-        Notes:
-            You can use the 'name' of any such port as the 'port' argument for the initializer function of this class.
+        This method is intended to be used for discovering and selecting the serial port 'names' to use with this
+        class.
+
+        Returns:
+            A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
+            port.
+
         """
         # Gets the list of port objects visible to the pySerial library.
         available_ports = list_ports.comports()
 
         # Prints the information about each port using terminal.
-        print(f"Available serial ports:")
-        for num, port in enumerate(available_ports, start=1):
-            print(
-                f"{num}. Name: '{port.name}', Device: '{port.device}', PID:{port.pid}, Description: "
-                f"'{port.description}'"
-            )
+        information_list = [
+            {"Name": port.name, "Device": port.device, "PID": port.pid, "Description": port.description}
+            for port in available_ports
+        ]
+
+        return tuple(information_list)
 
     @property
     def available(self) -> bool:
         """Returns True if enough bytes are available from the serial port to justify attempting to receive a packet."""
 
-        # in_waiting is twice as fast as using the read() method. The outcome of this check is capped at the minimum
-        # packet size to minimize the chance of having to call read() more than once. It also factors in any
-        # leftover bytes to ensure there is no stalling when more data than necessary, so this will reliably return
-        # 'true' when there is a high-0enough chance to receive a packet.
+        # in_waiting is twice as fast as using the read() method. The 'true' outcome of this check is capped at the
+        # minimum packet size to minimize the chance of having to call read() more than once. The method counts the
+        # bytes available for reading and left over from previous packet parsing operations.
         return self._port.in_waiting + len(self._leftover_bytes) > self._minimum_packet_size
 
     @property
     def transmission_buffer(self) -> np.ndarray:
-        """Returns a copy of the private _transmission_buffer numpy array."""
+        """Returns a copy of the transmission buffer numpy array.
+
+        This buffer stores the 'staged' data to be sent to the Microcontroller. Use this method to safely access the
+        contents of the buffer in a snapshot fashion.
+        """
         return self._transmission_buffer.copy()
 
     @property
     def reception_buffer(self) -> np.ndarray:
-        """Returns a copy of the private _reception_buffer numpy array."""
+        """Returns a copy of the reception buffer numpy array.
+
+        This buffer stores the decoded data received from the Microcontroller. Use this method to safely access the
+        contents of the buffer in a snapshot fashion.
+        """
         return self._reception_buffer.copy()
 
     @property
     def bytes_in_transmission_buffer(self) -> int:
-        """Returns the number of payload bytes stored inside the private _transmission_buffer array."""
+        """Returns the number of payload bytes stored inside the transmission_buffer."""
         return self._bytes_in_transmission_buffer
 
     @property
     def bytes_in_reception_buffer(self) -> int:
-        """Returns the number of payload bytes stored inside the private _reception_buffer array."""
+        """Returns the number of payload bytes stored inside the reception_buffer."""
         return self._bytes_in_reception_buffer
 
     def reset_transmission_buffer(self):
-        """Resets the _bytes_in_transmission_buffer to 0. Note, does not physically alter the buffer in any way and
-        only resets the _bytes_in_transmission_buffer tracker."""
+        """Resets the transmission buffer bytes tracker to 0.
+
+        This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
+        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        efficiency and runtime speed.
+        """
         self._bytes_in_transmission_buffer = 0
 
     def reset_reception_buffer(self):
-        """Resets the _bytes_in_reception_buffer to 0. Note, does not physically alter the buffer in any way and
-        only resets the _bytes_in_reception_buffer tracker."""
+        """Resets the reception buffer bytes tracker to 0.
+
+        This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
+        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        efficiency and runtime speed.
+        """
         self._bytes_in_reception_buffer = 0
 
     def write_data(

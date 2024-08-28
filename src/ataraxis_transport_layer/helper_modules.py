@@ -1,16 +1,16 @@
-"""This module contains the low-level helper classes that support TransportLayer class runtime.
+"""This module contains the low-level helper classes that support the runtime of some TransportLayer family classes.
 
-This includes the CRCProcessor and COBSProcessor classes used to serialize and deserialize transmitted payloads and
-SerialMock class used to test the TransportLayer class.
+This module includes the CRCProcessor and COBSProcessor classes used to serialize and deserialize transmitted payloads
+and SerialMock class used to test the SerialTransportLayer class.
 
 All methods of CRCProcessor and COBSProcessor classes are implemented using Numba and Numpy to optimize runtime
-execution speed. This allows compiling the classes to machine-code whenever they are first called by the TransportLayer
+execution speed. This allows compiling the classes to machine-code whenever they are first called by any TransportLayer
 class and achieves execution speeds that are at least 5 times as fast as the equivalent pure-python implementation.
 For user convenience, these classes are wrapped into pure-python API, which adds a minor overhead, but simplifies
 working with the wrapped classes.
 
 The SerialMock class is a pure-python class whose main job is to 'overload' the methods of the pySerial's Serial
-class, so that TransportLayer can be tested without a properly configured Microcontroller. It has no
+class, so that SerialTransportLayer can be tested without a properly configured Microcontroller. It has no
 practical use outside of this specific role.
 """
 
@@ -73,7 +73,7 @@ class _COBSProcessor:
         self.maximum_packet_size: int = 256
         self.minimum_packet_size: int = 3
 
-        # Status codes. Follow a similar approach to TransportLayer implemented in ataraxis-micro-controller
+        # Status codes. Follow a similar approach to TransportLayer class implemented in ataraxis-micro-controller
         # library, where the codes are unique across the entire library and stay in the range of 11 to 50.
         self.standby: int = 11
         self.payload_too_small_error: int = 12
@@ -1198,16 +1198,17 @@ class CRCProcessor:
 
 
 class SerialMock:
-    """Simulates the runtime behavior of pySerial.Serial class methods, which is used to test the TransportLayer class.
+    """Simulates the runtime behavior of pySerial.Serial class methods, which is used to test the SerialTransportLayer
+    class.
 
     This class only provides the methods that are either helpful for testing (like resetting the Mock class buffers)
-    or are directly used by the TransportLayer class (reading and writing data, opening / closing the port,
-    etc.). Any Serial class method not used by the TransportLayer class is not included in this class.
+    or are directly used by the SerialTransportLayer class (reading and writing data, opening / closing the port,
+    etc.). Any Serial class method not used by the SerialTransportLayer class is not included in this class.
 
     Notes:
-        This class is used in place of the actual Serial class to enable unit-testing of TransportLayer class methods
-        without the confounding of a third-party library. Additionally, it simplifies testing, as it removes the need
-        for a working serial communication.
+        This class is used in place of the actual Serial class to enable unit-testing of SerialTransportLayer class
+        methods without the confounding of a third-party library. Additionally, it simplifies testing, as it removes
+        the need for a working serial communication.
 
         Also, unlike its Serial class prototype, this class exposes the rx_ and tx_ buffers while using similar logic
         for adding data to the buffers. This makes it possible to verify the outcome of a would-be data transmission or
