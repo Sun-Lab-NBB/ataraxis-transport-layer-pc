@@ -2,11 +2,11 @@
 
 import re
 import textwrap
-from nis import match
 
 import numpy as np
 import pytest
-from src.ataraxis_transport_layer.helper_modules import (
+
+from ataraxis_transport_layer.helper_modules import (
     SerialMock,
     CRCProcessor,
     COBSProcessor,
@@ -25,11 +25,7 @@ def error_format(message: str) -> str:
     Returns:
         Formatted and escape message that can be used as the 'match' argument of pytest.raises() method.
     """
-    return re.escape(
-        textwrap.fill(
-            message, width=120, break_long_words=False, break_on_hyphens=False
-        )
-    )
+    return re.escape(textwrap.fill(message, width=120, break_long_words=False, break_on_hyphens=False))
 
 
 @pytest.mark.parametrize(
@@ -105,7 +101,7 @@ def test_cobs_processor_errors():
     message = (
         f"Failed to encode the payload using COBS scheme. The size of the input payload "
         f"({empty_payload.size}) is too small. A minimum size of {processor._processor.minimum_payload_size} elements "
-        f"(bytes) is required. CODE: {processor._processor.status}."
+        f"(bytes) is required. CODE: {processor._processor.payload_too_small_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(empty_payload, delimiter)
@@ -115,7 +111,7 @@ def test_cobs_processor_errors():
     message = (
         f"Failed to encode the payload using COBS scheme. The size of the input payload ({large_payload.size}) is "
         f"too large. A maximum size of {processor._processor.maximum_payload_size} elements (bytes) is required. "
-        f"CODE: {processor._processor.status}."
+        f"CODE: {processor._processor.payload_too_large_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(large_payload, delimiter)
@@ -125,7 +121,7 @@ def test_cobs_processor_errors():
     message = (
         f"Failed to encode the payload using COBS scheme. The datatype of the input payload "
         f"({wrong_dtype_payload.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as "
-        f"payload inputs. CODE: {processor._processor.status}."
+        f"payload inputs. CODE: {processor._processor.invalid_payload_datatype_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(wrong_dtype_payload, delimiter)
@@ -157,7 +153,7 @@ def test_cobs_processor_errors():
     message = (
         f"Failed to decode payload using COBS scheme. The size of the input packet ({small_packet.size}) is too "
         f"small. A minimum size of {processor._processor.minimum_packet_size} elements (bytes) is required. "
-        f"CODE: {processor._processor.status}."
+        f"CODE: {processor._processor.packet_too_small_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(small_packet, delimiter)
@@ -167,7 +163,7 @@ def test_cobs_processor_errors():
     message = (
         f"Failed to decode payload using COBS scheme. The size of the input packet ({large_packet.size}) is too "
         f"large. A maximum size of {processor._processor.maximum_packet_size} elements (bytes) is required. "
-        f"CODE: {processor._processor.status}."
+        f"CODE: {processor._processor.packet_too_large_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(large_packet, delimiter)
@@ -177,7 +173,7 @@ def test_cobs_processor_errors():
     message = (
         f"Failed to decode payload using COBS scheme. The datatype of the input packet ({wrong_dtype_packet.dtype}) is "
         f"not supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
-        f"CODE: {processor._processor.status}."
+        f"CODE: {processor._processor.invalid_packet_datatype_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(wrong_dtype_packet, delimiter)
@@ -187,7 +183,7 @@ def test_cobs_processor_errors():
     corrupted_packet = np.array([4, 1, 2, 3, 0, 5, 0], dtype=np.uint8)
     message = (
         f"Failed to decode payload using COBS scheme. Found unencoded delimiter before reaching the end of "
-        f"the packet. Packet is likely corrupted. CODE: {processor._processor.status}."
+        f"the packet. Packet is likely corrupted. CODE: {processor._processor.delimiter_found_too_early_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet, delimiter)
@@ -199,14 +195,14 @@ def test_cobs_processor_errors():
         f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter"
         f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
         f"because the decoding does not end at the final index of the packet. Packet is likely "
-        f"corrupted. CODE: {processor._processor.status}."
+        f"corrupted. CODE: {processor._processor.delimiter_not_found_error}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet, delimiter)
 
 
 def test_crc_processor_generate_table_crc_8():
-    """Verifies that the generate_crc_table() method of the CRCProcessor class works for CRC8 polynomials."""
+    """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC8 polynomials."""
     # Defines crc-8 polynomial parameters and test values
     polynomial = np.uint8(0x07)
     initial_crc_value = np.uint8(0x00)
@@ -478,13 +474,11 @@ def test_crc_processor_generate_table_crc_8():
     )
 
     # Verifies that the class generates the expected lookup table for the crc_8 polynomial
-    assert np.array_equal(
-        crc_processor.crc_table, np.array(expected_array, dtype=np.uint8)
-    )
+    assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint8))
 
 
 def test_crc_processor_generate_table_crc_16():
-    """Verifies that the generate_crc_table() method of the CRCProcessor class works for CRC16 polynomials."""
+    """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC16 polynomials."""
     # Defines crc-16 polynomial parameters and test values
     polynomial = np.uint16(0x1021)
     initial_crc_value = np.uint16(0xFFFF)
@@ -756,13 +750,11 @@ def test_crc_processor_generate_table_crc_16():
     )
 
     # Verifies that the class generates the expected lookup table for the crc_16 polynomial
-    assert np.array_equal(
-        crc_processor.crc_table, np.array(expected_array, dtype=np.uint16)
-    )
+    assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint16))
 
 
 def test_crc_processor_generate_table_crc_32():
-    """Verifies that the generate_crc_table() method of the CRCProcessor class works for CRC32 polynomials."""
+    """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC32 polynomials."""
     # Defines crc-32 polynomial parameters and test values
     polynomial = np.uint32(0x000000AF)
     initial_crc_value = np.uint32(0x00000000)
@@ -1034,59 +1026,75 @@ def test_crc_processor_generate_table_crc_32():
     )
 
     # Verifies that the class generates the expected lookup table for the crc_32 polynomial
-    assert np.array_equal(
-        crc_processor.crc_table, np.array(expected_array, dtype=np.uint32)
-    )
+    assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint32))
 
 
-def test_crc_processor():
-    """Tests the functioning of the CRCProcessor class calculate_packet_crc_checksum(), convert_crc_checksum_to_bytes()
-    and convert_crc_checksum_to_integer() methods. All tests are using CRC16 polynomial.
+@pytest.mark.parametrize(
+    "polynomial,initial_crc,final_xor,test_data,expected_checksum,expected_bytes,crc_type",
+    [
+        # CRC8
+        (
+            0x07,  # polynomial
+            0x00,  # initial_crc
+            0x00,  # final_xor
+            np.array([0x01, 0x02, 0x03, 0x04, 0x05, 0x15], dtype=np.uint8),  # test_data
+            np.uint8(0x56),  # expected_checksum
+            np.array([0x56], dtype=np.uint8),  # expected_bytes
+            np.uint8,  # crc_type
+        ),
+        # CRC16
+        (
+            0x1021,  # polynomial
+            0xFFFF,  # initial_crc
+            0x0000,  # final_xor
+            np.array([0x01, 0x02, 0x03, 0x04, 0x05, 0x15], dtype=np.uint8),  # test_data
+            np.uint16(0xF54E),  # expected_checksum
+            np.array([0xF5, 0x4E], dtype=np.uint8),  # expected_bytes
+            np.uint16,  # crc_type
+        ),
+        # CRC32
+        (
+            0x000000AF,  # polynomial
+            0x00000000,  # initial_crc
+            0x00000000,  # final_xor
+            np.array([0x01, 0x02, 0x03, 0x04, 0x05, 0x15], dtype=np.uint8),  # test_data
+            np.uint32(0xF3FAC6E6),  # expected_checksum
+            np.array([0xF3, 0xFA, 0xC6, 0xE6], dtype=np.uint8),  # expected_bytes
+            np.uint32,  # crc_type
+        ),
+    ],
+)
+def test_crc_processor(polynomial, initial_crc, final_xor, test_data, expected_checksum, expected_bytes, crc_type):
+    """Verifies the functioning of the CRCProcessor class calculate_crc_checksum(),
+    convert_checksum_to_bytes(), and convert_bytes_to_checksum() methods for CRC8, CRC16, and CRC32 polynomials.
     """
 
-    # Define test data
-    test_data_1 = np.array([0x01, 0x02, 0x03, 0x04, 0x05, 0x15], dtype=np.uint8)
-    test_data_2 = np.array(
-        [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80], dtype=np.uint8
-    )
-    test_data_3 = np.array([0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA], dtype=np.uint8)
+    # Instantiates the CRCProcessor with the given parameters
+    crc_processor = CRCProcessor(crc_type(polynomial), crc_type(initial_crc), crc_type(final_xor))
 
-    # Instantiates tested class
-    polynomial = np.uint16(0x1021)
-    initial_crc_value = np.uint16(0xFFFF)
-    final_xor_value = np.uint16(0x0000)
-    crc_processor = CRCProcessor(polynomial, initial_crc_value, final_xor_value)
+    # Tests checksum calculation
+    checksum = crc_processor.calculate_crc_checksum(test_data)
+    assert checksum == expected_checksum
 
-    # Tests checksum calculation using 3 data seeds:
-    # Test 1
-    checksum = crc_processor.calculate_crc_checksum(test_data_1)
-    assert checksum == np.uint16(0xF54E)
+    # Tests checksum to bytes conversion
+    checksum_bytes = crc_processor.convert_checksum_to_bytes(checksum)
+    assert np.array_equal(checksum_bytes, expected_bytes)
 
-    # Test 2
-    checksum = crc_processor.calculate_crc_checksum(test_data_2)
-    assert checksum == np.uint16(0x2B19)
+    # Tests bytes to checksum conversion
+    reconstructed_checksum = crc_processor.convert_bytes_to_checksum(checksum_bytes)
+    assert reconstructed_checksum == expected_checksum
 
-    # Test 3
-    checksum = crc_processor.calculate_crc_checksum(test_data_3)
-    assert checksum == np.uint16(0xBA4F)
-    assert isinstance(checksum, np.uint16)
-
-    # Tests checksum integer-to-byte array conversion
-    checksum = crc_processor.calculate_crc_checksum(test_data_1)
-    checksum_buffer = crc_processor.convert_checksum_to_bytes(checksum)
-    assert np.array_equal(checksum_buffer, np.array([245, 78], dtype=np.uint8))
-    assert isinstance(checksum_buffer, np.ndarray)
-
-    # Tests the checksum byte array to integer conversion (extraction from buffer)
-    checksum = crc_processor.convert_bytes_to_checksum(checksum_buffer)
-    assert checksum == np.uint16(0xF54E)
-    assert isinstance(checksum, np.uint16)
+    # Verifies output datatypes
+    assert isinstance(checksum, (np.uint8, np.uint16, np.uint32))
+    assert isinstance(checksum_bytes, np.ndarray)
+    assert isinstance(reconstructed_checksum, (np.uint8, np.uint16, np.uint32))
 
 
 def test_crc_processor_errors():
-    """Tests error handling of calculate_packet_crc_checksum(), convert_crc_checksum_to_bytes() and
-    convert_crc_checksum_to_integer() methods of the COBSProcessor class. Also test COBSProcessor initialization errors.
+    """Tests error handling behavior of COBSProcessor class initialization, calculate_packet_crc_checksum(),
+    convert_crc_checksum_to_bytes() and convert_crc_checksum_to_integer() methods.
     """
+
     # Instantiates tested class
     polynomial = np.uint16(0x1021)
     initial_crc_value = np.uint16(0xFFFF)
@@ -1097,184 +1105,117 @@ def test_crc_processor_errors():
     # type errors:
     # Polynomial
     invalid_argument_type = None
-    error_message = (
-        f"Unsupported 'polynomial' argument type '{type(invalid_argument_type)}' encountered when instantiating "
-        f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
+    message = (
+        f"Unable to initialize the CRCProcessor class. A numpy uint8, uint16 or uint32 scalar expected as "
+        f"'polynomial' argument, but encountered {invalid_argument_type} of type "
+        f"{type(invalid_argument_type).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = CRCProcessor(invalid_argument_type, initial_crc_value, final_xor_value)
 
     # Initial CRC Value
     invalid_argument_type = None
-    error_message = (
-        f"Unsupported 'initial_crc_value' argument type {type(invalid_argument_type)} encountered when "
-        f"instantiating CRCProcessor class. Use numpy uint8, uint16, or uint32."
+    message = (
+        f"Unable to initialize the CRCProcessor class. A numpy uint8, uint16 or uint32 scalar expected as "
+        f"'initial_crc_value' argument, but encountered {invalid_argument_type} of type "
+        f"{type(invalid_argument_type).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = CRCProcessor(polynomial, invalid_argument_type, final_xor_value)
 
     # Final XOR Value
     invalid_argument_type = None
-    error_message = (
-        f"Unsupported 'final_xor_value' argument type {type(invalid_argument_type)} encountered when instantiating "
-        f"CRCProcessor class. Use numpy uint8, uint16, or uint32."
+    message = (
+        f"Unable to initialize the CRCProcessor class. A numpy uint8, uint16 or uint32 scalar expected as "
+        f"'final_xor_value' argument, but encountered {invalid_argument_type} of "
+        f"type {type(invalid_argument_type).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = CRCProcessor(polynomial, initial_crc_value, invalid_argument_type)
 
     # Verifies that using valid, but non-matching types for the class initialization arguments correctly triggers
     # the appropriate type error:
-    non_matching_argument = np.uint32(
-        0xFFFF
-    )  # Valid initial value and type, but does not match polynomial
-    error_message = (
-        "All arguments ('polynomial', 'initial_crc_value', 'final_xor_value') must have the same type when "
-        "instantiating CRCProcessor class."
+    non_matching_argument = np.uint32(0xFFFF)  # Valid initial value and type, but does not match polynomial
+    message = (
+        "Unable to initialize the CRCProcessor class. All arguments "
+        "('polynomial', 'initial_crc_value', 'final_xor_value') must have the same data type. Instead, "
+        f"encountered ({polynomial.dtype}, {non_matching_argument.dtype}, {final_xor_value.dtype})"
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = CRCProcessor(polynomial, non_matching_argument, final_xor_value)
 
     # Tests invalid buffer input type checksum calculation error
     invalid_input = None
-    error_message = (
-        f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(invalid_input)}' when calculating the "
-        f"CRC checksum for the input buffer."
+    message = (
+        f"Unable to calculate the CRC checksum for the input buffer. A uint8 numpy ndarray expected as "
+        f"'buffer' argument, but instead encountered {invalid_input} of type {type(invalid_input).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = crc_processor.calculate_crc_checksum(invalid_input)
 
     # Tests invalid buffer datatype checksum calculation error
     invalid_buffer_type = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint16)
-    error_message = (
-        f"The datatype of the input buffer to be CRC-checksummed ({invalid_buffer_type.dtype}) is not supported. "
-        f"Only uint8 (byte) numpy arrays are currently supported as buffer inputs. CODE: 52."
+    message = (
+        f"CRC checksum calculation failed. The datatype of the input buffer ({invalid_buffer_type.dtype}) "
+        f"is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer inputs. "
+        f"CODE: {crc_processor._processor.calculate_checksum_buffer_datatype_error}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = crc_processor.calculate_crc_checksum(invalid_buffer_type)
 
     # Tests invalid crc_checksum input type checksum to byte array conversion error
     invalid_input = None
-    error_message = (
-        f"A uint8, uint16 or uint32 crc_checksum expected, but instead encountered '{type(invalid_input)}', "
-        f"when converting the unsigned integer CRC checksum to an array of bytes."
+    message = (
+        f"Unable to convert the CRC checksum scalar to an array of bytes. A uint8, uint16 or uint32 "
+        f"value expected as 'crc_checksum' argument, but instead encountered {invalid_input} of type "
+        f"{type(invalid_input).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = crc_processor.convert_checksum_to_bytes(invalid_input)
 
     # Tests invalid buffer input type checksum to integer conversion error
     invalid_input = None
-    error_message = (
-        f"A uint8 numpy ndarray buffer expected, but instead encountered '{type(invalid_input)}' type when converting "
-        f"the array of CRC checksum bytes to the unsigned integer value."
+    message = (
+        f"Unable to convert the array of bytes to the CRC checksum. A uint8 numpy ndarray expected as 'buffer' "
+        f"argument, but instead encountered {invalid_input} of type {type(invalid_input).__name__}."
     )
-    with pytest.raises(
-        TypeError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = crc_processor.convert_bytes_to_checksum(invalid_input)
 
     # Tests invalid buffer dtype checksum to integer conversion error
     invalid_buffer = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint16)
-    error_message = (
-        f"The datatype of the input buffer to be converted to the unsigned integer CRC checksum "
+    message = (
+        f"Bytes to CRC checksum conversion failed. The datatype of the input buffer to be converted "
         f"({invalid_buffer.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer "
-        f"inputs. CODE: 55."
+        f"inputs. CODE: {crc_processor._processor.convert_checksum_invalid_buffer_datatype_error}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = crc_processor.convert_bytes_to_checksum(invalid_buffer)
 
     # Tests invalid buffer size checksum to integer conversion error
-    invalid_buffer = np.array(
-        [0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint8
-    )  # Correct dtype this time
-    error_message = (
-        f"The byte-size of the input buffer to be converted to the unsigned integer CRC checksum "
+    invalid_buffer = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint8)  # Correct dtype this time
+    message = (
+        f"Bytes to CRC checksum conversion failed. The byte-size of the input buffer to be converted "
         f"({invalid_buffer.size}) does not match the size required to represent the specified checksum datatype "
-        f"({crc_processor.crc_byte_length}). CODE: 56."
+        f"({crc_processor._processor.crc_byte_length}). "
+        f"CODE: {crc_processor._processor.convert_checksum_invalid_buffer_size_error}."
     )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            textwrap.fill(
-                error_message, width=120, break_long_words=False, break_on_hyphens=False
-            )
-        ),
-    ):
+    with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         _ = crc_processor.convert_bytes_to_checksum(invalid_buffer)
 
 
 def test_serial_mock():
-    """Jointly tests the successful and error-handling functioning of all SerialMock class methods."""
+    """Verifies the functioning and error-handling behavior of all SerialMock class methods."""
 
     # Creates an instance of SerialMock to test
     mock_serial = SerialMock()

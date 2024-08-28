@@ -92,7 +92,7 @@ dependencies:
   - mypy_extensions=1.0.0=pyha770c72_0
   - nh3=0.2.18=py312h68c23d6_0
   - numba=0.60.0=py312hcccf92d_0
-  - numpy=2.0.1=py312h49bc9c5_0
+  - numpy=2.0.2=py312h49bc9c5_0
   - openssl=3.3.1=h2466b09_3
   - packaging=24.1=pyhd8ed1ab_0
   - pathspec=0.12.1=pyhd8ed1ab_0
@@ -159,10 +159,10 @@ dependencies:
   - tox=4.18.0=pyhd8ed1ab_0
   - tqdm=4.66.5=pyhd8ed1ab_0
   - trove-classifiers=2024.7.2=pyhd8ed1ab_0
-  - truststore=0.8.0=pyhd8ed1ab_0
+  - truststore=0.9.2=pyhd8ed1ab_0
   - twine=5.1.1=pyhd8ed1ab_0
   - typing_extensions=4.12.2=pyha770c72_0
-  - tzdata=2024a=h0c530f3_0
+  - tzdata=2024a=h8827d51_1
   - ucrt=10.0.22621.0=h57928b3_0
   - urllib3=2.2.2=pyhd8ed1ab_1
   - vc=14.3=h8a93ad2_20
@@ -174,7 +174,7 @@ dependencies:
   - xz=5.2.6=h8d14728_0
   - yaml=0.2.5=h8ffe710_2
   - yaml-cpp=0.8.0=h63175ca_0
-  - zipp=3.20.0=pyhd8ed1ab_0
+  - zipp=3.20.1=pyhd8ed1ab_0
   - zstandard=0.23.0=py312h7606c53_0
   - zstd=1.5.6=h0ea2cb4_0
   - pip:
@@ -187,5 +187,6 @@ dependencies:
       - loguru==0.7.2
       - pyproject-hooks==1.1.0
       - tox-uv==1.11.2
+      - types-pyserial==3.5.0.20240826
       - uv==0.3.4
       - win32-setctime==1.1.0

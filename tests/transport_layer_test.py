@@ -10,12 +10,13 @@ from dataclasses import dataclass
 
 import numpy as np
 import pytest
-from src.ataraxis_transport_layer.helper_modules import (
+
+from ataraxis_transport_layer.helper_modules import (
     SerialMock,
     CRCProcessor,
     COBSProcessor,
 )
-from src.ataraxis_transport_layer.transport_layer import (
+from ataraxis_transport_layer.transport_layer import (
     TransportLayer,
 )
 

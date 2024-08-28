@@ -10,16 +10,19 @@ from typing import Any, Type, Union, Optional
 import textwrap
 from dataclasses import fields, is_dataclass
 
-from numba import njit
+from numba import njit  # type: ignore
 import numpy as np
 from numpy import unsignedinteger
 import serial
 from serial.tools import list_ports
 from ataraxis_time import PrecisionTimer
-from src.ataraxis_transport_layer.helper_modules import (
+
+# noinspection PyProtectedMember
+from ataraxis_transport_layer.helper_modules import (
     SerialMock,
     CRCProcessor,
     COBSProcessor,
+    _CRCProcessor,
     _COBSProcessor,
 )
 
@@ -1010,7 +1013,7 @@ class TransportLayer:
     def _construct_packet(
         payload_buffer: np.ndarray,
         cobs_processor: _COBSProcessor,
-        crc_processor: CRCProcessor.processor,
+        crc_processor: _CRCProcessor,
         payload_size: int,
         delimiter_byte: np.uint8,
         start_byte: np.uint8,
@@ -1062,7 +1065,7 @@ class TransportLayer:
         # Checksum calculation method does not have a unique error-associated return value. If it runs into an error, it
         # returns 0, but 0 can also be returned by a successful checksum calculation. To verify that the checksum
         # calculation was successful, verifies that the processor status matches expected success status.
-        if crc_processor._status != crc_processor.checksum_calculated:
+        if crc_processor.status != crc_processor.checksum_calculated:
             return np.empty(0, dtype=payload_buffer.dtype)
 
         # Converts the integer checksum to a bytes' format (form the crc postamble)
@@ -1727,7 +1730,7 @@ class TransportLayer:
         reception_buffer: np.ndarray,
         packet_size: int,
         cobs_processor: COBSProcessor.processor,
-        crc_processor: CRCProcessor.processor,
+        crc_processor: _CRCProcessor,
         delimiter_byte: np.uint8,
         postamble_size: int | np.unsignedinteger[Any],
     ) -> int:
@@ -1772,7 +1775,7 @@ class TransportLayer:
 
         # Verifies that the checksum calculation method ran successfully. if not, returns 0 to indicate verification
         # failure
-        if crc_processor._status != crc_processor.checksum_calculated:
+        if crc_processor.status != crc_processor.checksum_calculated:
             return 0
 
         # If the checksum is not 0, but the calculator runtime was successful, this indicates that the packet was

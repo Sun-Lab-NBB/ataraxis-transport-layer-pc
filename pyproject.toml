@@ -93,8 +93,6 @@ conda = [
     "mypy>=1,<2",
     "ruff>=0,<1",
 
-    # Types:
-
     # Building
     "hatchling>=1,<2",
 
@@ -115,6 +113,9 @@ noconda =[
 
     # Building
     "build>=1,<2",
+
+    # Types:
+    "types-pyserial>=3,<4",
 
     # Automation
     "ataraxis-automation>=3,<4",
