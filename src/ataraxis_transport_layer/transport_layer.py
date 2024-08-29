@@ -394,61 +394,68 @@ class SerialTransportLayer:
             np.float32,
             np.float64,
             np.bool,
-            NDArray[Any],
+            NDArray[
+                Union[
+                    np.uint8,
+                    np.uint16,
+                    np.uint32,
+                    np.uint64,
+                    np.int8,
+                    np.int16,
+                    np.int32,
+                    np.int64,
+                    np.float32,
+                    np.float64,
+                    np.bool,
+                ]
+            ],
             Type,
         ],
         start_index: Optional[int] = None,
     ) -> int:
-        """Writes (serializes) the input data_object to the class transmission_buffer, starting at the specified
+        """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
         start_index.
 
-        If the object is of valid type and the buffer has enough space to accommodate the object, it will be translated
-        to bytes and written to the buffer at the start_index. All bytes written via this method become part of the
-        payload that will be sent to the Microcontroller when send_data() method is called.
+        If the object is of valid type and the buffer has enough space to accommodate the object data, it will be
+        converted to bytes and written to the buffer at the start_index. All bytes written via this method become part
+        of the payload that will be sent to the Microcontroller when send_data() method is called.
 
         Notes:
-            At this time, the method only works with valid numpy scalars and arrays as well as python dataclasses
+            At this time, the method only works with valid numpy scalars and arrays, as well as python dataclasses
             entirely made out of valid numpy types. Using numpy rather than standard python types increases runtime
             speed (when combined with other optimization steps) and enforces strict typing (critical for Microcontroller
             communication).
 
             The method automatically updates the _bytes_in_transmission_buffer tracker if the write operation
-            increases the total number of payload bytes stored inside the buffer. If the method is used (via a specific
-            start_index input) to overwrite already counted data, it will not update the tracker variable. The only way
-            to reduce the value of the tracker is to call the reset_transmission_buffer() method to reset it to 0 or to
-            call the send_data() method to send the data to the microcontroller, automatically resetting the tracker in
-            the process.
+            increases the total number of payload bytes stored inside the buffer. If the method is used to overwrite
+            previously added, it will not update the tracker variable. The only way to reset the payload size is via
+            calling the appropriate buffer reset method.
 
-            The maximum runtime speed of this method is achieved when writing data as numpy arrays, which is optimized
+            The maximum runtime speed for this method is achieved when writing data as numpy arrays, which is optimized
             to a single write operation. The minimum runtime speed is achieved by writing dataclasses, as it involves
-            slow python looping over dataclass attributes. When writing dataclasses, all attributes will be serialized
-            and written as a consecutive data block to the same portion of the buffer.
+            looping over dataclass attributes. When writing dataclasses, all attributes will be serialized and written
+            as a consecutive data block to the same portion of the buffer.
 
         Args:
             data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
                 Supported numpy types are: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float32, float64,
-                and bool_. Additionally, arrays have to be 1-dimensional and not empty to be supported.
-            start_index: Optional. The index inside the _transmission_buffer (0 to 253) at which to start writing the
+                and bool. Arrays have to be 1-dimensional and not empty to be supported.
+            start_index: Optional. The index inside the transmission buffer (0 to 253) at which to start writing the
                 data. If set to None, the method will automatically use the _bytes_in_transmission_buffer tracker value
-                to append the data to the end of the already written payload. Defaults to None.
+                to append the data to the end of the already written payload
 
         Returns:
-            The index inside the _transmission buffer that immediately follows the last index of the buffer to
+            The index inside the transmission buffer that immediately follows the last index of the buffer to
             which the data was written. This index can be used as the start_index input for chained write operation
-            calls to iteratively and continuously write data to the buffer.
+            calls to iteratively write data to the buffer.
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
             ValueError: Raised if writing the input object is not possible as that would require writing outside the
-                _transmission_buffer boundaries. Also raised when multidimensional or empty numpy arrays are
+                transmission buffer boundaries. Also raised when multidimensional or empty numpy arrays are
                 encountered.
-            RuntimeError: If the error-resolving mechanism based on the value of the end_index is not able to
-                resolve the error code. This should not really occur, so this is more of a static guard to aid
-                developers.
-
         """
 
-        # Pre-initializes the end index tracker.
         end_index = -10  # Initializes to a specific negative value that is not a valid index or runtime error code
 
         # Resolves the start_index input, ensuring it is a valid integer value if start_index is left at the default
@@ -458,18 +465,17 @@ class SerialTransportLayer:
 
         # If the input object is a supported numpy scalar, calls the scalar data writing method.
         if isinstance(data_object, self._accepted_numpy_scalars):
-            end_index = self._write_scalar_data(self._transmission_buffer, data_object, data_object.nbytes, start_index)
+            end_index = self._write_scalar_data(self._transmission_buffer, data_object, start_index)
 
         # If the input object is a numpy array, first ensures that it's datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data writing method.
-        elif isinstance(data_object, np.ndarray):
-            if data_object.dtype in self._accepted_numpy_scalars:
-                end_index = self._write_array_data(self._transmission_buffer, data_object, start_index)
+        elif isinstance(data_object, np.ndarray) and data_object.dtype in self._accepted_numpy_scalars:
+            end_index = self._write_array_data(self._transmission_buffer, data_object, start_index)
 
         # If the input object is a python dataclass, iteratively loops over each field of the class and recursively
         # calls write_data() to write each attribute of the class to the buffer. This should support nested dataclasses
         # if needed. This implementation supports using this function for any dataclass that stores numpy scalars or
-        # arrays, replicating the handling of structures as done in the microcontroller version of this library.
+        # arrays, replicating the behavior of the Microcontroller TransportLayer class.
         elif is_dataclass(data_object):
             # Records the initial index before looping over class attributes
             local_index = start_index
@@ -482,7 +488,7 @@ class SerialTransportLayer:
                 local_index = self.write_data(data_object=data_value, start_index=local_index)
 
                 # If any such call fails for any reason (as signified by the returned index not exceeding the
-                # start_index), breaks the loop to handle the error at the bottom of this method
+                # start_index), breaks the loop to handle the error below
                 if local_index < start_index:
                     break
 
@@ -490,23 +496,15 @@ class SerialTransportLayer:
             # final recorded local_index value
             end_index = local_index
 
-        # Unsupported input error
+        # Unsupported input type error
         else:
-            error_message = (
-                f"Unsupported input data_object type ({type(data_object)}) encountered when writing data "
-                f"to _transmission_buffer. At this time, only the following numpy scalar or array types are "
-                f"supported: {self._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes set to "
-                f"supported numpy scalar or array types is also supported."
+            message = (
+                f"Failed to write the data to the transmission buffer. Encountered an unsupported input data_object "
+                f"type ({type(data_object).__name__}). At this time, only the following numpy scalar or array "
+                f"types are supported: {self._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes "
+                f"set to supported numpy scalar or array types is also supported."
             )
-
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=TypeError)
 
         # If the end_index exceeds the start_index, that means that an appropriate write operation was executed
         # successfully. In that case, updates the _bytes_in_transmission_buffer tracker if necessary and returns the
@@ -514,119 +512,101 @@ class SerialTransportLayer:
         if end_index > start_index:
             # Sets the _bytes_in_transmission_buffer tracker variable to the maximum of its current value and the
             # index that immediately follows the final index of the buffer that was overwritten with he input data.
-            # This only increases the tracker value if write operation increased the size of the payload and also
-            # prevents the tracker value from decreasing.
+            # This only increases the tracker value if write operation increased the size of the payload.
             self._bytes_in_transmission_buffer = max(self._bytes_in_transmission_buffer, end_index)
-
-            return end_index  # Returns the end_index and not the payload size to support chained overwrite operations
+            return end_index  # Returns the end_index to support chained overwrite operations
 
         # If the index is set to code 0, that indicates that the buffer does not have space to accept the written data
         # starting at the start_index.
-        elif end_index == 0:
-            error_message = (
-                f"Insufficient buffer space to write the data to the _transmission_buffer starting at the index "
-                f"'{start_index}'. Specifically, given the data size of '{data_object.nbytes}' bytes, the required "
-                f"buffer size is '{start_index + data_object.nbytes}' bytes, but the available size is "
-                f"'{self._transmission_buffer.size}' bytes."
+        if end_index == 0:
+            message = (
+                f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
+                f"space to write the data starting at the index {start_index}. Specifically, given the data size of "
+                f"{data_object.nbytes} bytes, the required buffer size is {start_index + data_object.nbytes} bytes, "
+                f"but the available size is {self._transmission_buffer.size} bytes."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=ValueError)
 
         # If the index is set to code -1, that indicates that a multidimensional numpy array was provided as input,
         # but only flat arrays are allowed
-        elif end_index == -1:
-            error_message = (
-                f"A multidimensional numpy array with {data_object.ndim} dimensions encountered when writing "
-                f"data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
+        if end_index == -1:
+            message = (
+                f"Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with "
+                f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) "
+                f"arrays are supported."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=ValueError)
 
         # If the index is set to code -2, that indicates that an empty numpy array was provided as input, which does
-        # not make sense and therefore is likely an error. Also, empty arrays are explicitly not valid in C/C++, so
-        # this is also against language rules to provide them with an intention to send that data to microcontroller
+        # not make sense and, therefore, is likely an error. Also, empty arrays are explicitly not valid in C/C++, so
+        # this is also against language rules to provide them with an intention to send that data to Microcontroller
         # running C.
-        elif end_index == -2:
-            error_message = (
-                f"An empty (size 0) numpy array encountered when writing data to _transmission_buffer. Writing empty "
-                f"arrays is not supported."
+        if end_index == -2:
+            message = (
+                f"Failed to write the data to the transmission buffer. Encountered an empty (size 0) numpy array as "
+                f"input data_object. Writing empty arrays is not supported."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=ValueError)
 
         # If the end_index is not resolved properly, catches and raises a runtime error
-        else:
-            error_message = (
-                f"Unknown end_index-communicated error code ({end_index}) encountered when writing data "
-                f"to _transmission_buffer."
-            )
-            raise RuntimeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+        message = (
+            f"Failed to write the data to the transmission buffer. Encountered an unknown error code ({end_index})"
+            f"returned by the writer method."
+        )
+        console.error(message=message, error=RuntimeError)
 
     @staticmethod
     @njit(nogil=True, cache=True)
     def _write_scalar_data(
-        target_buffer: np.ndarray,
-        data_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_],
-        object_size: int,
+        target_buffer: NDArray[np.uint8],
+        scalar_object: Union[
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.bool,
+        ],
         start_index: int,
     ) -> int:
-        """Converts input numpy scalars to byte-sequences and writes them to the _transmission_buffer.
+        """Converts the input numpy scalar to a sequence of bytes and writes it to the transmission buffer at the
+        specified start_index.
 
-        Notes:
-            Uses static integer codes to indicate runtime errors.
+        This method is not designed to be called directly. It should always be called through the write_data() method
+        of the parent class.
 
         Args:
-            target_buffer: The buffer to which the data will be written. This should be the class-specific private
-                _transmission_buffer array.
-            data_object: The scalar numpy object to be written to the _transmission_buffer. Can be any supported numpy
+            target_buffer: The buffer to which the data will be written. This should be the _transmission_buffer array
+                of the caller class.
+            scalar_object: The scalar numpy object to be written to the transmission buffer. Can be any supported numpy
                 scalar type.
-            object_size: The byte-size of the data object to be written. It should be calculated by the wrapper as numba
-                does not know how to use .size attributes of numpy scalar types (see write_data() documentation for more
-                details).
-            start_index: The index inside the _transmission_buffer (0 to 253) at which to start writing the data.
+            start_index: The index inside the transmission buffer (0 to 253) at which to start writing the data.
 
         Returns:
-            The positive index inside the _transmission_buffer that immediately follows the last index of the buffer to
-            which the data was written. Returns 0 if the buffer does not have enough space to accommodate the data
+            The positive index inside the transmission buffer that immediately follows the last index of the buffer to
+            which the data was written. Integer code 0, if the buffer does not have enough space to accommodate the data
             written at the start_index.
         """
 
+        # Converts the input scalar to a byte array. This is mostly so that Numba can work with the data via the
+        # service method calls below. Note, despite the input being scalar, the array object may have multiple elements.
+        array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)  # scalar → array → byte array
+
         # Calculates the required space inside the buffer to store the data inserted at the start_index
-        required_size = start_index + object_size
+        data_size = array_object.size * array_object.itemsize  # Size of each element * the number of elements
+        required_size = start_index + data_size
 
         # If the space to store the data extends outside the available transmission_buffer boundaries, returns 0.
         if required_size > target_buffer.size:
             return 0
 
-        # Writes the scalar data to the buffer. Uses a two-step conversion where the scalar is first cast as an array,
-        # and then the array is used as a buffer from which the bytes representing the data are fed into the
-        # transmission buffer. This allows properly handling any supported numpy scalar byte-size.
-        target_buffer[start_index:required_size] = np.frombuffer(np.array([data_object]), dtype=np.uint8)
+        # Writes the data to the buffer.
+        target_buffer[start_index:required_size] = array_object
 
         # Returns the required_size, which incidentally also matches the index that immediately follows the last index
         # of the buffer that was overwritten with the input data.
@@ -635,45 +615,61 @@ class SerialTransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)
     def _write_array_data(
-        target_buffer: np.ndarray,
-        array_object: np.ndarray,
+        target_buffer: NDArray[np.uint8],
+        array_object: NDArray[
+            Union[
+                np.uint8,
+                np.uint16,
+                np.uint32,
+                np.uint64,
+                np.int8,
+                np.int16,
+                np.int32,
+                np.int64,
+                np.float32,
+                np.float64,
+                np.bool,
+            ]
+        ],
         start_index: int,
     ) -> int:
-        """Converts input numpy arrays to byte-sequences and writes them to the _transmission_buffer.
+        """Converts the input numpy array to a sequence of bytes and writes it to the transmission buffer at the
+        specified start_index.
 
-        Notes:
-            Uses static integer codes to indicate runtime errors.
+        This method is not designed to be called directly. It should always be called through the write_data() method
+        of the parent class.
 
         Args:
-            target_buffer: The buffer to which the data will be written. This should be the class-specific
-                _transmission_buffer array.
+            target_buffer: The buffer to which the data will be written. This should be the _transmission_buffer array
+                of the caller class.
             array_object: The numpy array to be written to the transmission buffer. Currently, the method is designed to
                 only work with one-dimensional arrays with a minimal size of 1 element. The array should be using one
-                of the supported numpy scalar datatypes (see write_data() documentation for more details).
-            start_index: The index inside the _transmission_buffer (0 to 253) at which to start writing the data.
+                of the supported numpy scalar datatypes.
+            start_index: The index inside the transmission buffer (0 to 253) at which to start writing the data.
 
         Returns:
-            The positive index inside the _transmission_buffer that immediately follows the last index of the buffer to
-            which the data was written. Returns 0 if the buffer does not have enough space to accommodate the data
-            written at the start_index. Returns -1 if the input array is not one-dimensional. Returns -2 if the input
-            array is empty.
+            The positive index inside the transmission buffer that immediately follows the last index of the buffer to
+            which the data was written. Integer code 0, if the buffer does not have enough space to accommodate the data
+            written at the start_index. Integer code -1, if the input array object is not one-dimensional.
+            Integer code -2, if the input array object is empty.
         """
+
+        if array_object.ndim != 1:
+            return -1  # Returns -1 if the input array is not one-dimensional.
 
         if array_object.size == 0:
             return -2  # Returns -2 if the input array is empty.
 
-        elif array_object.ndim != 1:
-            return -1  # Returns -1 if the input array is not one-dimensional.
-
         # Calculates the required space inside the buffer to store the data inserted at the start_index
-        data_size = array_object.size * array_object.itemsize  # Size of each element * the number of elements
+        array_data = np.frombuffer(array_object, dtype=np.uint8)  # Serializes to bytes
+        data_size = array_data.size * array_data.itemsize  # Size of each element * the number of elements
         required_size = start_index + data_size
 
         if required_size > target_buffer.size:
             return 0  # Returns 0 if the buffer does not have enough space to accommodate the data
 
         # Writes the array data to the buffer, starting at the start_index and ending just before required_size index
-        target_buffer[start_index:required_size] = np.frombuffer(array_object, dtype=np.uint8)
+        target_buffer[start_index:required_size] = array_data
 
         # Returns the required_size, which incidentally also matches the index that immediately follows the last index
         # of the buffer that was overwritten with the input data.
@@ -682,93 +678,91 @@ class SerialTransportLayer:
     def read_data(
         self,
         data_object: Union[
-            np.unsignedinteger,
-            np.signedinteger,
-            np.floating,
-            np.bool_,
-            np.ndarray,
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.bool,
+            NDArray[
+                Union[
+                    np.uint8,
+                    np.uint16,
+                    np.uint32,
+                    np.uint64,
+                    np.int8,
+                    np.int16,
+                    np.int32,
+                    np.int64,
+                    np.float32,
+                    np.float64,
+                    np.bool,
+                ]
+            ],
             Type,
         ],
         start_index: int = 0,
-    ) -> tuple[
-        Union[
-            np.unsignedinteger,
-            np.signedinteger,
-            np.floating,
-            np.bool_,
-            np.ndarray,
-            Type,
-        ],
-        int,
-    ]:
-        """Recreates the input data_object using the data read from the payloads stored inside _reception_buffer.
+    ) -> tuple[Any, int]:
+        """Recreates the input data_object using the data read from the payload stored inside the class reception
+        buffer.
 
-        This method acts as a wrapper for the private jit-compiled method called to actually read the data. This method
-        uses the input object as a prototype, which supplies the number of bytes to read from the received payload and
-        the datatype to cast the read bytes to. If the payload has sufficiently many bytes available from the
-        start_index to accommodate filling the object, the object will be recreated using the data extracted from the
-        payload.
+        This method uses the input object as a prototype, which supplies the number of bytes to read from the decoded
+        payload received from the Microcontroller and the datatype to cast the read bytes to. If the payload has
+        sufficiently many bytes available from the start_index to accommodate filling the object, the object will be
+        recreated using the data extracted from the payload. Calling this method does not in any way modify the
+        state of the reception buffer, so the same data can be read any number of times.
 
         Notes:
             At this time, the method only works with valid numpy scalars and arrays as well as python dataclasses
             entirely made out of valid numpy types. Using numpy rather than standard python types increases runtime
-            speed (when combined with other optimizations) and enforces strict typing (critical for microcontroller
-            communication, as most controllers use strictly typed C++ / C languages).
+            speed (when combined with other optimizations) and enforces strict typing (critical for Microcontroller
+            communication).
 
-            The method does not change the value of the _bytes_in_reception_buffer tracker, as reading from buffer does
-            not in any way modify the data stored inside the buffer. The only way to change the value of the tracker is
-            to call the reset_reception_buffer() method or receive_data() method.
-
-            Note, the maximum runtime speed of this method is achieved when reading data as numpy arrays, which is
+            The maximum runtime speed of this method is achieved when reading data as numpy arrays, which is
             optimized to a single read operation. The minimum runtime speed is achieved by reading dataclasses, as it
-            involves slow python looping over dataclass attributes. Choose the read format based on your speed and
-            convenience requirements.
-
-            Also, internally, this method converts scalars to a one-element numpy array, as it is faster to use
-            jit-compiled array-based method. This makes arrays the most time-efficient inputs, as it does not
-            involve running scalar-array-scalar conversions.
+            involves looping over dataclass attributes.
 
         Args:
             data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
-                The input object is used as a prototype to determine how many bytes to read from the _reception_buffer
-                and have to be properly initialized. Supported numpy types are: uint8, uint16, uint32, uint64, int8,
-                int16, int32, int64, float32, float64, and bool_. Additionally, arrays have to be 1-dimensional and not
+                The input object is used as a prototype to determine how many bytes to read from the reception buffer
+                and has to be properly initialized. Supported numpy types are: uint8, uint16, uint32, uint64, int8,
+                int16, int32, int64, float32, float64, and bool. Array prototypes have to be 1-dimensional and not
                 empty to be supported.
-            start_index: The index inside the _reception_buffer (0 to 253) from which to start reading the
+            start_index: The index inside the reception buffer (0 to 253) from which to start reading the
                 data_object bytes. Unlike for write_data() method, this value is mandatory.
 
         Returns:
-            A tuple of 2 elements. The first element is the data_object read from the _reception_buffer, which is cast
-            to the appropriate numpy type. When the data_object is a dataclass, the returned object will be the same
-            dataclass instance with all attributes overwritten with read numpy values. The second element is the index
-            that immediately follows the last index that was read from the _reception_buffer during method runtime.
+            A tuple of 2 elements. The first element is the data_object read from the reception buffer, which is cast
+            to the requested datatype. The second element is the index that immediately follows the last index that
+            was read from the _reception_buffer during method runtime.
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
-            ValueError: If the payload stored inside the _reception_buffer does not have the enough bytes
+            ValueError: If the payload stored inside the reception buffer does not have the enough bytes
                 available from the start_index to fill the requested object. Also, if the input object is a
                 multidimensional or empty numpy array.
-            RuntimeError: If the error-resolving mechanism based on the value of the end_index is not able to
-                resolve the error code. This should not really occur, so this is more of a static guard to aid
-                developers.
         """
 
-        # Pre-initializes the end index tracker.
         end_index = -10  # Initializes to a specific negative value that is not a valid index or runtime error code
 
         # If the input object is a supported numpy scalar, converts it to a numpy array and calls the read method.
-        # Converts the returned one-element array back to a scalar numpy type. Due to numba limitations (or, rather,
-        # the unorthodox way it is used here), this is the most efficient available method.
+        # Converts the returned one-element array back to a scalar numpy type. Due to current Numba limitations, this
+        # is the most efficient available method.
         if isinstance(data_object, self._accepted_numpy_scalars):
-            out_object, end_index = self._read_array_data(
+            returned_object, end_index = self._read_array_data(
                 self._reception_buffer,
                 np.array(data_object, dtype=data_object.dtype),
                 start_index,
                 self._bytes_in_reception_buffer,
             )
-            out_object = np.dtype(data_object.dtype).type(out_object.item())
+            out_object = returned_object[0].copy()
 
-        # If the input object is a numpy array, first ensures that it's datatype matches one of the accepted scalar
+        # If the input object is a numpy array, first ensures that its datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data reading method.
         elif isinstance(data_object, np.ndarray):
             if data_object.dtype in self._accepted_numpy_scalars:
@@ -781,7 +775,7 @@ class SerialTransportLayer:
 
         # If the input object is a python dataclass, enters a recursive loop which calls this method for each class
         # attribute. This allows retrieving and overwriting each attribute with the bytes read from the buffer,
-        # simulating how the microcontroller version of this library works for C / C++ structures.
+        # similar to the Microcontroller TransportLayer class.
         elif is_dataclass(data_object):
             # Records the initial index before looping over class attributes
             local_index = start_index
@@ -804,20 +798,13 @@ class SerialTransportLayer:
         # If the input value is not a valid numpy scalar, an array using a valid scalar datatype or a python dataclass,
         # raises TypeError exception.
         else:
-            error_message = (
-                f"Unsupported input data_object type ({type(data_object)}) encountered when reading data "
-                f"from _reception_buffer. At this time, only the following numpy scalar or array types are supported: "
-                f"{self._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes set to supported "
-                f"numpy scalar or array types is also supported."
+            message = (
+                f"Failed to read the data from the reception buffer. Encountered an unsupported input data_object "
+                f"type ({type(data_object).__name__}). At this time, only the following numpy scalar or array types "
+                f"are supported: {self._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes "
+                f"set to supported numpy scalar or array types is also supported."
             )
-            raise TypeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=TypeError)
 
         # If end_index is different from the start_index and no error has been raised, the method runtime was
         # successful, so returns the read data_object and the end_index to caller
@@ -829,105 +816,94 @@ class SerialTransportLayer:
         # If the index is set to code 0, this indicates that the payload did not have sufficient data starting from the
         # start_index to recreate the object.
         elif end_index == 0:
-            error_message = (
-                f"Insufficient payload size to read the data from the _reception_buffer starting at the index "
-                f"'{start_index}'. Specifically, given the object size of '{data_object.nbytes}' bytes, the required "
-                f"payload size is '{start_index + data_object.nbytes}' bytes, but the available size is "
-                f"'{self.bytes_in_reception_buffer}' bytes."
+            message = (
+                f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
+                f"bytes available to fully fill the object starting at the index {start_index}. Specifically, given "
+                f"the object size of {data_object.nbytes} bytes, the required payload size is "
+                f"{start_index + data_object.nbytes} bytes, but the available size is "
+                f"{self.bytes_in_reception_buffer} bytes."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=ValueError)
 
         # If the index is set to code -1, that indicates that a multidimensional numpy array was provided as input,
         # but only flat arrays are allowed.
         elif end_index == -1:
-            error_message = (
-                f"A multidimensional numpy array with {data_object.ndim} dimensions requested when reading "
-                f"data from _reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
+            message = (
+                f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
+                f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) "
+                f"arrays are supported."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=ValueError)
 
         # If the index is set to code -2, that indicates that an empty numpy array was provided as input, which does
         # not make sense and therefore is likely an error.
         elif end_index == -2:
-            error_message = (
-                f"Am empty (size 0) numpy array requested when reading data from _reception_buffer. Reading empty "
-                f"arrays is currently not supported."
+            message = (
+                f"Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+                f"input data_object. Reading empty arrays is not supported."
             )
-            raise ValueError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+            console.error(message=message, error=ValueError)
 
         # If the end_index is not resolved properly, catches and raises a runtime error. This is a static guard to
         # aid developers in discovering errors.
-        else:
-            error_message = (
-                f"Unknown end_index-communicated error code ({end_index}) encountered when reading data "
-                f"from _reception_buffer."
-            )
-            raise RuntimeError(
-                textwrap.fill(
-                    error_message,
-                    width=120,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                )
-            )
+        message = (
+            f"Failed to read the data from the reception buffer. Encountered an unknown error code ({end_index})"
+            f"returned by the reader method."
+        )
+        console.error(message=message, error=RuntimeError)
 
     @staticmethod
     @njit(nogil=True, cache=True)
     def _read_array_data(
-        source_buffer: np.ndarray,
-        array_object: Union[np.unsignedinteger, np.signedinteger, np.floating, np.bool_, np.ndarray],
+        source_buffer: NDArray[np.uint8],
+        array_object: NDArray[
+            Union[
+                np.uint8,
+                np.uint16,
+                np.uint32,
+                np.uint64,
+                np.int8,
+                np.int16,
+                np.int32,
+                np.int64,
+                np.float32,
+                np.float64,
+                np.bool,
+            ]
+        ],
         start_index: int,
         payload_size: int,
-    ) -> tuple[np.ndarray, int]:
-        """Reads the requested array_object from the _reception_buffer.
+    ) -> tuple[NDArray, int]:
+        """Reads the requested array_object from the reception buffer of the caller class.
 
-        Notes:
-            Uses static integer codes to indicate runtime errors.
+        Specifically, the object's data is read as bytes and is converted to an array with the appropriate datatype.
+        This method is not designed to be called directly. It should always be called through the read_data() method
+        of the parent class.
 
         Args:
-            source_buffer: The buffer from which the data will be read. This should be the class-specific
-                _reception_buffer array.
+            source_buffer: The buffer from which the data will be read. This should be the _reception_buffer array
+                of the caller class.
             array_object: The numpy array to be read from the _reception_buffer. Currently, the method is designed to
                 only work with one-dimensional arrays with a minimal size of 1 element. The array should be initialized
-                and should use one of the supported datatypes. It is used as a prototype reconstructed using the data
-                stored inside the buffer.
-            start_index: The index inside the _reception_buffer (0 to 253) at which to start reading the data.
+                and should use one of the supported datatypes. During runtime, the method reconstructs the array using
+                the data read from the source_buffer.
+            start_index: The index inside the reception buffer (0 to 253) at which to start reading the data.
             payload_size: The number of payload bytes stored inside the buffer. This is used to limit the read operation
-                to avoid retrieving data from the uninitialized portion of the buffer.
+                to avoid retrieving data from the uninitialized portion of the buffer. Note, this will frequently be
+                different from the total buffer size.
 
         Returns:
             A two-element tuple. The first element is the numpy array that uses the datatype and size derived from the
-            input array_object and value(s) reconstructed from the source_buffer-read data. The second element is the
-            index that immediately follows the last index that was read during method runtime to support chained read
-            calls. If method runtime fails, returns an empty numpy array as the first element and a static error-code.
-            Uses 0 for error code if the payload does not have enough bytes from the start_index to the end of the
-            payload to fill the array with data. Returns -1 if the input array is not one-dimensional. Returns -2 if the
+            input array_object, which holds the extracted data. The second element is the index that immediately follows
+            the last index that was read during method runtime to support chained read calls. If method runtime fails,
+            returns an empty numpy array as the first element and a static error-code as the second element. Uses
+            integer code 0 if the payload bytes available from start_index are not enough to fill the input array with
+            data. Returns integer code -1 if the input array is not one-dimensional. Returns integer code -2 if the
             input array is empty.
         """
 
-        # Calculates the end index for the read operation (this is based on how many bytes are required to represent the
-        # object and the start_index for the read operation).
+        # Calculates the end index for the read operation. This is based on how many bytes are required to represent the
+        # object and the start_index for the read operation.
         required_size = start_index + array_object.nbytes
 
         # Prevents reading outside the payload boundaries.
@@ -943,7 +919,8 @@ class SerialTransportLayer:
             return np.empty(0, dtype=array_object.dtype), -2
 
         # Generates a new array using the input data_object datatype and a slice of the byte-buffer that corresponds to
-        # the number of bytes necessary to represent the object (also derived from the data_object via .nbytes).
+        # the number of bytes necessary to represent the object. Uses copy to ensure the returned object is not sharing
+        # the buffer with the source_buffer.
         return (
             np.frombuffer(source_buffer[start_index:required_size], dtype=array_object.dtype).copy(),
             required_size,
