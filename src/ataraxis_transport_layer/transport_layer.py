@@ -138,7 +138,7 @@ class SerialTransportLayer:
         Type[np.int64],
         Type[np.float32],
         Type[np.float64],
-        Type[bool],
+        Type[np.bool],
     ] = (
         np.uint8,
         np.uint16,
@@ -177,7 +177,7 @@ class SerialTransportLayer:
                 f"encountered {port} of type {type(port).__name__}."
             )
             console.error(message=message, error=TypeError)
-        if 0 <= baudrate:
+        if baudrate <= 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
                 f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
@@ -195,7 +195,7 @@ class SerialTransportLayer:
                 f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
             )
             console.error(message=message, error=ValueError)
-        if 0 < timeout:
+        if timeout < 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
                 f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
@@ -335,7 +335,7 @@ class SerialTransportLayer:
         return self._port.in_waiting + len(self._leftover_bytes) > self._minimum_packet_size
 
     @property
-    def transmission_buffer(self) -> np.ndarray:
+    def transmission_buffer(self) -> NDArray[np.uint8]:
         """Returns a copy of the transmission buffer numpy array.
 
         This buffer stores the 'staged' data to be sent to the Microcontroller. Use this method to safely access the
@@ -344,7 +344,7 @@ class SerialTransportLayer:
         return self._transmission_buffer.copy()
 
     @property
-    def reception_buffer(self) -> np.ndarray:
+    def reception_buffer(self) -> NDArray[np.uint8]:
         """Returns a copy of the reception buffer numpy array.
 
         This buffer stores the decoded data received from the Microcontroller. Use this method to safely access the
@@ -362,7 +362,7 @@ class SerialTransportLayer:
         """Returns the number of payload bytes stored inside the reception_buffer."""
         return self._bytes_in_reception_buffer
 
-    def reset_transmission_buffer(self):
+    def reset_transmission_buffer(self) -> None:
         """Resets the transmission buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
@@ -371,7 +371,7 @@ class SerialTransportLayer:
         """
         self._bytes_in_transmission_buffer = 0
 
-    def reset_reception_buffer(self):
+    def reset_reception_buffer(self) -> None:
         """Resets the reception buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
@@ -383,29 +383,36 @@ class SerialTransportLayer:
     def write_data(
         self,
         data_object: Union[
-            np.unsignedinteger,
-            np.signedinteger,
-            np.floating,
-            np.bool_,
-            np.ndarray,
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.bool,
+            NDArray[Any],
             Type,
         ],
         start_index: Optional[int] = None,
     ) -> int:
-        """Writes the input data_object to the _transmission_buffer, starting at the specified start_index.
+        """Writes (serializes) the input data_object to the class transmission_buffer, starting at the specified
+        start_index.
 
-        This method acts as a wrapper for specific private methods that are called depending on the input data_object
-        type. If the object is valid and the buffer has enough space to accommodate the object, it will be translated to
-        bytes and written to the buffer at the start_index. All bytes written via this method become part of the payload
-        that will be sent to the microcontroller when send_data() method is called.
+        If the object is of valid type and the buffer has enough space to accommodate the object, it will be translated
+        to bytes and written to the buffer at the start_index. All bytes written via this method become part of the
+        payload that will be sent to the Microcontroller when send_data() method is called.
 
         Notes:
             At this time, the method only works with valid numpy scalars and arrays as well as python dataclasses
             entirely made out of valid numpy types. Using numpy rather than standard python types increases runtime
-            speed (when combined with other optimization steps) and enforces strict typing (critical for microcontroller
-            communication, as most controllers use strictly typed C++ / C languages).
+            speed (when combined with other optimization steps) and enforces strict typing (critical for Microcontroller
+            communication).
 
-            The method automatically updates the local _bytes_in_transmission_buffer tracker if the write operation
+            The method automatically updates the _bytes_in_transmission_buffer tracker if the write operation
             increases the total number of payload bytes stored inside the buffer. If the method is used (via a specific
             start_index input) to overwrite already counted data, it will not update the tracker variable. The only way
             to reduce the value of the tracker is to call the reset_transmission_buffer() method to reset it to 0 or to
@@ -414,10 +421,8 @@ class SerialTransportLayer:
 
             The maximum runtime speed of this method is achieved when writing data as numpy arrays, which is optimized
             to a single write operation. The minimum runtime speed is achieved by writing dataclasses, as it involves
-            slow python looping over dataclass attributes. Choose the input format based on your speed and convenience
-            requirements. When writing dataclasses, all attributes will be serialized and written as a consecutive data
-            block to the same portion of the buffer (which mimics how this is done in the microcontroller library
-            version for C++ structures).
+            slow python looping over dataclass attributes. When writing dataclasses, all attributes will be serialized
+            and written as a consecutive data block to the same portion of the buffer.
 
         Args:
             data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
