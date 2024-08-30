@@ -873,7 +873,7 @@ class SerialTransportLayer:
         ],
         start_index: int,
         payload_size: int,
-    ) -> tuple[NDArray, int]:
+    ) -> tuple[NDArray[Any], int]:
         """Reads the requested array_object from the reception buffer of the caller class.
 
         Specifically, the object's data is read as bytes and is converted to an array with the appropriate datatype.
@@ -927,30 +927,25 @@ class SerialTransportLayer:
         )
 
     def send_data(self) -> bool:
-        """Packages the payload stored in the _transmission_buffer and sends it over the serial port.
+        """Packages the payload stored in the transmission buffer and sends it to the connected Microcontroller over the
+        serial interface.
 
-        This is the central wrapper method that calls various sub-methods as needed. It carries out two distinct steps:
-        Builds a transmission packet using the payload (fast) and writes it to the serial port (slow).
+        Overall, this method carries out two distinct steps. First, it builds a packet using the payload, which is
+        very fast (~3-5 microseconds on a ~5 Ghz CPU). Next, the method sends the constructed packet over the serial
+        interface managed by pySerial library, which is considerably slower (20-40 microseconds).
 
         Notes:
             The constructed packet being sent over the serial port has the following format:
             [START BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
 
-            Packet construction takes between 3 and 5 us, writing the packet takes 24-40 us and cannot really be
-            optimized any further beyond rewriting pySerial and, probably, Windows serial handlers. In the future, other
-            transmission backends, such as MQTT, may be added as this byte-stream format is actually fairy universal.
-
         Returns:
-            True to indicate that the data was sent.
+            True, if the dat was successfully transmitted.
 
         Raises:
-            Exception: Uses bundled COBS and CRC classes to resolve any errors and raise appropriate exceptions if this
-                method runs into an error during its runtime.
-            RuntimeError: If an unexpected error that is not caught by the automated error-resolution mechanism is
-                encountered. Such cases are very unlikely, but the static guard is kept around in case they do occur.
+            ValueError: If the method encounters an error during the packet construction.
         """
 
-        # Constructs the serial packet ot be sent. This is a fast inline aggregation of all packet construction steps,
+        # Constructs the serial packet to be sent. This is a fast inline aggregation of all packet construction steps,
         # using JIT compilation to increase runtime speed. To maximize compilation benefits, it has to access the
         # inner jitclasses instead of using the python COBS and CRC class wrappers.
         packet = self._construct_packet(
@@ -966,7 +961,7 @@ class SerialTransportLayer:
         # the packet over the serial port.
         if packet.size > 0:
             # Calls pySerial write method. This takes 80% of this method's runtime and cannot really be optimized any
-            # further as its speed directly depends on how Windows API handles serial port access.
+            # further as its speed directly depends on how the host OS handles serial port access.
             self._port.write(packet.tobytes())
 
             # Resets the transmission buffer to indicate that the payload was sent and prepare for sending the next
@@ -977,10 +972,9 @@ class SerialTransportLayer:
             return True
 
         # If constructor method returns an empty packet, that means one of the inner methods ran into an error.
-        # Currently, only COBS and CRC classes can run into errors during _construct_packet() runtime (in theory, right
-        # now errors are more or less not possible at all). When that happens, the method re-runs the computations using
-        # non-jit-compiled methods that will find and resolve the error. This is rather slow, but it is not meant to be
-        # executed in the first place, so is considered acceptable to use as a static fallback.
+        # Only COBS and CRC classes can run into errors during _construct_packet() runtime. When this happens, the
+        # method re-runs the computations using non-jit-compiled methods that will find and resolve the error. This is
+        # slow, but if errors have occurred, it is likely that speed is no longer as relevant as error resolution.
         packet = self._cobs_processor.encode_payload(
             payload=self._transmission_buffer[: self._bytes_in_transmission_buffer],
             delimiter=self._delimiter_byte,
@@ -989,67 +983,62 @@ class SerialTransportLayer:
         self._crc_processor.convert_checksum_to_bytes(checksum)
 
         # The steps above SHOULD run into an error. If they did not, there is an unexpected error originating from the
-        # _construct_packet method. In this case, raises a generic RuntimeError to notify the user of the error so that
-        # they manually discover and rectify it.
-        error_message = (
-            "Unexpected error encountered for _construct_packet() method when sending payload data. Re-running all "
-            "COBS and CRC steps used for packet construction in wrapped mode did not reproduce the error. Manual "
-            "error resolution required."
+        # _construct_packet method. In this case, raises a generic RuntimeError to prompt the user to manually
+        # debug the error.
+        message = (
+            "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
+            "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
+            "error. Manual error resolution required."
         )
-        raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
+        console.error(message=message, error=RuntimeError)
 
     @staticmethod
     @njit(nogil=True, cache=True)
     def _construct_packet(
-        payload_buffer: np.ndarray,
+        payload_buffer: NDArray[np.uint8],
         cobs_processor: _COBSProcessor,
         crc_processor: _CRCProcessor,
         payload_size: int,
         delimiter_byte: np.uint8,
         start_byte: np.uint8,
-    ) -> np.ndarray:
+    ) -> NDArray[np.uint8]:
         """Constructs the serial packet using the payload stored inside the input buffer.
 
         This method inlines COBS, CRC and start_byte prepending steps that iteratively transform the payload stored
-        inside the class _transmission_buffer into a serial packet that can be transmitted to the microcontroller.
-        By accessing typically hidden jit-compiled _COBSProcessor and _CRCProcessor classes, this method inlines and
-        compiles all operations into a single method, achieving the highest possible execution speed.
+        inside the caller class transmission buffer into a serial packet that can be transmitted to the
+        Microcontroller. By accessing typically hidden jit-compiled _COBSProcessor and _CRCProcessor classes, this
+        method inlines and compiles all operations into a single method, achieving the highest possible execution speed.
 
         Notes:
-            At the time of writing, there is more or less no way this runtime can fail. The static guards evaluated at
-            class initialization and the way other class methods are implemented basically ensure the method will
-            always work as expected. That said, since this can potentially change in the future, the method does contain
+            At the time of writing, given other static checks performed at class instantiation, it is nearly impossible
+            for ths runtime to fail. That said, since this can potentially change in the future, the method does contain
             a full suite of error handling tools.
 
         Args:
-            payload_buffer: The numpy array that stores the 'raw' payload bytes. This should be automatically set to the
-                _transmission_buffer by the wrapper method.
+            payload_buffer: The numpy array that stores the 'raw' payload bytes. This should be the transmission buffer
+                of the caller class.
             cobs_processor: The inner _COBSProcessor jitclass instance. The instance can be obtained by using
                 '.processor' property of the COBSProcessor wrapper class.
             crc_processor: The inner _CRCProcessor jitclass instance. The instance can be obtained by using '.processor'
                 property of the RCProcessor wrapper class.
-            payload_size: The number of bytes that actually makes up the payload (it is expected that payload only uses
-                a portion of the input payload_buffer).
+            payload_size: The number of bytes that makes up the payload. It is expected that payload only uses
+                a portion of the input payload_buffer.
             delimiter_byte: The byte-value used to mark the end of each transmitted packet's payload region.
             start_byte: The byte-value used to mark the beginning of each transmitted packet.
 
         Returns:
-            A numpy byte array containing the constructed serial packet if the method runtime is successful. Otherwise,
-            returns an empty numpy byte array (size 0) to indicate runtime failure. In this case, it is advised to use
-            the verification methods available through the COBS and CRC processor classes to raise the proper exception
-            based on the error encountered. Note, the verification methods are private and have to be accessed directly.
-
+            The byte numpy array containing the constructed serial packet if the method runtime was successful.
+            Otherwise, returns an empty numpy array (size 0) to indicate runtime failure. To trace the source of the
+            error, it may be necessary to rerun this computation using error-raising wrapper COBS and CRC classes.
         """
         # Extracts the payload from the input buffer and encodes it using COBS scheme.
         packet = cobs_processor.encode_payload(payload_buffer[:payload_size], delimiter_byte)
 
-        # If encoding fails, escalates the error by returning an empty array. For both encoding methods, the presence of
-        # a failure is easily discerned by evaluating whether the packet is an empty array, as all encoding methods
-        # return empty arrays as a sign of failure.
+        # If encoding fails, escalates the error by returning an empty array.
         if packet.size == 0:
             return np.empty(0, dtype=payload_buffer.dtype)
 
-        # Calculates the CRC checksum for the encoded payload and converts it to a bytes' numpy array
+        # Calculates the CRC checksum for the encoded payload
         checksum = crc_processor.calculate_crc_checksum(packet)
 
         # Checksum calculation method does not have a unique error-associated return value. If it runs into an error, it
@@ -1058,16 +1047,18 @@ class SerialTransportLayer:
         if crc_processor.status != crc_processor.checksum_calculated:
             return np.empty(0, dtype=payload_buffer.dtype)
 
-        # Converts the integer checksum to a bytes' format (form the crc postamble)
+        # Converts the integer checksum to a bytes' format (to form the crc postamble)
         postamble = crc_processor.convert_checksum_to_bytes(checksum)
 
         # For bytes' conversion, an empty checksum array indicates failure
         if postamble.size == 0:
             return np.empty(0, dtype=payload_buffer.dtype)
 
-        # Converts the start_byte to a preamble array and concatenates the preamble, the encoded payload, and the
-        # checksum postamble to form the serial packet and returns the constructed packet to the caller.
-        preamble = np.array([start_byte], dtype=np.uint8)
+        # Generates message preamble using start_byte and payload_size.
+        preamble = np.array([start_byte, payload_size], dtype=np.uint8)
+
+        # Concatenates the preamble, the encoded payload, and the checksum postamble to form the serial packet
+        # and returns the constructed packet to the caller.
         combined_array = np.concatenate((preamble, packet, postamble))
         return combined_array
 
@@ -1251,12 +1242,12 @@ class SerialTransportLayer:
         raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
     def _receive_packet(self) -> int:
-        """Attempts to read the serialized packet from the serial port's reception buffer.
+        """Attempts to read the serialized packet from the serial interface reception buffer.
 
-        This is a fairly involved method that calls a jit-compiled parser method to actually parse the bytes read from
-        the serial port buffer into the packet format to be processed further. The method is designed in a way to
-        minimize the number of read() and in_waiting() method calls as they are very costly. The way this method is
-        written should be optimized for the vast majority of cases though.
+        This is a fairly complicated method that calls another jit-compiled method to parse the bytes read from
+        the serial port buffer into the packet format expected by this class. The method is designed to minimize the
+        number of read() and in_waiting() method calls as they are very costly. The way this method is written should
+        be optimized for the vast majority of cases though.
 
         Notes:
             This method uses the _timeout attribute to specify the maximum delay in microseconds(!) between receiving
@@ -1305,8 +1296,8 @@ class SerialTransportLayer:
             total_bytes = len(self._leftover_bytes) + available_bytes
             enough_bytes_available = total_bytes > self._minimum_packet_size
 
-            # If the enough bytes are available if buffer bytes are included, reads and appends them to the end of the
-            # leftover bytes
+            # If enough bytes are available after factoring in the buffered bytes, reads and appends buffered bytes to
+            # the end of the leftover bytes buffer
             if enough_bytes_available:
                 self._leftover_bytes += self._port.read(available_bytes)
 
@@ -1320,8 +1311,8 @@ class SerialTransportLayer:
         if not enough_bytes_available:
             return 101
 
-        # The first call to the parses method, expect to at the very least find the start byte and at best to resolve
-        # the entire packet
+        # Attempts to parse the packet from read bytes. This call expects, as a minium, to find the start byte and,
+        # as a maximum, to resolve the entire packet.
         status, packet_size, remaining_bytes, packet_bytes = self._parse_packet(
             self._leftover_bytes,
             self._start_byte,
@@ -1330,9 +1321,9 @@ class SerialTransportLayer:
             self._allow_start_byte_errors,
         )
 
-        # Resolves parsing pass outcomes.
+        # Resolves parsing result:
         # Packet parsed. Saves the packet to the _reception_buffer and the packet size to the
-        # _bytes_in_reception_buffer tracker (for now)
+        # _bytes_in_reception_buffer tracker.
         if status == 1:
             self._reception_buffer[:packet_size] = packet_bytes
             self._bytes_in_reception_buffer = packet_size
@@ -1341,11 +1332,11 @@ class SerialTransportLayer:
             self._leftover_bytes = remaining_bytes.tobytes()
             return status
 
-        # Status above 2 means an already resolved error or a non-error terminal status. Either the start byte was not
-        # found, or the payload_size was too large (invalid).
-        elif status > 2:
+        # Status above 2 means an already resolved error or a non-error terminal status. Currently, possible causes are:
+        # either the start byte was not found, or the payload_size was too large (invalid).
+        if status > 2:
             # This either completely resets the leftover_bytes tracker or sets them to the number of bytes left after
-            # the terminator code situation was encountered. THis latter case is exclusive to code 104, as encountering
+            # the terminal status cause was encountered. The latter case is exclusive to code 104, as encountering
             # an invalid payload_size may have unprocessed bytes that remain at the time the error scenario is
             # encountered.
             self._leftover_bytes = remaining_bytes.tobytes()
@@ -1517,34 +1508,32 @@ class SerialTransportLayer:
     def _parse_packet(
         read_bytes: bytes,
         start_byte: np.uint8,
-        max_payload_size: int,
+        max_payload_size: np.uint8,
         postamble_size: int | np.unsignedinteger[Any],
         allow_start_byte_errors: bool,
         start_found: bool = False,
         packet_size: int = 0,
-        packet_bytes: np.ndarray = np.empty(0, dtype=np.uint8),
-    ) -> tuple[int, int, np.ndarray, np.ndarray]:
-        """Parses as much of the packet as possible using the input bytes stream.
+        packet_bytes: NDArray[np.uint8] = np.empty(0, dtype=np.uint8),
+    ) -> tuple[int, int, NDArray[np.uint8], NDArray[np.uint8]]:
+        """Parses as much of the packet as possible using the input bytes object.
 
-        This method contains all packet parsing logic and takes in the bytes extracted from the serial port buffer and,
-        as a best case scenario, returns the extracted packet ready for CRC verification and COBS decoding. This method
-        is designed to be called repeatedly until a packet is fully parsed, or until an external timeout guard handled
-        by the _receive_packet() method kicks in to abort the reception. As such, it can recursively work on the same
-        packet across multiple calls. To enable proper call, hierarchy it is essential that this method is called
-        strictly from the _receive_packet() method.
+        This method contains all packet parsing logic and takes in the bytes extracted from the serial port buffer.
+        Running this method may produce a number of outputs, from a fully parsed packet to an empty buffer without
+        a single packet byte. This method is designed to be called repeatedly until a packet is fully parsed, or until
+        an external timeout guard handled by the _receive_packet() method aborts the reception. As such, it can
+        recursively work on the same packet across multiple calls. To enable proper call hierarchy it is essential that
+        this method is called strictly from the _receive_packet() method.
 
         Notes:
-            This method becomes increasingly helpful in use patterns where many bytes are allowed to aggregate in the
-            serial port before being evaluated. Due to JIT compilation this method is very fast, and any execution time
-            loss typically comes from reading the data from the underlying serial port. That step is optimized to read
-            as much data as possible with each read() call, so the more data aggregates before being read, the more
-            efficient is each call to the major receive_data() method.
+            This method becomes significantly more efficient in use patterns where many bytes are allowed to aggregate
+            in the serial port buffer before being evaluated. Due to JIT compilation this method is very fast, and any
+            execution time loss typically comes from reading the data from the underlying serial port.
 
             The returns of this method are designed to support potentially iterative (not recursive) calls to this
-            method. As a minium, the packet may be fully parsed (or definitively fail to be parsed, that is a valid
-            outcome too) with one call, and as a maximum, 3 calls may be necessary.
+            method. As a minium, the packet may be fully resolved (parsed or failed to be parsed) with one call, and,
+            as a maximum, 3 calls may be necessary.
 
-            The method uses static integer codes to communicate its runtimes:
+            The method uses static integer codes to communicate its runtime status:
 
             0 - Not enough bytes read to fully parse the packet. The start byte was found, but payload_size byte was not
             and needs to be read.
@@ -1552,174 +1541,161 @@ class SerialTransportLayer:
             2 - Not enough bytes read to fully parse the packet. The payload_size was resolved, but there were not
             enough bytes to fully parse the packet and more bytes need to be read.
             101 - No start byte found, interpreted as 'no bytes to read' as the class is configured to ignore start
-            byte errors.
-            102 - No start byte found, interpreted as a 'no start byte detected' error case.
+            byte errors. Usually, this situation is caused by communication line noise generating 'noise bytes'.
+            102 - No start byte found, interpreted as a 'no start byte detected' error case. This status is only
+            possible when the class is configured to detect start byte errors.
             104 - Payload_size value is too big (above maximum allowed payload size) error.
 
-            The wrapper method is expected to issue codes 103 and 105 if packet reception stales at payload_size or
-            packet_bytes. All error codes are converted to errors at the highest level, which is the receive_data()
-            method call (just how it is does for the rest of the methods).
+            The _read_packet() method is expected to issue codes 103 and 105 if packet reception stales at
+            payload_size or packet bytes reception. All error codes are converted to errors at the highest level of the
+            call hierarchy, which is the receive_data() method.
 
         Args:
             read_bytes: A bytes() object that stores the bytes read from the serial port. If this is the first call to
-                this method for a given _receive_packet() method runtime, this object would also include any bytes left
+                this method for a given _receive_packet() method runtime, this object may also include any bytes left
                 from the previous _receive_packet() runtime.
-            start_byte: The byte-value sued to mark the beginning of a transmitted packet in the byte-stream. This is
-                used to detect the portion of the stream that encodes the packet.
-            max_payload_size: The maximum size of the payload that can be received. This is set automatically by the
-                parent class and, for PCs, this is capped at 254 bytes.
+            start_byte: The byte-value used to mark the beginning of a transmitted packet in the byte-stream. This is
+                used to detect the portion of the stream that stores the data packet.
+            max_payload_size: The maximum size of the payload, in bytes, that can be received. This value cannot
+                exceed 254 due to COBS limitations.
             postamble_size: The number of bytes needed to store the CRC checksum. This is determined based on the type
-                of the CRC polynomial and provided by the parent class.
+                of the CRC polynomial used by the class.
             allow_start_byte_errors: A boolean flag that determines whether inability to find start_byte should be
-                interpreted as a natural case of having no bytes to read (default, code 101) or as an error (code 102)
-                to be raised to the user. This is also derived from the parent class flag.
-            start_found: Iterative parameter. When this method is called two or more times, this value can be provided
+                interpreted as having no bytes to read (default, code 101) or as an error (code 102).
+            start_found: Iterative argument. When this method is called two or more times, this value can be provided
                 to the method to skip resolving the start byte (detecting packet presence). Specifically, it is used
-                when a call to this method finds the packet, but cannot resolve the packet size. Then, during a second
-                call, start_byte searching step is skipped.
+                when a call to this method finds the start byte, but cannot resolve the packet size. Then, during a
+                second call, start_byte searching step is skipped.
             packet_size: Iterative parameter. When this method is called two or more times, this value can be provided
                 to the method to skip resolving the packet size. Specifically, it is used when a call to this method
-                resolves the packet size, but cannot resolve the packet. Then, a second call to this method is made to
-                resolve the packet and the size is provided as an argument to skip no longer necessary parsing steps.
-            packet_bytes: Iterative parameter. If the method is able to parse some, but not all the packet's bytes,
-                the already parsed bytes can be fed back into the method during a second call using this argument.
-                Then, the method will automatically combine already parsed bytes with any additionally extracted bytes.
+                resolves the packet size, but cannot fully resolve the packet. Then, a second call to this method is
+                made to resolve the packet and the size is provided as an argument to skip already completed parsing
+                steps.
+            packet_bytes: Iterative parameter. If the method is able to parse some, but not all the bytes making up the
+                packet, parsed bytes can be fed back into the method during a second call using this argument.
+                Then, the method will automatically combine already parsed bytes with newly extracted bytes.
 
         Returns:
-            A tuple of four elements. The first element is a static integer code that described the outcome of method
-            runtime. The second element is the parsed packet_size of the packet or 0 to indicate packet_size was not
-            parsed or provided as a method argument. The third element is a numpy uint8 array that stores any bytes that
-            remain after the packet has been fully parsed or parsing ran into code 104. The fourth element is the uint8
-            array that stores the portion of the packet that has been parsed so far, which may be the entire packet or
-            only part of the packet.
+            A tuple of four elements. The first element is an integer status code that describes the runtime. The
+            second element is the parsed packet_size of the packet or 0 to indicate packet_size was not parsed. The
+            third element is a numpy uint8 array that stores any bytes that remain after the packet parsing has been
+            terminated due to success or error. The fourth element is the uint8 array that stores the portion of the
+            packet that has been parsed so far, up to the entire packet (when method succeeds).
         """
 
-        # Converts the input 'bytes' object to a numpy array to simplify processing operations below
+        # Converts the input 'bytes' object to a numpy array to simplify the steps below
         evaluated_bytes = np.frombuffer(read_bytes, dtype=np.uint8)
+        total_bytes = evaluated_bytes.size  # Calculates the total number of available bytes.
+        parsed_packet_bytes = packet_bytes.size  # Calculates the number of already parsed packet bytes.
 
-        # Loops bytes to be evaluated until all are processed or an exit condition is encountered
-        for i in range(evaluated_bytes.size):
-            # Counts processed bytes, always based on 'i'. Allows simplifying index increments carried out in response
-            # to parsing various parts of the packet
-            processed_bytes = i
+        # Counts how many bytes have been processed during various stages of this method.
+        processed_bytes = 0
 
-            # Starts by looking for the start byte. Advances into the next stage either if a start_byte value is
-            # encountered OR when resuming the processing from a previous call (indicated by the boolean start_found
-            # flag).
-            if evaluated_bytes[processed_bytes] == start_byte or start_found:
-                # If the packet size is not known (is zero), enters packet_size resolution mode
-                if packet_size == 0:
-                    # Increments bytes counter to account for 'processing' start byte and advancing to the next byte
-                    processed_bytes += 1
+        # First, resolves the start byte if it has not been found:
+        if not start_found:
+            # Loops over available bytes until start byte is found or the method runs out of bytes to evaluate
+            for i in range(total_bytes):
+                processed_bytes += 1  # Increments with each evaluated byte
 
-                    # If there are no more bytes to read after encountering the start_byte, this means that the
-                    # payload_size byte was not received.
-                    if evaluated_bytes.size - processed_bytes == 0:
-                        # If the payload_size byte is not found, returns code 0 to indicate not enough bytes were
-                        # available to parse the packet (same code is used at a later stage once the payload_byte is
-                        # resolved). This basically tells the wrapper to block with timeout guard until more data is
-                        # available. Here, returns packet_size set to 0 to indicate it was not found.
-                        status_code = 0
-                        packet_size = 0
-                        remaining_bytes = np.empty(0, dtype=np.uint8)
-                        packet_bytes = np.empty(0, dtype=np.uint8)
+                # If the start byte is found, breaks the loop
+                if evaluated_bytes[processed_bytes] == start_byte:
+                    start_found = True
+                    break
 
-                        # Packages and returns output values as a tuple
-                        return status_code, packet_size, remaining_bytes, packet_bytes
+            # If the loop above terminates without finding the start byte, ends method runtime with the appropriate
+            # status code.
+            if not start_found:
 
-                    # If there are more bytes available after resolving the start_byte, reads the following byte as the
-                    # payload size and checks it for validity
-                    payload_size = evaluated_bytes[processed_bytes]
-                    processed_bytes += 1  # Increments bytes counter to account for processing the payload_size byte
-
-                    # Verifies that the payload size is within the allowed payload size limits. The PC statically sets
-                    # this limit to the maximum valid value of 254 bytes, but a variable is used to check it nonetheless
-                    # for better maintainability.
-                    if payload_size > max_payload_size:
-                        # If payload size is out of bounds, returns with status code 104: Payload size too big. This
-                        # is a static integer code (like the rest of the code here!)
-                        status_code = 104
-                        packet_size = int(payload_size)  # Returns invalid payload size to be used in the error message
-
-                        # In case there are more bytes after discovering the invalid packet size, they are returned.
-                        # it may be tempting to discard them, but they may contain parts of the NEXT packet, so a longer
-                        # route of re-feeding them into the processing sequence is chosen here. This does not matter
-                        # unless error 104 is suppressed at some level (not default behavior) and the algorithm is
-                        # allowed to just keep going... This may escalate to a cascade of parsing errors, but this is
-                        # the problem for the developer that disables error 104 to solve. The author suggests using
-                        # time-based data discarding approach to avoid error cascades in this case.
-                        remaining_bytes = evaluated_bytes[processed_bytes:]  # Discards processed bytes
-                        packet_bytes = np.empty(0, dtype=np.uint8)
-
-                        # Packages and returns output values as a tuple
-                        return status_code, packet_size, remaining_bytes, packet_bytes
-
-                    # If payload size passed verification, calculates the packet size. This uses the payload_size as the
-                    # backbone and increments it with the dynamic postamble size (depends on polynomial datatype) and
-                    # static +2 to account for the overhead and delimiter bytes introduced by COBS-encoding the packet.
-                    packet_size = payload_size + 2 + postamble_size
-
-                # This step is reached either by parsing the start_byte and/or packet_size or by having the packet_size
-                # already provided at call time (when resuming parsing packets that could not be completed during
-                # previous method call). Either way, checks if enough bytes are available in the evaluated_bytes array
-                # combined with the packet_bytes input array to fully parse the packet.
-                if evaluated_bytes.size - processed_bytes >= packet_size - packet_bytes.size:
-                    # Extracts the remaining number of bytes needed to fully parse the packet from the processed bytes
-                    # array. Also, automatically 'discards' any processed bytes
-                    extracted_bytes = evaluated_bytes[
-                        processed_bytes : packet_size - packet_bytes.size + processed_bytes
-                    ]
-
-                    # Appends extracted bytes to the end of the array holding already parsed bytes
-                    packet = np.concatenate((packet_bytes, extracted_bytes))
-
-                    # Extracts any remaining bytes so that they can be properly stored for future receive_data() calls
-                    remaining_bytes = evaluated_bytes[packet_size - packet_bytes.size + processed_bytes :]
-
-                    # Sets the status to static code 1: Packet fully parsed code
-                    status_code = 1
-
-                    # Packages and returns the output data
-                    return status_code, packet_size, remaining_bytes, packet
-
-                # When not all bytes of the packet are available, moves all leftover bytes to the packet array and
-                # uses static code 2 to indicate the paket was not available for parsing in-full, but that the
-                # packet_size has been resolved. The wrapper method will then block in-place until enough bytes are
-                # available to guarantee success of this method runtime on the next call
+                # Determines the status code based on whether start byte errors are allowed.
+                # If they are allowed, returns 102. Otherwise (default) returns 101.
+                if allow_start_byte_errors:
+                    status_code = 102
                 else:
-                    status_code = 2
-                    # Zero, as all leftover bytes are absorbed into packet_bytes
-                    remaining_bytes = np.empty(0, dtype=np.uint8)
-                    # Discards any processed bytes and combines all evaluated bytes with the packet bytes. Generally,
-                    # it should be impossible to reach this outcome and have any packet_bytes, but better to handle it
-                    # safely.
-                    packet_bytes = np.concatenate((packet_bytes, evaluated_bytes[processed_bytes:]))
+                    status_code = 101
 
-                    # Note, packet_size is the same value it was provided to this method or calculated by this method
-                    return status_code, packet_size, remaining_bytes, packet_bytes
+                packet_size = 0  # If start is not found, packet size is also not known.
+                remaining_bytes = np.empty(0, dtype=np.uint8)  # All input bytes were processed
+                packet_bytes = np.empty(0, dtype=np.uint8)  # No packet bytes were discovered
+                return status_code, packet_size, remaining_bytes, packet_bytes
 
-        # If this point is reached, that means that the method was not able to resolve the start byte. Determines the
-        # status code based on whether start byte errors are allowed or not. If they are allowed, returns 102.
-        # Otherwise (default) returns 101.
-        if allow_start_byte_errors:
-            status_code = 102
-        else:
-            status_code = 101
+            # If there are no more bytes to read after encountering the start_byte, ends method runtime with code 0.
+            if processed_bytes == total_bytes:
 
-        # Also resolves the rest of the output
-        packet_size = 0
+                # Returns code 0 to indicate that the packet was detected, but not fully received. Same code is used at
+                # a later stage once the payload_byte is resolved. This tells the caller to block with timeout guard
+                # until more data is available. Sets packet_size to 0 to indicate it was not found.
+                status_code = 0
+                packet_size = 0
+                remaining_bytes = np.empty(0, dtype=np.uint8)
+                packet_bytes = np.empty(0, dtype=np.uint8)
+                return status_code, packet_size, remaining_bytes, packet_bytes
+
+        # If packet size is not known (is zero), enters packet_size resolution mode. Largely, this depends on parsing
+        # the payload size, which always follows the start_byte.
+        if packet_size == 0:
+            processed_bytes += 1  # Increments the counter
+
+            # Reads the first available unprocessed byte as the payload size and checks it for validity. Valid packets
+            # should store the payload size in the byte immediately after the start_byte.
+            payload_size = evaluated_bytes[processed_bytes]
+
+            # Verifies that the payload size is within the expected payload size limits.
+            if not 0 < payload_size <= max_payload_size:
+
+                # If payload size is out of bounds, returns with status code 104: Payload size not valid.
+                status_code = 104
+                packet_size = int(payload_size)  # Uses packet_size to store the invalid value for error messaging
+
+                # If more bytes are available after discovering the invalid packet size, they are returned to caller.
+                # It may be tempting to discard them, but they may contain parts of the NEXT packet, so a longer
+                # route of re-feeding them into the processing sequence is chosen here.
+                remaining_bytes = evaluated_bytes[processed_bytes:]  # Preserves the remaining bytes
+                packet_bytes = np.empty(0, dtype=np.uint8)
+                return status_code, packet_size, remaining_bytes, packet_bytes
+
+            # If payload size passed verification, calculates the packet size. This uses the payload_size as the
+            # backbone and increments it with the postamble size (depends on polynomial datatype) and
+            # static +2 to account for the overhead and delimiter bytes introduced by COBS-encoding the packet.
+            packet_size = payload_size + 2 + postamble_size
+
+        # Checks if enough bytes are available in the evaluated_bytes array combined with the packet_bytes input array
+        # (stores already processed packet bytes) to fully parse the packet.
+        unprocessed_bytes = total_bytes - processed_bytes  # Calculates how many bytes are left to process
+        remaining_packet_bytes = packet_size - parsed_packet_bytes  # Calculates how many packet bytes are necessary
+        if unprocessed_bytes >= remaining_packet_bytes:
+
+            # Extracts the remaining number of bytes needed to fully parse the packet from the buffer array.
+            extracted_bytes = evaluated_bytes[processed_bytes : remaining_packet_bytes + processed_bytes]
+
+            # Appends extracted bytes to the end of the array holding already parsed bytes
+            packet = np.concatenate((packet_bytes, extracted_bytes))
+
+            # Extracts any remaining bytes so that they can be properly stored for future receive_data() calls
+            remaining_bytes = evaluated_bytes[remaining_packet_bytes + processed_bytes :]
+
+            # Uses code 1 to indicate that the packet has been fully parsed
+            status_code = 1
+            return status_code, packet_size, remaining_bytes, packet
+
+        # When not all bytes of the packet are available, moves all leftover bytes to the packet array and
+        # uses static code 2 to indicate the paket was not available for parsing in-full. The caller method will then
+        # block in-place until enough bytes are available to guarantee success of this method runtime on the next call
+        status_code = 2
+
+        # Zero, as all leftover bytes are absorbed into packet_bytes
         remaining_bytes = np.empty(0, dtype=np.uint8)
-        packet_bytes = np.empty(0, dtype=np.uint8)
 
-        # Packages and returns output values as a tuple
+        # Discards any processed bytes and combines all remaining bytes with packet bytes.
+        packet_bytes = np.concatenate((packet_bytes, evaluated_bytes[processed_bytes:]))
+
         return status_code, packet_size, remaining_bytes, packet_bytes
 
     @staticmethod
     @njit(nogil=True, cache=True)
     def _validate_packet(
-        reception_buffer: np.ndarray,
+        reception_buffer: NDArray[np.uint8],
         packet_size: int,
-        cobs_processor: COBSProcessor.processor,
+        cobs_processor: _COBSProcessor,
         crc_processor: _CRCProcessor,
         delimiter_byte: np.uint8,
         postamble_size: int | np.unsignedinteger[Any],
