@@ -106,6 +106,8 @@ class SerialTransportLayer:
             cannot exceed 254 bytes due to COBS encoding.
         _max_rx_payload_size: Stores the maximum number of bytes that can be received from the microcontroller as a
             single payload. This value cannot exceed 254 bytes due to COBS encoding.
+        _min_rx_payload_size: Stores the minimum number of bytes that can be received from the Microcontroller as a
+            single payload. This value has to be between 1 and 254 and cannot exceed the max_rx_payload_size.
         _postamble_size: Stores the byte-size of the CRC checksum.
         _transmission_buffer: The buffer used to stage the data to be sent to the Microcontroller.
         _reception_buffer: The buffer used to store the decoded data received from the Microcontroller.
@@ -250,6 +252,7 @@ class SerialTransportLayer:
         # Uses payload size arguments to initialize reception and transmission buffers.
         self._max_tx_payload_size: np.uint8 = np.uint8(maximum_transmitted_payload_size)
         self._max_rx_payload_size: np.uint8 = np.uint8(254)  # Statically capped at 254 due to COBS encoding
+        self._min_rx_payload_size: np.uint8 = np.uint8(minimum_received_payload_size)
 
         # Buffer sizes are up-case to uint16, as they may need to exceed the 256-size limit. They include the respective
         # payload size, the postamble size (1 to 4 bytes) and 4 static bytes for the preamble and packet metadata.
@@ -319,7 +322,12 @@ class SerialTransportLayer:
 
         # Prints the information about each port using terminal.
         information_list = [
-            {"Name": port.name, "Device": port.device, "PID": port.pid, "Description": port.description}
+            {
+                "Name": port.name,
+                "Device": port.device,
+                "PID": port.pid,
+                "Description": port.description,
+            }
             for port in available_ports
         ]
 
@@ -1317,6 +1325,7 @@ class SerialTransportLayer:
             self._leftover_bytes,
             self._start_byte,
             self._max_rx_payload_size,
+            self._min_rx_payload_size,
             self._postamble_size,
             self._allow_start_byte_errors,
         )
@@ -1372,9 +1381,10 @@ class SerialTransportLayer:
                 self._leftover_bytes,
                 self._start_byte,
                 self._max_rx_payload_size,
+                self._min_rx_payload_size,
                 self._postamble_size,
                 self._allow_start_byte_errors,
-                True,
+                start_found=True,
             )
 
             # Status 1 indicates that the packet was fully parsed. Returns the packet to caller
@@ -1421,6 +1431,7 @@ class SerialTransportLayer:
                     self._leftover_bytes,
                     self._start_byte,
                     self._max_rx_payload_size,
+                    self._min_rx_payload_size,
                     self._postamble_size,
                     self._allow_start_byte_errors,
                     True,
@@ -1480,6 +1491,7 @@ class SerialTransportLayer:
                 self._leftover_bytes,
                 self._start_byte,
                 self._max_rx_payload_size,
+                self._min_rx_payload_size,
                 self._postamble_size,
                 self._allow_start_byte_errors,
                 True,
@@ -1508,7 +1520,9 @@ class SerialTransportLayer:
     def _parse_packet(
         read_bytes: bytes,
         start_byte: np.uint8,
+        delimiter_byte: np.uint8,
         max_payload_size: np.uint8,
+        min_payload_size: np.uint8,
         postamble_size: int | np.unsignedinteger[Any],
         allow_start_byte_errors: bool,
         start_found: bool = False,
@@ -1556,8 +1570,13 @@ class SerialTransportLayer:
                 from the previous _receive_packet() runtime.
             start_byte: The byte-value used to mark the beginning of a transmitted packet in the byte-stream. This is
                 used to detect the portion of the stream that stores the data packet.
+            delimiter_byte: The byte-value used to mark the end of a transmitted packet in the byte-stream. This is
+                used to detect the portion of the stream that stores the data packet and the portion that stores the
+                CRC postamble.
             max_payload_size: The maximum size of the payload, in bytes, that can be received. This value cannot
                 exceed 254 due to COBS limitations.
+            min_payload_size: The minimum size of the payload, in bytes, that can be received. This value cannot be
+                less than 1 or above 254 (see above) and cannot exceed the max_payload_size.
             postamble_size: The number of bytes needed to store the CRC checksum. This is determined based on the type
                 of the CRC polynomial used by the class.
             allow_start_byte_errors: A boolean flag that determines whether inability to find start_byte should be
@@ -1605,7 +1624,6 @@ class SerialTransportLayer:
             # If the loop above terminates without finding the start byte, ends method runtime with the appropriate
             # status code.
             if not start_found:
-
                 # Determines the status code based on whether start byte errors are allowed.
                 # If they are allowed, returns 102. Otherwise (default) returns 101.
                 if allow_start_byte_errors:
@@ -1620,7 +1638,6 @@ class SerialTransportLayer:
 
             # If there are no more bytes to read after encountering the start_byte, ends method runtime with code 0.
             if processed_bytes == total_bytes:
-
                 # Returns code 0 to indicate that the packet was detected, but not fully received. Same code is used at
                 # a later stage once the payload_byte is resolved. This tells the caller to block with timeout guard
                 # until more data is available. Sets packet_size to 0 to indicate it was not found.
@@ -1640,8 +1657,7 @@ class SerialTransportLayer:
             payload_size = evaluated_bytes[processed_bytes]
 
             # Verifies that the payload size is within the expected payload size limits.
-            if not 0 < payload_size <= max_payload_size:
-
+            if not min_payload_size <= payload_size <= max_payload_size:
                 # If payload size is out of bounds, returns with status code 104: Payload size not valid.
                 status_code = 104
                 packet_size = int(payload_size)  # Uses packet_size to store the invalid value for error messaging
@@ -1654,16 +1670,69 @@ class SerialTransportLayer:
                 return status_code, packet_size, remaining_bytes, packet_bytes
 
             # If payload size passed verification, calculates the packet size. This uses the payload_size as the
-            # backbone and increments it with the postamble size (depends on polynomial datatype) and
-            # static +2 to account for the overhead and delimiter bytes introduced by COBS-encoding the packet.
-            packet_size = payload_size + 2 + postamble_size
+            # backbone and increments it with +2 to account for the overhead and delimiter bytes introduced by
+            # COBS-encoding the packet. Note, this DOES NOT include the postamble.
+            packet_size = int(payload_size) + 2
+
+            # If there are no more bytes to read after resolving the packet_size, ends method runtime with code 0.
+            if processed_bytes == total_bytes:
+                # Returns code 0 to indicate that the packet was detected, but not fully received. This tells the caller
+                # to block with timeout guard until more data is available.
+                status_code = 0
+                remaining_bytes = np.empty(0, dtype=np.uint8)
+                packet_bytes = np.empty(0, dtype=np.uint8)
+                return status_code, packet_size, remaining_bytes, packet_bytes
+
+        # Calculates how many bytes remain after resolving the steps above
+        unprocessed_bytes = total_bytes - processed_bytes
+
+        # Calculates how many packet bytes are still not parsed
+        remaining_packet_bytes = packet_size - parsed_packet_bytes
+
+        # If there are bytes left to process after the steps above, and the packet is not yet fully parsed, enters
+        # packet parsing loop
+        if remaining_packet_bytes != 0:
+
+            # Adjusts loop indices to account for already processed bytes
+            for i in range(processed_bytes, total_bytes):
+                processed_bytes += 1  # Increments the processed bytes counter
+                remaining_packet_bytes -= 1  # Decrements remaining packet bytes counter
+
+                # Transfer the evaluated byte from the buffer into the packet array
+                np.concatenate(packet_bytes, evaluated_bytes[i])
+
+                # If the evaluated byte matches the delimiter byte value and this is not the last byte of the packet,
+                # the packet is corrupted. Returns with error code 107: Delimiter encountered too early.
+                if evaluated_bytes[i] == delimiter_byte and remaining_packet_bytes > 0 :
+
+                    # Uses error-code 107. Preserves the paket size and returns the packet parsed up to the error point.
+                    # Also, preserves all unprocessed bytes to be used for future read operations.
+                    status_code = 107
+                    remaining_bytes = evaluated_bytes[processed_bytes:]
+                    return status_code, packet_size, remaining_bytes, packet_bytes
+
+                # If the evaluated byte is a delimiter byte value and this is the last byte of the packet, the packet is
+                # fully parsed. Gracefully breaks the loop and advances to the next stage.
+                if evaluated_bytes[i] == delimiter_byte and remaining_packet_bytes == 0 :
+                    break
+
+        # If there are still unprocessed bytes after the step above, returns with status code 2: the packet is not fully
+        # parsed. The caller method will then block in-place until enough bytes are available to guarantee success
+        # of this method runtime on the next call
+        if remaining_packet_bytes != 0:
+            status_code = 2
+
+            # Zero, as all leftover bytes have been absorbed into the packet array
+            remaining_bytes = np.empty(0, dtype=np.uint8)
+
+            # Keeps the packet_size and packet_bytes from the stages above
+            return status_code, packet_size, remaining_bytes, packet_bytes
 
         # Checks if enough bytes are available in the evaluated_bytes array combined with the packet_bytes input array
         # (stores already processed packet bytes) to fully parse the packet.
-        unprocessed_bytes = total_bytes - processed_bytes  # Calculates how many bytes are left to process
-        remaining_packet_bytes = packet_size - parsed_packet_bytes  # Calculates how many packet bytes are necessary
-        if unprocessed_bytes >= remaining_packet_bytes:
 
+
+        if unprocessed_bytes >= remaining_packet_bytes:
             # Extracts the remaining number of bytes needed to fully parse the packet from the buffer array.
             extracted_bytes = evaluated_bytes[processed_bytes : remaining_packet_bytes + processed_bytes]
 
@@ -1677,18 +1746,7 @@ class SerialTransportLayer:
             status_code = 1
             return status_code, packet_size, remaining_bytes, packet
 
-        # When not all bytes of the packet are available, moves all leftover bytes to the packet array and
-        # uses static code 2 to indicate the paket was not available for parsing in-full. The caller method will then
-        # block in-place until enough bytes are available to guarantee success of this method runtime on the next call
-        status_code = 2
 
-        # Zero, as all leftover bytes are absorbed into packet_bytes
-        remaining_bytes = np.empty(0, dtype=np.uint8)
-
-        # Discards any processed bytes and combines all remaining bytes with packet bytes.
-        packet_bytes = np.concatenate((packet_bytes, evaluated_bytes[processed_bytes:]))
-
-        return status_code, packet_size, remaining_bytes, packet_bytes
 
     @staticmethod
     @njit(nogil=True, cache=True)
