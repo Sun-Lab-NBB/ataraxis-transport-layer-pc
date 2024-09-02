@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ataraxis-transport-layer"
 version = "1.0.0"
-description = "Exposes classes and methods that enable bidirectional communication between project Ataraxis systems."
+description = "Provides classes and methods that enable bidirectional communication between project Ataraxis systems."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

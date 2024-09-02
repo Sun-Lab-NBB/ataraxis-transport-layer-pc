@@ -18,7 +18,6 @@ from typing import Any, Type, Union
 
 from numba import uint8, uint16, uint32  # type: ignore
 import numpy as np
-from numpy import dtype
 from numpy.typing import NDArray
 from numba.experimental import jitclass  # type: ignore
 from ataraxis_base_utilities import console
@@ -605,10 +604,10 @@ class _CRCProcessor:
         # Resolves the crc_type and polynomial size based on the input polynomial. Makes use of the recently added
         # dtype comparison support
         crc_type: Type[np.unsignedinteger[Any]]
-        if polynomial.dtype == dtype(np.uint8):
+        if isinstance(polynomial, uint8):
             crc_type = np.uint8
             polynomial_size = np.uint8(1)
-        elif polynomial.dtype == dtype(np.uint16):
+        elif isinstance(polynomial, uint16):
             crc_type = np.uint16
             polynomial_size = np.uint8(2)
         else:
@@ -1167,12 +1166,12 @@ class CRCProcessor:
         return self._processor.crc_byte_length
 
     @property
-    def crc_table(self) -> np.ndarray:
+    def crc_table(self) -> NDArray[np.uint8 | np.uint16 | np.uint32]:
         """Returns the CRC checksum lookup table."""
         return self._processor.crc_table
 
     @property
-    def processor(self):
+    def processor(self) -> _CRCProcessor:
         """Returns the jit-compiled _CRCProcessor class instance.
 
         This accessor represents a convenient way of unwrapping the jit-compiled class, so that its methods can be
@@ -1210,9 +1209,9 @@ class SerialMock:
         methods without the confounding of a third-party library. Additionally, it simplifies testing, as it removes
         the need for a working serial communication.
 
-        Also, unlike its Serial class prototype, this class exposes the rx_ and tx_ buffers while using similar logic
-        for adding data to the buffers. This makes it possible to verify the outcome of a would-be data transmission or
-        reception runtime.
+        Also, unlike its Serial class prototype, this class exposes the rx_buffer and tx_buffer, while using similar
+        logic for adding data to the buffers. This makes it possible to verify the outcome of a would-be data
+        transmission or reception runtime.
 
     Attributes:
         is_open: The boolean flag that tracks the state of the serial port.
@@ -1264,7 +1263,7 @@ class SerialMock:
         else:
             raise Exception("Mock serial port is not open")
 
-    def read(self, size=1) -> bytes:
+    def read(self, size: int = 1) -> bytes:
         """Reads the requested 'size' number of bytes from the rx_buffer and returns them as 'bytes' object.
 
         Args:

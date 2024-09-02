@@ -17,13 +17,13 @@ from ataraxis_transport_layer.helper_modules import (
     COBSProcessor,
 )
 from ataraxis_transport_layer.transport_layer import (
-    TransportLayer,
+    SerialTransportLayer,
 )
 
 
 @dataclass
 class SampleDataClass:
-    """A simple dataclass used to test 'structure' serialization capability of the TransportLayer class. Has
+    """A simple dataclass used to test 'structure' serialization capability of the SerialTransportLayer class. Has
      to use numpy arrays and scalars as field types to support serialization.
 
     Attributes:
@@ -37,13 +37,13 @@ class SampleDataClass:
 
 
 def test_serial_transfer_protocol_buffer_manipulation():
-    """Tests the functionality of the TransportLayer class' write_data() and read_data() methods. This, by
+    """Tests the functionality of the SerialTransportLayer class' write_data() and read_data() methods. This, by
     extension, also tests all internal private methods that enable the proper functioning of the main two methods. Also
     test buffer reset methods.
     """
 
-    # Instantiates the tested TransportLayer class
-    protocol = TransportLayer(
+    # Instantiates the tested SerialTransportLayer class
+    protocol = SerialTransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
@@ -375,21 +375,21 @@ def test_serial_transfer_protocol_buffer_manipulation():
 
 
 def test_serial_transfer_protocol_buffer_manipulation_errors():
-    """Tests the error-handling capabilities of TransportLayer class write_data() and read_data() methods.
+    """Tests the error-handling capabilities of SerialTransportLayer class write_data() and read_data() methods.
     Also tests class initialization errors.
     """
 
     # Verifies that using maximum_transmitted_payload_size argument above 254 triggers an error during class
     # initialization. Keeps the rest of the parameters set to default values, where possible.
     error_message = (
-        f"Unable to initialize TransportLayer class. 'maximum_transmitted_payload_size' argument value "
+        f"Unable to initialize SerialTransportLayer class. 'maximum_transmitted_payload_size' argument value "
         f"({255}) cannot exceed 254."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = TransportLayer(
+        _ = SerialTransportLayer(
             port="COM7",
             maximum_transmitted_payload_size=np.uint8(255),
             test_mode=True,
@@ -397,27 +397,27 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
     # Verifies that the minimum_received_payload_size cannot be set outside the range of 1 to 254 (inclusive)
     error_message = (
-        f"Unable to initialize TransportLayer class. 'minimum_received_payload_size' argument value "
+        f"Unable to initialize SerialTransportLayer class. 'minimum_received_payload_size' argument value "
         f"({0}) must be between 1 and 254 (inclusive)."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = TransportLayer(
+        _ = SerialTransportLayer(
             port="COM7",
             minimum_received_payload_size=0,
             test_mode=True,
         )
     error_message = (
-        f"Unable to initialize TransportLayer class. 'minimum_received_payload_size' argument value "
+        f"Unable to initialize SerialTransportLayer class. 'minimum_received_payload_size' argument value "
         f"({255}) must be between 1 and 254 (inclusive)."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = TransportLayer(
+        _ = SerialTransportLayer(
             port="COM7",
             minimum_received_payload_size=255,
             test_mode=True,
@@ -425,14 +425,14 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
     # Verifies that setting start_byte and delimiter_byte to the same value triggers an error.
     error_message = (
-        f"Unable to initialize TransportLayer class. 'start_byte' and 'delimiter_byte' arguments "
+        f"Unable to initialize SerialTransportLayer class. 'start_byte' and 'delimiter_byte' arguments "
         f"cannot be set to the same value ({129})."
     )
     with pytest.raises(
         ValueError,
         match=re.escape(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False)),
     ):
-        _ = TransportLayer(
+        _ = SerialTransportLayer(
             port="COM7",
             start_byte=np.uint8(129),
             delimiter_byte=np.uint8(129),
@@ -441,7 +441,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
     # Instantiates the tested protocol class. Lists all addressable parameters, although technically only port should
     # be provided to use default initialization values.
-    protocol = TransportLayer(
+    protocol = SerialTransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
@@ -582,12 +582,12 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
 
 
 def test_serial_transfer_protocol_data_transmission():
-    """Tests the send_data() and receive_data() methods of the TransportLayer class. Relies on the
+    """Tests the send_data() and receive_data() methods of the SerialTransportLayer class. Relies on the
     read_data() and write_data() methods of the class to function as expected and also on the SerialMock class to be
     available to mock the pySerial Serial class."""
 
     # Initialize the tested class
-    protocol = TransportLayer(
+    protocol = SerialTransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
@@ -671,14 +671,14 @@ def test_serial_transfer_protocol_data_transmission():
 
 
 def test_serial_transfer_protocol_data_transmission_errors():
-    """Tests TransportLayer class send_data() and receive_data() method error handling. Focuses on testing
-    the errors that arise specifically from these methods or private methods of the TransportLayer class.
+    """Tests SerialTransportLayer class send_data() and receive_data() method error handling. Focuses on testing
+    the errors that arise specifically from these methods or private methods of the SerialTransportLayer class.
     Assumes= helper method errors are tested using the dedicated helper testing functions.
     """
 
     # Instantiates the tested class
     # noinspection DuplicatedCode
-    protocol = TransportLayer(
+    protocol = SerialTransportLayer(
         port="COM7",
         baudrate=115200,
         polynomial=np.uint16(0x1021),
