@@ -1289,46 +1289,26 @@ class SerialTransportLayer:
         """
 
         # Quick preface. This method is written with a particular focus on minimizing the number of calls to read() and
-        # in_waiting() methods of the Serial class as they take a very long time to run compared to most of the
-        # jit-compiled methods provided by this library. As such, if the packet can be parsed without calling these two
-        # methods, that is always the priority. The trade-off is that if the packet cannot be parsed, we are losing
-        # time running library methods essentially for nothing. Whether this 'gamble' works out or not heavily depends
-        # on how the library is used, but it is assumed that in the vast majority of cases it WILL pay off.
+        # in_waiting() methods of the Serial class as they take a long time to run compared to the jit-compiled methods
+        # from this library. As such, if the packet can be parsed without calling these two methods, that is always the
+        # priority. The trade-off is that if the packet cannot be parsed, we are losing time running library methods
+        # essentially for nothing. Whether this 'gamble' works out or not heavily depends on how the library is used,
+        # but it is assumed that in the vast majority of cases it WILL pay off.
 
-        # If there are NOT enough leftover bytes to justify starting the reception procedure, checks how many bytes can
-        # be obtained from the serial port
-        if len(self._leftover_bytes) < self._minimum_packet_size:
-            # Combines the bytes inside the serial port buffer with the leftover bytes from previous calls to this
-            # method and repeats the evaluation
-            available_bytes = self._port.in_waiting
-            total_bytes = len(self._leftover_bytes) + available_bytes
-            enough_bytes_available = total_bytes > self._minimum_packet_size
-
-            # If enough bytes are available after factoring in the buffered bytes, reads and appends buffered bytes to
-            # the end of the leftover bytes buffer
-            if enough_bytes_available:
-                self._leftover_bytes += self._port.read(available_bytes)
-
-        # Otherwise, if enough bytes are available without using the read operation, statically sets the flag to true
-        # and begins parsing the packet
-        else:
-            enough_bytes_available = True
-
-        # If not enough bytes are available, returns the static code 101 to indicate there were not enough bytes to
-        # read from the buffer
-        if not enough_bytes_available:
+        # Checks whether class buffers contain enough bytes to justify parsing the packet. If not, returns code 101
+        # to indicate graceful (non-error) runtime failure.
+        if not self._enough_bytes_available(self._minimum_packet_size):
             return 101
 
-        # Attempts to parse the packet from read bytes. This call expects, as a minium, to find the start byte and,
-        # as a maximum, to resolve the entire packet.
-        status, packet_size, remaining_bytes, packet_bytes = self._parse_packet(
-            self._leftover_bytes,
-            self._start_byte,
-            self._max_rx_payload_size,
-            self._min_rx_payload_size,
-            self._postamble_size,
-            self._allow_start_byte_errors,
-        )
+        for call_count in range(3):
+            status, packet_size, remaining_bytes, packet_bytes = self._parse_packet(
+                self._leftover_bytes,
+                self._start_byte,
+                self._max_rx_payload_size,
+                self._min_rx_payload_size,
+                self._postamble_size,
+                self._allow_start_byte_errors,
+            )
 
         # Resolves parsing result:
         # Packet parsed. Saves the packet to the _reception_buffer and the packet size to the
@@ -1515,58 +1495,109 @@ class SerialTransportLayer:
         )
         raise RuntimeError(textwrap.fill(error_message, width=120, break_long_words=False, break_on_hyphens=False))
 
+    def _enough_bytes_available(self, required_bytes_count: int) -> bool:
+        """Determines if the required number of bytes is available across all class buffers that store unprocessed
+        bytes.
+
+        Specifically, this method first checks whether the leftover_bytes buffer of the class contains enough bytes.
+        If not, the method checks how many bytes can be extracted from the serial interface buffer, combines these bytes
+        with the leftover bytes, and repeats the check. If the check succeeds, the method reads all available bytes from
+        the serial port and stacks them with the bytes already stored inside the leftover_bytes buffer before returning.
+
+        Notes:
+            This method is primarily designed to optimize packet processing speed by minimizing the number of calls to
+            the serial interface methods. This is because these methods take a comparatively long time to execute.
+
+        Args:
+            required_bytes_count: The number of bytes that needs to be available across all class buffers that store
+            unprocessed bytes for this method to return True.
+
+        Returns:
+            True if enough bytes are available to justify parsing the packet.
+        """
+
+        # If the requested number of bytes is already available from the leftover_bytes buffer, returns True.
+        if len(self._leftover_bytes) >= required_bytes_count:
+            return True
+
+        # If there are not enough leftover bytes to satisfy the requirement, checks how many bytes can be obtained from
+        # the serial port.
+        available_bytes = self._port.in_waiting  # Returns the number of bytes that can be read from serial port.
+        total_bytes = len(self._leftover_bytes) + available_bytes  # Combines leftover and available bytes.
+
+        # If the combined total matches the required number of bytes, reads additional bytes into the leftover_bytes
+        # buffer and returns True.
+        if total_bytes >= required_bytes_count:
+            self._leftover_bytes += self._port.read(available_bytes)  # This takes twice as long as 'available' check
+            return True
+
+        # If there are not enough bytes across both buffers, returns False.
+        return False
+
     @staticmethod
     @njit(nogil=True, cache=True)
     def _parse_packet(
-        read_bytes: bytes,
+        unparsed_bytes: bytes,
         start_byte: np.uint8,
         delimiter_byte: np.uint8,
         max_payload_size: np.uint8,
         min_payload_size: np.uint8,
-        postamble_size: int | np.unsignedinteger[Any],
+        postamble_size: np.uint8,
         allow_start_byte_errors: bool,
         start_found: bool = False,
-        packet_size: int = 0,
-        packet_bytes: NDArray[np.uint8] = np.empty(0, dtype=np.uint8),
+        parsed_byte_count: int = 0,
+        parsed_bytes: NDArray[np.uint8] = np.empty(0, dtype=np.uint8),
     ) -> tuple[int, int, NDArray[np.uint8], NDArray[np.uint8]]:
-        """Parses as much of the packet as possible using the input bytes object.
+        """Parses as much of the packet data as possible using the input unparsed_bytes object.
 
-        This method contains all packet parsing logic and takes in the bytes extracted from the serial port buffer.
-        Running this method may produce a number of outputs, from a fully parsed packet to an empty buffer without
-        a single packet byte. This method is designed to be called repeatedly until a packet is fully parsed, or until
-        an external timeout guard handled by the _receive_packet() method aborts the reception. As such, it can
-        recursively work on the same packet across multiple calls. To enable proper call hierarchy it is essential that
-        this method is called strictly from the _receive_packet() method.
+        This method contains all packet parsing logic, split into 4 distinct stages: resolving the start_byte, resolving
+        the packet_size, resolving the encoded payload, and resolving the CRC postamble. It is common for the method to
+        not advance through all stages during a single call, requiring multiple calls to fully parse the packet.
+        The method is written in a way that supports iterative calls to work on the same packet. This method is not
+        intended to be used standalone and should always be called through the _receive_packet() method.
 
         Notes:
+            For this method, the 'packet' refers to the COBS encoded payload + the CRC checksum postamble. While each
+            received byte stream also necessarily includes the metadata preamble, the preamble data is used and
+            discarded during this method's runtime.
+
             This method becomes significantly more efficient in use patterns where many bytes are allowed to aggregate
             in the serial port buffer before being evaluated. Due to JIT compilation this method is very fast, and any
-            execution time loss typically comes from reading the data from the underlying serial port.
+            major execution delay typically comes from reading the data from the underlying serial port.
 
-            The returns of this method are designed to support potentially iterative (not recursive) calls to this
-            method. As a minium, the packet may be fully resolved (parsed or failed to be parsed) with one call, and,
-            as a maximum, 3 calls may be necessary.
+            The returns of this method are designed to support iterative calls to this method. As a minium, the packet
+            may be fully resolved (parsed or failed to be parsed) with one call, and, as a maximum, 3 calls may be
+            necessary.
 
             The method uses static integer codes to communicate its runtime status:
 
-            0 - Not enough bytes read to fully parse the packet. The start byte was found, but payload_size byte was not
-            and needs to be read.
+            0 - Not enough bytes read to fully parse the packet. The start byte was found, but packet size has not
+            been resolved and, therefore, not known.
             1 - Packet fully parsed.
-            2 - Not enough bytes read to fully parse the packet. The payload_size was resolved, but there were not
-            enough bytes to fully parse the packet and more bytes need to be read.
-            101 - No start byte found, interpreted as 'no bytes to read' as the class is configured to ignore start
-            byte errors. Usually, this situation is caused by communication line noise generating 'noise bytes'.
-            102 - No start byte found, interpreted as a 'no start byte detected' error case. This status is only
-            possible when the class is configured to detect start byte errors.
-            104 - Payload_size value is too big (above maximum allowed payload size) error.
+            2 - Not enough bytes read to fully parse the packet. The packet size was resolved, but there were not
+            enough bytes to fully parse the packet (encoded payload + crc postamble).
+            101 - No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to
+            ignore start byte errors. Usually, this situation is caused by communication line noise generating
+            'noise bytes'.
+            102 - No start byte found, which is interpreted as a 'no start byte detected' error case. This status is
+            only possible when the class is configured to detect start byte errors.
+            104 - Parsed payload_size value is either less than the minimum expected value or above the maximum value.
+            This likely indicates packet corruption or communication parameter mismatch between this class and the
+            connected Microcontroller.
+            106 - Delimiter byte value encountered before reaching the end of the encoded payload data block. It is
+            expected that the last byte of the encoded payload is set to the delimiter value and that the value is not
+            present anywhere else inside the encoded payload region. Encountering the delimiter early indicates packet
+            corruption.
+            107 - Delimiter byte value not encountered at the end of the encoded payload data block. See code 106
+            description for more details, but this code also indicates packet corruption.
 
             The _read_packet() method is expected to issue codes 103 and 105 if packet reception stales at
-            payload_size or packet bytes reception. All error codes are converted to errors at the highest level of the
-            call hierarchy, which is the receive_data() method.
+            payload_size or data bytes reception. All error codes are converted to errors at the highest level of the
+            call hierarchy, which is the public receive_data() method.
 
         Args:
-            read_bytes: A bytes() object that stores the bytes read from the serial port. If this is the first call to
-                this method for a given _receive_packet() method runtime, this object may also include any bytes left
+            unparsed_bytes: A bytes() object that stores the bytes read from the serial port. If this is the first call
+                to this method for a given _receive_packet() method runtime, this object may also include any bytes left
                 from the previous _receive_packet() runtime.
             start_byte: The byte-value used to mark the beginning of a transmitted packet in the byte-stream. This is
                 used to detect the portion of the stream that stores the data packet.
@@ -1585,39 +1616,32 @@ class SerialTransportLayer:
                 to the method to skip resolving the start byte (detecting packet presence). Specifically, it is used
                 when a call to this method finds the start byte, but cannot resolve the packet size. Then, during a
                 second call, start_byte searching step is skipped.
-            packet_size: Iterative parameter. When this method is called two or more times, this value can be provided
-                to the method to skip resolving the packet size. Specifically, it is used when a call to this method
-                resolves the packet size, but cannot fully resolve the packet. Then, a second call to this method is
-                made to resolve the packet and the size is provided as an argument to skip already completed parsing
-                steps.
-            packet_bytes: Iterative parameter. If the method is able to parse some, but not all the bytes making up the
-                packet, parsed bytes can be fed back into the method during a second call using this argument.
-                Then, the method will automatically combine already parsed bytes with newly extracted bytes.
+            parsed_byte_count: Iterative parameter. When this method is called multiple times, this value communicates
+                how many bytes out of the expected byte number have been parsed by the previous method runtime.
+            parsed_bytes: Iterative parameter. This object is initialized to the expected packet size once it is parsed.
+                Multiple method runtimes may be necessary to fully fill the object with parsed data bytes.
 
         Returns:
             A tuple of four elements. The first element is an integer status code that describes the runtime. The
-            second element is the parsed packet_size of the packet or 0 to indicate packet_size was not parsed. The
-            third element is a numpy uint8 array that stores any bytes that remain after the packet parsing has been
-            terminated due to success or error. The fourth element is the uint8 array that stores the portion of the
-            packet that has been parsed so far, up to the entire packet (when method succeeds).
+            second element is the number of packet's bytes processed during method runtime. The third element is a
+            numpy uint8 array that stores any unprocessed bytes that remain after method runtime. The fourth element
+            is the uint8 array that stores some or all of the packet's bytes.
         """
 
-        # Converts the input 'bytes' object to a numpy array to simplify the steps below
-        evaluated_bytes = np.frombuffer(read_bytes, dtype=np.uint8)
-        total_bytes = evaluated_bytes.size  # Calculates the total number of available bytes.
-        parsed_packet_bytes = packet_bytes.size  # Calculates the number of already parsed packet bytes.
+        # Converts the input 'bytes' object to a numpy array to optimize further buffer manipulations
+        evaluated_bytes = np.frombuffer(unparsed_bytes, dtype=np.uint8)
+        total_bytes = evaluated_bytes.size  # Calculates the total number of bytes available for parsing
+        processed_bytes = 0  # Tracks how many input bytes are processed during method runtime
 
-        # Counts how many bytes have been processed during various stages of this method.
-        processed_bytes = 0
-
-        # First, resolves the start byte if it has not been found:
+        # Stage 1: Resolves the start_byte. Detecting the start byte tells the method the processed byte-stream contains
+        # a packet that needs to be parsed.
         if not start_found:
             # Loops over available bytes until start byte is found or the method runs out of bytes to evaluate
             for i in range(total_bytes):
-                processed_bytes += 1  # Increments with each evaluated byte
+                processed_bytes += 1  # Increments the counter for each evaluated byte
 
-                # If the start byte is found, breaks the loop
-                if evaluated_bytes[processed_bytes] == start_byte:
+                # If the start byte is found, breaks the loop and sets the start byte acquisition flag to True
+                if evaluated_bytes[i] == start_byte:
                     start_found = True
                     break
 
@@ -1627,126 +1651,122 @@ class SerialTransportLayer:
                 # Determines the status code based on whether start byte errors are allowed.
                 # If they are allowed, returns 102. Otherwise (default) returns 101.
                 if allow_start_byte_errors:
-                    status_code = 102
+                    status_code = 102  # This will terminate packet reception with an error
                 else:
-                    status_code = 101
+                    status_code = 101  # This will terminate packet reception without an error
 
-                packet_size = 0  # If start is not found, packet size is also not known.
-                remaining_bytes = np.empty(0, dtype=np.uint8)  # All input bytes were processed
-                packet_bytes = np.empty(0, dtype=np.uint8)  # No packet bytes were discovered
-                return status_code, packet_size, remaining_bytes, packet_bytes
+                remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
+                return status_code, parsed_byte_count, remaining_bytes, parsed_bytes
 
-            # If there are no more bytes to read after encountering the start_byte, ends method runtime with code 0.
+            # If this stage uses up all unprocessed bytes, ends method runtime with partial success code (0)
             if processed_bytes == total_bytes:
-                # Returns code 0 to indicate that the packet was detected, but not fully received. Same code is used at
-                # a later stage once the payload_byte is resolved. This tells the caller to block with timeout guard
-                # until more data is available. Sets packet_size to 0 to indicate it was not found.
-                status_code = 0
-                packet_size = 0
-                remaining_bytes = np.empty(0, dtype=np.uint8)
-                packet_bytes = np.empty(0, dtype=np.uint8)
-                return status_code, packet_size, remaining_bytes, packet_bytes
+                remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
+                return 0, parsed_byte_count, remaining_bytes, parsed_bytes
 
-        # If packet size is not known (is zero), enters packet_size resolution mode. Largely, this depends on parsing
-        # the payload size, which always follows the start_byte.
+        # Calculates the size of the COBS-encoded payload (data packet) from the total size of the parsed_bytes
+        # array and the crc_postamble. Ensures the value is always non-negative. Relies on the fact that stage 2
+        # initializes the parsed_bytes array to have enough space for the COBS-encoded payload and the crc_postamble.
+        # Assumes that the default parsed_bytes array is an empty (size 0) array.
+        packet_size = max(parsed_bytes.size - int(postamble_size), 0)
+
+        # Stage 2: Resolves the packet_size. Packet size is essential for knowing how many bytes need to be read to
+        # fully parse the packet. Additionally, this is used to infer the packet layout, which is critical for the
+        # following stages.
         if packet_size == 0:
-            processed_bytes += 1  # Increments the counter
-
-            # Reads the first available unprocessed byte as the payload size and checks it for validity. Valid packets
-            # should store the payload size in the byte immediately after the start_byte.
+            # Reads the first available unprocessed byte and checks it for validity. This relies on the fact that
+            # valid packets store the payload_size byte immediately after the start_byte.
             payload_size = evaluated_bytes[processed_bytes]
 
-            # Verifies that the payload size is within the expected payload size limits.
+            processed_bytes += 1  # Increments the counter. Has to be done after reading the byte above.
+
+            # Verifies that the payload size is within the expected payload size limits. If payload size is out of
+            # bounds, returns with status code 104: Payload size not valid.
             if not min_payload_size <= payload_size <= max_payload_size:
-                # If payload size is out of bounds, returns with status code 104: Payload size not valid.
-                status_code = 104
-                packet_size = int(payload_size)  # Uses packet_size to store the invalid value for error messaging
+                remaining_bytes = evaluated_bytes[processed_bytes:]  # Returns any remaining unprocessed bytes
+                parsed_bytes = np.empty(payload_size, dtype=np.uint8)  # Uses invalid size for the array shape anyway
+                return 104, parsed_byte_count, remaining_bytes, parsed_bytes
 
-                # If more bytes are available after discovering the invalid packet size, they are returned to caller.
-                # It may be tempting to discard them, but they may contain parts of the NEXT packet, so a longer
-                # route of re-feeding them into the processing sequence is chosen here.
-                remaining_bytes = evaluated_bytes[processed_bytes:]  # Preserves the remaining bytes
-                packet_bytes = np.empty(0, dtype=np.uint8)
-                return status_code, packet_size, remaining_bytes, packet_bytes
+            # If payload size passed verification, calculates the number of bytes occupied by the COBS-encoded payload
+            # and the CRC postamble. Specifically, uses the payload_size and increments it with +2 to account for the
+            # overhead and delimiter bytes introduced by COBS-encoding the packet. Also adds the size of the CRC
+            # postamble.
+            remaining_size = int(payload_size) + 2 + int(postamble_size)
 
-            # If payload size passed verification, calculates the packet size. This uses the payload_size as the
-            # backbone and increments it with +2 to account for the overhead and delimiter bytes introduced by
-            # COBS-encoding the packet. Note, this DOES NOT include the postamble.
-            packet_size = int(payload_size) + 2
+            # Uses the calculated size to pre-initialize the parsed_bytes array to accommodate the encoded payload and
+            # the CRC postamble. Subsequently, the size of the array will be used to infer the size of the encoded
+            # payload.
+            parsed_bytes = np.empty(shape=remaining_size, dtype=np.uint8)
 
-            # If there are no more bytes to read after resolving the packet_size, ends method runtime with code 0.
+            # If this stage uses up all unprocessed bytes, ends method runtime with partial success code (2)
             if processed_bytes == total_bytes:
-                # Returns code 0 to indicate that the packet was detected, but not fully received. This tells the caller
-                # to block with timeout guard until more data is available.
-                status_code = 0
-                remaining_bytes = np.empty(0, dtype=np.uint8)
-                packet_bytes = np.empty(0, dtype=np.uint8)
-                return status_code, packet_size, remaining_bytes, packet_bytes
+                remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
+                return 2, parsed_byte_count, remaining_bytes, parsed_bytes
 
-        # Calculates how many bytes remain after resolving the steps above
-        unprocessed_bytes = total_bytes - processed_bytes
+        # Based on the size of the packet and the number of already parsed packet bytes, calculates the remaining
+        # number of bytes. Ensures the resultant value is always non-negative. If this value is 0, stage 3 is skipped.
+        remaining_packet_bytes = max((packet_size - parsed_byte_count), 0)
 
-        # Calculates how many packet bytes are still not parsed
-        remaining_packet_bytes = packet_size - parsed_packet_bytes
-
-        # If there are bytes left to process after the steps above, and the packet is not yet fully parsed, enters
-        # packet parsing loop
+        # Stage 3: Resolves the COBS-encoded payload. This is the variably sized portion of the stream that contains
+        # communicated data with some service values.
         if remaining_packet_bytes != 0:
-
-            # Adjusts loop indices to account for already processed bytes
+            # Adjusts loop indices to account for bytes that might have been processed prior to this step
             for i in range(processed_bytes, total_bytes):
                 processed_bytes += 1  # Increments the processed bytes counter
-                remaining_packet_bytes -= 1  # Decrements remaining packet bytes counter
+                parsed_byte_count += 1  # Unlike processed_bytes, this tracker is shared by multiple method calls.
+                remaining_packet_bytes -= 1  # Decrements remaining packet bytes counter with each processed byte
 
-                # Transfer the evaluated byte from the buffer into the packet array
-                np.concatenate(packet_bytes, evaluated_bytes[i])
+                # Transfers the evaluated byte from the unparsed buffer into the parsed buffer
+                parsed_bytes[i] = evaluated_bytes[i]
 
-                # If the evaluated byte matches the delimiter byte value and this is not the last byte of the packet,
-                # the packet is corrupted. Returns with error code 107: Delimiter encountered too early.
-                if evaluated_bytes[i] == delimiter_byte and remaining_packet_bytes > 0 :
+                # If the evaluated byte matches the delimiter byte value and this is not the last byte of the encoded
+                # payload, the packet is likely corrupted. Returns with error code 106: Delimiter byte encountered too
+                # early.
+                if evaluated_bytes[i] == delimiter_byte and remaining_packet_bytes != 0:
+                    remaining_bytes = evaluated_bytes[processed_bytes:]  # Returns any remaining unprocessed bytes
+                    return 106, parsed_byte_count, remaining_bytes, parsed_bytes
 
-                    # Uses error-code 107. Preserves the paket size and returns the packet parsed up to the error point.
-                    # Also, preserves all unprocessed bytes to be used for future read operations.
-                    status_code = 107
-                    remaining_bytes = evaluated_bytes[processed_bytes:]
-                    return status_code, packet_size, remaining_bytes, packet_bytes
-
-                # If the evaluated byte is a delimiter byte value and this is the last byte of the packet, the packet is
-                # fully parsed. Gracefully breaks the loop and advances to the next stage.
-                if evaluated_bytes[i] == delimiter_byte and remaining_packet_bytes == 0 :
+                # If the evaluated byte is a delimiter byte value and this is the last byte of the encoded payload, the
+                # payload is fully parsed. Gracefully breaks the loop and advances to the CRC postamble parsing stage.
+                if evaluated_bytes[i] == delimiter_byte and remaining_packet_bytes == 0:
                     break
 
-        # If there are still unprocessed bytes after the step above, returns with status code 2: the packet is not fully
-        # parsed. The caller method will then block in-place until enough bytes are available to guarantee success
-        # of this method runtime on the next call
-        if remaining_packet_bytes != 0:
-            status_code = 2
+                # If the last evaluated payload byte is not a delimiter byte value, this also indicates that the
+                # packet is likely corrupted. Returns with code 107: Delimiter byte not found.
+                if remaining_packet_bytes == 0 and evaluated_bytes[i] != delimiter_byte:
+                    remaining_bytes = evaluated_bytes[processed_bytes:]  # Returns any remaining unprocessed bytes
+                    return 107, parsed_byte_count, remaining_bytes, parsed_bytes
 
-            # Zero, as all leftover bytes have been absorbed into the packet array
-            remaining_bytes = np.empty(0, dtype=np.uint8)
+            # If this stage uses up all unprocessed bytes, ends method runtime with partial success code (2)
+            if total_bytes - processed_bytes == 0:
+                remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
+                return 2, parsed_byte_count, remaining_bytes, parsed_bytes
 
-            # Keeps the packet_size and packet_bytes from the stages above
-            return status_code, packet_size, remaining_bytes, packet_bytes
+        # Calculates the number of CRC postamble bytes that needs to be parsed. This calculation is designed to catch
+        # the case where the previous method call was able to parse some, but not all, of the CRC postamble bytes.
+        remaining_crc_bytes = parsed_bytes.size - parsed_byte_count
 
-        # Checks if enough bytes are available in the evaluated_bytes array combined with the packet_bytes input array
-        # (stores already processed packet bytes) to fully parse the packet.
+        # Stage 4: Resolves the CRC checksum postamble. This is the static portion of the stream that follows the
+        # encoded payload. This is used for payload data integrity verification.
+        for i in range(processed_bytes, total_bytes):
 
+            # The reason why this is checked first (unlike how it is done in other loops) is to account for the unlikely
+            # case of the crc being fully parsed when the loop is triggered. If all crc bytes have been parsed, the
+            # packet is also fully parsed. Returns with success code 1.
+            if remaining_crc_bytes == 0:
+                remaining_bytes = evaluated_bytes[processed_bytes:]
+                return 1, parsed_byte_count, remaining_bytes, parsed_bytes
 
-        if unprocessed_bytes >= remaining_packet_bytes:
-            # Extracts the remaining number of bytes needed to fully parse the packet from the buffer array.
-            extracted_bytes = evaluated_bytes[processed_bytes : remaining_packet_bytes + processed_bytes]
+            processed_bytes += 1  # Increments the processed bytes counter
+            parsed_byte_count += 1  # Increments the parsed packet + postamble byte tracker
+            remaining_crc_bytes -= 1  # Decrements remaining CRC bytes counter with each processed byte
 
-            # Appends extracted bytes to the end of the array holding already parsed bytes
-            packet = np.concatenate((packet_bytes, extracted_bytes))
+            # Transfers the evaluated byte from the unparsed buffer into the parsed buffer
+            parsed_bytes[i] = evaluated_bytes[i]
 
-            # Extracts any remaining bytes so that they can be properly stored for future receive_data() calls
-            remaining_bytes = evaluated_bytes[remaining_packet_bytes + processed_bytes :]
-
-            # Uses code 1 to indicate that the packet has been fully parsed
-            status_code = 1
-            return status_code, packet_size, remaining_bytes, packet
-
-
+        # The only way to reach this point is when the CRC parsing loop above escapes due to running out of bytes to
+        # process without fully parsing the postamble. Returns with partial success code (2)
+        remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
+        return 2, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
     @njit(nogil=True, cache=True)
