@@ -11,6 +11,21 @@ from ataraxis_transport_layer.helper_modules import (
     CRCProcessor,
     COBSProcessor,
 )
+from enum import Enum
+
+class StatusCode(Enum):
+    STANDBY = 11
+    PAYLOAD_TOO_SMALL_ERROR = 12
+    PAYLOAD_TOO_LARGE_ERROR = 13
+    INVALID_PAYLOAD_DATATYPE_ERROR = 14
+    PAYLOAD_ENCODED = 15
+    PACKET_TOO_SMALL_ERROR = 16
+    PACKET_TOO_LARGE_ERROR = 17
+    DELIMITER_NOT_FOUND_ERROR = 18
+    DELIMITER_FOUND_TOO_EARLY_ERROR = 19
+    INVALID_PACKET_DATATYPE_ERROR = 20
+    PAYLOAD_DECODED = 21
+
 
 
 def error_format(message: str) -> str:
@@ -1275,3 +1290,12 @@ def test_serial_mock():
         mock_serial.reset_input_buffer()
     with pytest.raises(Exception):
         mock_serial.reset_output_buffer()
+
+    #Logging Instead of Console Errors
+import logging
+
+logger = logging.getLogger(__name__)
+
+def log_error(message: str, error: Type[Exception]):
+    logger.error(message)
+    raise error(message)
