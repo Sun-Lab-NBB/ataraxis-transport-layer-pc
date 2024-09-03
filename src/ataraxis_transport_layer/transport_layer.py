@@ -1435,7 +1435,7 @@ class SerialTransportLayer:
         return False
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _parse_packet(
         unparsed_bytes: bytes,
         start_byte: np.uint8,

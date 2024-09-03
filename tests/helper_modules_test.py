@@ -1,6 +1,7 @@
 """Contains tests for classes and methods stored inside the helper_modules module."""
 
 import re
+from enum import Enum
 import textwrap
 
 import numpy as np
@@ -11,7 +12,7 @@ from ataraxis_transport_layer.helper_modules import (
     CRCProcessor,
     COBSProcessor,
 )
-from enum import Enum
+
 
 class StatusCode(Enum):
     STANDBY = 11
@@ -25,7 +26,6 @@ class StatusCode(Enum):
     DELIMITER_FOUND_TOO_EARLY_ERROR = 19
     INVALID_PACKET_DATATYPE_ERROR = 20
     PAYLOAD_DECODED = 21
-
 
 
 def error_format(message: str) -> str:
@@ -67,7 +67,7 @@ def error_format(message: str) -> str:
         ),  # Maximum payload size, also the payload is entirely made of delimiters
     ],
 )
-def test_cobs_processor(input_buffer, encoded_buffer):
+def test_cobs_processor_encode_decode(input_buffer, encoded_buffer) -> None:
     """Verifies the functioning of the COBSProcessor class encode_payload() and decode_payload() methods."""
 
     # Instantiates the tested class
@@ -83,7 +83,7 @@ def test_cobs_processor(input_buffer, encoded_buffer):
     assert decoded_payload.tolist() == input_buffer.tolist()
 
 
-def test_cobs_processor_errors():
+def test_cobs_processor_encode_decode_errors():
     """Verifies the error-handling behavior of the COBSProcessor class encode_payload() and decode_payload() methods."""
 
     # Instantiates the tested class
@@ -1291,11 +1291,4 @@ def test_serial_mock():
     with pytest.raises(Exception):
         mock_serial.reset_output_buffer()
 
-    #Logging Instead of Console Errors
-import logging
-
-logger = logging.getLogger(__name__)
-
-def log_error(message: str, error: Type[Exception]):
-    logger.error(message)
-    raise error(message)
+    # Logging Instead of Console Errors

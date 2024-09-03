@@ -23,7 +23,7 @@ from numba.experimental import jitclass  # type: ignore
 from ataraxis_base_utilities import console
 
 
-class _COBSProcessor:
+class _COBSProcessor:  # pragma: no cover
     """Provides methods for encoding and decoding data using the Consistent Overhead Byte Stuffing (COBS) scheme.
 
     This class is intended to be initialized through Numba's 'jitclass' function. The intended way to do so is through
@@ -539,7 +539,7 @@ class COBSProcessor:
         return self._processor
 
 
-class _CRCProcessor:
+class _CRCProcessor:  # pragma: no cover
     """Provides methods for working with CRC checksums used to verify the integrity of transferred data packets.
 
     This class is intended to be initialized through Numba's 'jitclass' function. The intended way to do so is through
