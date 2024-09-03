@@ -61,7 +61,7 @@ def test_serial_transfer_protocol_buffer_manipulation():
     # noinspection PyUnresolvedReferences
     assert isinstance(protocol._port, SerialMock)
 
-    # Instantiates tested scalar objects
+    # Instantiate scalar objects for testing
     unsigned_8 = np.uint8(10)
     unsigned_16 = np.uint16(451)
     unsigned_32 = np.uint32(123456)
@@ -116,17 +116,16 @@ def test_serial_transfer_protocol_buffer_manipulation():
         ],
         dtype=np.uint8,
     )
+
     assert np.array_equal(expected_buffer, protocol.transmission_buffer[:end_index])
     assert protocol.bytes_in_transmission_buffer == 19
 
-    # Instantiates tested numpy array objects
+    # Instantiate numpy array objects for testing
     unsigned_array_64 = np.array([1, 2, 3, 4, 5], dtype=np.uint64)
     signed_array_64 = np.array([-1, -2, -3, -4, -5], dtype=np.int64)
     float_array_64 = np.array([1.1, 2.2, 3.3, 4.4, 5.5], dtype=np.float64)
 
-    # Tests Array object writing. Specifically, every supported array type is 8 bytes in size. Scalars and arrays are
-    # interchangeable in terms of supported types, so combined with scalar testing, this confirms the entire supported
-    # range works as expected
+    # Test array object writing for all supported array types (8 bytes in size)
     end_index = protocol.write_data(unsigned_array_64)
     assert end_index == 59
     end_index = protocol.write_data(signed_array_64)
@@ -266,36 +265,29 @@ def test_serial_transfer_protocol_buffer_manipulation():
     assert np.array_equal(expected_buffer, protocol.transmission_buffer[:end_index])
     assert protocol.bytes_in_transmission_buffer == 139
 
-    # Instantiates a test dataclass to simulate 'structure' writing. Uses simple uint types to simplify verifying
-    # test outcomes.
-    test_class = SampleDataClass
-    test_class.uint_value = np.uint8(50)
-    test_class.uint_array = np.array([1, 2, 3], np.uint8)
+    # Instantiate a test dataclass and simulate 'structure' writing
+    test_class = SampleDataClass(uint_value=np.uint8(50), uint_array=np.array([1, 2, 3], np.uint8))
 
-    # Adds the test class to the protocol buffer overwriting(!) the data at the beginning of the protocol buffer.
-    # Verifies that this does NOT modify the payload tracker (expected behavior, the variable always tracks the size of
-    # the payload based on the maximum written index)
+    # Write the test class to the protocol buffer, overwriting the beginning of the buffer
     end_index = protocol.write_data(test_class, start_index=0)
-    assert end_index == 4  # Ensures the returned index matches expectation and is no the same as payload size
+    assert end_index == 4  # Ensures the returned index matches the expectation and is not the same as payload size
     assert protocol.bytes_in_transmission_buffer == 139
 
-    # Verifies that the data inside the buffer was overwritten as expected
+    # Verify that the data inside the buffer was overwritten as expected
     expected_buffer[0:4] = [50, 1, 2, 3]
     assert np.array_equal(
         expected_buffer,
         protocol.transmission_buffer[: protocol.bytes_in_transmission_buffer],
     )
 
-    # Restores the initial portion of the buffer back to the scalar test values and re-writes the dataclass to the
-    # end of the payload. This is necessary to properly support data reading tests below.
+    # Restore the initial portion of the buffer and re-write the dataclass to the end of the payload for reading tests
     end_index = protocol.write_data(unsigned_8, start_index=0)
     end_index = protocol.write_data(unsigned_16, start_index=end_index)
     protocol.write_data(unsigned_32, start_index=end_index)
     end_index = protocol.write_data(test_class)
     assert end_index == 143  # Ensures the data was written
 
-    # Records the final state of the transmission buffer to the expected variable to support testing reset methods at
-    # the end of this test function.
+    # Record the final state of the transmission buffer to support reset method tests later
     expected_buffer = protocol.transmission_buffer
 
     # Copies the contents of the transmission buffer into the reception buffer to test data reading. Since there is no
