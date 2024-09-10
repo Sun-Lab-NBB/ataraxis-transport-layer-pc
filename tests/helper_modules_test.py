@@ -83,6 +83,12 @@ def test_cobs_processor_encode_decode(input_buffer, encoded_buffer) -> None:
     assert decoded_payload.tolist() == input_buffer.tolist()
 
 
+def test_cobs_processor_repr() -> None:
+    """Verifies the __repr__ method of the COBSProcessor class."""
+    processor = COBSProcessor()
+    assert repr(processor) == "COBSProcessor()"
+
+
 def test_cobs_processor_encode_decode_errors():
     """Verifies the error-handling behavior of the COBSProcessor class encode_payload() and decode_payload() methods."""
 
@@ -1103,6 +1109,19 @@ def test_crc_processor(polynomial, initial_crc, final_xor, test_data, expected_c
     assert isinstance(checksum, (np.uint8, np.uint16, np.uint32))
     assert isinstance(checksum_bytes, np.ndarray)
     assert isinstance(reconstructed_checksum, (np.uint8, np.uint16, np.uint32))
+
+
+def test_crc_processor_properties() -> None:
+    """Verifies the properties of the CRCProcessor class."""
+    polynomial = np.uint8(0x07)
+    initial_crc_value = np.uint8(0x00)
+    final_xor_value = np.uint8(0x00)
+
+    processor = CRCProcessor(polynomial, initial_crc_value, final_xor_value)
+
+    assert processor.polynomial == polynomial
+    assert processor.initial_crc_value == initial_crc_value
+    assert processor.final_xor_value == final_xor_value
 
 
 def test_crc_processor_errors():
