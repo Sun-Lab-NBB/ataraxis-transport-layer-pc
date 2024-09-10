@@ -186,51 +186,39 @@ class SerialTransportLayer:
                 f"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but "
                 f"encountered {port} of type {type(port).__name__}."
             )
-            console.error(message=message, error=TypeError)
+            raise TypeError(message)
+
         if baudrate <= 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
                 f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if not 0 <= start_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if not 0 <= delimiter_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if timeout < 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
                 f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if start_byte == delimiter_byte:
-            message = (
-                f"Unable to initialize SerialTransportLayer class. Expected 'start_byte' and 'delimiter_byte' "
-                f"arguments to have different values, but both are set to the same value ({start_byte})."
-            )
-            console.error(message=message, error=ValueError)
-        if not 0 < maximum_transmitted_payload_size <= 254:
-            message = (
-                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 1 and 254 for the "
-                f"'maximum_transmitted_payload_size' argument, but encountered {maximum_transmitted_payload_size} "
-                f"of type {type(maximum_transmitted_payload_size).__name__}."
-            )
-            console.error(message=message, error=ValueError)
-        if not 0 < minimum_received_payload_size <= 254:
-            message = (
-                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 1 and 254 for the "
-                f"'minimum_received_payload_size' argument, but encountered {minimum_received_payload_size} "
-                f"of type {type(minimum_received_payload_size).__name__}."
-            )
-            console.error(message=message, error=ValueError)
+            message = "The 'start_byte' and 'delimiter_byte' cannot be the same."
+            raise ValueError(message)
 
         # Based on the class runtime selector, initializes a real or mock serial port manager class
         self._port: SerialMock | Serial

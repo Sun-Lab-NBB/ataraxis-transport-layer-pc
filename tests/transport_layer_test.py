@@ -509,7 +509,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         # noinspection PyTypeChecker
         protocol.write_data(empty_array)
 
-    # READ DATA
+    # READ DATA SECTION
     # Sets the _bytes_in_reception_buffer to a non-zero value to support testing. Since there is no way of 'gracefully'
     # accessing this private attribute, uses direct access.
     protocol._bytes_in_reception_buffer = 50

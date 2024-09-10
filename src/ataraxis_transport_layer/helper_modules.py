@@ -1197,26 +1197,19 @@ class CRCProcessor:
 
 
 class SerialMock:
-    """Simulates the runtime behavior of pySerial.Serial class methods, which is used to test the SerialTransportLayer
-    class.
+    """
+    Mocks the behavior of PySerial's `Serial` class for testing purposes.
 
-    This class only provides the methods that are either helpful for testing (like resetting the Mock class buffers)
-    or are directly used by the SerialTransportLayer class (reading and writing data, opening / closing the port,
-    etc.). Any Serial class method not used by the SerialTransportLayer class is not included in this class.
+    This class provides a mock implementation of the `Serial` class, enabling unit tests for `SerialTransportLayer` without requiring an actual hardware connection. It replicates the core functionalities of PySerial's `Serial` class that are relevant to testing, such as reading and writing data, while simplifying the overall behavior.
 
-    Notes:
-        This class is used in place of the actual Serial class to enable unit-testing of SerialTransportLayer class
-        methods without the confounding of a third-party library. Additionally, it simplifies testing, as it removes
-        the need for a working serial communication.
-
-        Also, unlike its Serial class prototype, this class exposes the rx_buffer and tx_buffer, while using similar
-        logic for adding data to the buffers. This makes it possible to verify the outcome of a would-be data
-        transmission or reception runtime.
+    Key differences from `Serial`:
+        - The `tx_buffer` and `rx_buffer` attributes are exposed directly, allowing test cases to verify the state of transmitted and received data.
+        - The class only supports methods used by `SerialTransportLayer` for testing, and omits other methods not relevant to this specific use case.
 
     Attributes:
-        is_open: The boolean flag that tracks the state of the serial port.
-        tx_buffer: The 'bytes' buffer that stores the data to be sent over the serial port.
-        rx_buffer: The 'bytes' buffer that stores the data received from the serial port.
+        is_open: Boolean flag indicating if the mock serial port is open.
+        tx_buffer: Byte buffer that stores transmitted data.
+        rx_buffer: Byte buffer that stores received data.
     """
 
     def __init__(self) -> None:
@@ -1226,33 +1219,27 @@ class SerialMock:
 
     def __repr__(self) -> str:
         """Returns a string representation of the SerialMock object."""
-        repr_message = f"SerialMock(open={self.is_open})"
-        return repr_message
+        return f"SerialMock(open={self.is_open})"
 
     def open(self) -> None:
-        """If 'is_open' flag is False, switches it to True.
-
-        Simulates the effect of successful 'open' method calls.
-        """
+        """Opens the mock serial port, setting `is_open` to True."""
         if not self.is_open:
             self.is_open = True
 
     def close(self) -> None:
-        """If 'is_open' flag is True, switches it to False.
-
-        Simulates the effect of successful 'close' method calls.
-        """
+        """Closes the mock serial port, setting `is_open` to False."""
         if self.is_open:
             self.is_open = False
 
     def write(self, data: bytes) -> None:
-        """Writes the input data (stored as a 'bytes' object) to the tx_buffer.
+        """
+        Writes data to the `tx_buffer`.
 
         Args:
-            data: The data to be written to the output buffer. Has to be stored as a 'bytes' python object.
+            data: Data to be written to the output buffer. Must be a bytes object.
 
         Raises:
-            TypeError: If the input data is not in 'bytes' format.
+            TypeError: If `data` is not a bytes object.
             Exception: If the mock serial port is not open.
         """
         if self.is_open:
@@ -1264,13 +1251,14 @@ class SerialMock:
             raise Exception("Mock serial port is not open")
 
     def read(self, size: int = 1) -> bytes:
-        """Reads the requested 'size' number of bytes from the rx_buffer and returns them as 'bytes' object.
+        """
+        Reads a specified number of bytes from the `rx_buffer`.
 
         Args:
-            size: The number of bytes to be read from the rx_buffer.
+            size: Number of bytes to read from the input buffer. Defaults to 1.
 
         Returns:
-            The requested number of bytes from the rx_buffer as a 'bytes' object.
+            A bytes object containing the requested data from the `rx_buffer`.
 
         Raises:
             Exception: If the mock serial port is not open.
@@ -1283,7 +1271,8 @@ class SerialMock:
             raise Exception("Mock serial port is not open")
 
     def reset_input_buffer(self) -> None:
-        """Resets the input buffer to an empty byte array.
+        """
+        Clears the `rx_buffer`.
 
         Raises:
             Exception: If the mock serial port is not open.
@@ -1294,7 +1283,8 @@ class SerialMock:
             raise Exception("Mock serial port is not open")
 
     def reset_output_buffer(self) -> None:
-        """Resets the output buffer to an empty byte array.
+        """
+        Clears the `tx_buffer`.
 
         Raises:
             Exception: If the mock serial port is not open.
@@ -1306,10 +1296,10 @@ class SerialMock:
 
     @property
     def in_waiting(self) -> int:
-        """Returns the number of bytes currently stored in the rx_buffer."""
+        """Returns the number of bytes available in the `rx_buffer`."""
         return len(self.rx_buffer)
 
     @property
     def out_waiting(self) -> int:
-        """Returns the number of bytes currently stored in the tx_buffer."""
+        """Returns the number of bytes available in the `tx_buffer`."""
         return len(self.tx_buffer)

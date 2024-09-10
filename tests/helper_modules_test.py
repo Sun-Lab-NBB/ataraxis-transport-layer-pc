@@ -89,6 +89,35 @@ def test_cobs_processor_repr() -> None:
     assert repr(processor) == "COBSProcessor()"
 
 
+def test_crc_processor_repr():
+    """Verifies the __repr__ method of the CRCProcessor class."""
+    polynomial = np.uint8(0x07)
+    initial_crc_value = np.uint8(0x00)
+    final_xor_value = np.uint8(0x00)
+
+    processor = CRCProcessor(polynomial, initial_crc_value, final_xor_value)
+
+    expected_repr = (
+        f"CRCProcessor(status={processor._processor.status}, "
+        f"polynomial={hex(processor._processor.polynomial)}, "
+        f"initial_crc_value={hex(processor._processor.initial_crc_value)}, "
+        f"final_xor_value={hex(processor._processor.final_xor_value)}, "
+        f"crc_byte_length={processor._processor.crc_byte_length})"
+    )
+    assert repr(processor) == expected_repr
+
+
+def test_serial_mock_repr():
+    """Verifies the __repr__ method of the SerialMock class."""
+    serial_mock = SerialMock()
+    expected_repr = "SerialMock(open=False)"
+    assert repr(serial_mock) == expected_repr
+
+    serial_mock.open()  # Set the mock serial to open
+    expected_repr = "SerialMock(open=True)"
+    assert repr(serial_mock) == expected_repr
+
+
 def test_cobs_processor_encode_decode_errors():
     """Verifies the error-handling behavior of the COBSProcessor class encode_payload() and decode_payload() methods."""
 
