@@ -7,9 +7,13 @@ class methods.
 import re
 import textwrap
 from dataclasses import dataclass
+from unittest.mock import patch
 
 import numpy as np
+from numpy import ndarray, unsignedinteger
 import pytest
+from serial.tools import list_ports
+from numpy._typing import NDArray
 
 from ataraxis_transport_layer.helper_modules import (
     SerialMock,
@@ -34,6 +38,132 @@ class SampleDataClass:
 
     uint_value: np.unsignedinteger
     uint_array: np.ndarray
+
+
+class TestSerialTransportLayerInitialization:
+    def test_valid_initialization(self):
+        # Existing valid initialization tests
+        protocol = SerialTransportLayer(
+            port="COM7",
+            baudrate=115200,
+            start_byte=129,
+            delimiter_byte=0,
+            timeout=10000,
+            test_mode=True,
+        )
+        assert protocol.port == "COM7"
+        # Add more assertions as needed
+
+    # New Tests for Argument Validation
+
+    def test_invalid_port_type(self):
+        with pytest.raises(TypeError, match=r"Expected a string value for 'port' argument"):
+            SerialTransportLayer(
+                port="12345",  # Invalid type
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=0,
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_baudrate_value(self):
+        with pytest.raises(ValueError, match=r"Expected a positive integer value for 'baudrate'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=-9600,  # Invalid baudrate
+                start_byte=129,
+                delimiter_byte=0,
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_start_byte_value(self):
+        with pytest.raises(ValueError, match=r"Expected an integer value between 0 and 255 for 'start_byte'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=300,  # Invalid start_byte
+                delimiter_byte=0,
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_delimiter_byte_value(self):
+        with pytest.raises(ValueError, match=r"Expected an integer value between 0 and 255 for 'delimiter_byte'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=300,  # Invalid delimiter_byte
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_timeout_value(self):
+        with pytest.raises(ValueError, match=r"Expected an integer value of 0 or above for 'timeout'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=0,
+                timeout=-5000,  # Invalid timeout
+                test_mode=True,
+            )
+
+    def test_start_byte_equals_delimiter_byte(self):
+        with pytest.raises(ValueError, match=r"The 'start_byte' and 'delimiter_byte' cannot be the same"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=129,  # start_byte and delimiter_byte are the same
+                timeout=10000,
+                test_mode=True,
+            )
+
+
+def test_repr_with_mocked_port():
+    """Test __repr__ when the _port is mocked using SerialMock."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+    expected_repr = (
+        "SerialTransportLayer(port & baudrate=MOCKED, "
+        "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+        "timeout=10000 us, maximum_tx_payload_size = 254, "
+        "maximum_rx_payload_size=254)"
+    )
+    assert repr(protocol) == expected_repr
+
+
+@patch("your_module.serial.Serial")  # Mock the real Serial object
+def test_repr_with_real_serial_port(mock_serial):
+    """Test __repr__ when the _port is a real Serial object."""
+    # Set up mock to simulate real Serial behavior
+    mock_serial.name = "COM7"
+    mock_serial.baudrate = 115200
+
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=False,
+    )
+    expected_repr = (
+        "SerialTransportLayer(port='COM7', baudrate=115200, "
+        "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+        "timeout=10000 us, maximum_tx_payload_size = 254, "
+        "maximum_rx_payload_size=254)"
+    )
+    assert repr(protocol) == expected_repr
 
 
 def test_serial_transfer_protocol_buffer_manipulation():
@@ -485,7 +615,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         protocol.write_data(payload, start_index=start_index)
 
     # Verifies that calling write_data method for a multidimensional numpy array raises an error.
-    invalid_array = np.zeros((2, 2), dtype=np.uint8)
+    invalid_array: ndarray[unsignedinteger[np.uint8], Any] = np.zeros((2, 2), dtype=np.uint8)
     error_message = (
         f"A multidimensional numpy array with {invalid_array.ndim} dimensions encountered when writing "
         f"data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
@@ -533,7 +663,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     # Verifies that attempting to read too large of an object (in a start-index-dependent fashion, an object that cannot
     # be filled with the bytes available from the payload starting at start_index) raises an error.
     start_index = 150
-    payload = np.ones(200, dtype=np.uint8)
+    payload: ndarray[unsignedinteger[np.uint8], Any] = np.ones(200, dtype=np.uint8)
+
     error_message = (
         f"Insufficient payload size to read the data from the _reception_buffer starting at the index "
         f"'{start_index}'. Specifically, given the object size of '{payload.nbytes}' bytes, the required payload "
@@ -571,6 +702,96 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     ):
         # noinspection PyTypeChecker
         protocol.read_data(empty_array)
+
+
+def test_empty_array():
+    """Test that attempting to write an empty array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    empty_array: NDArray[np.uint8] = np.empty(0, dtype=np.uint8)
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "An empty (size 0) numpy array encountered when writing data to _transmission_buffer. Writing empty arrays is not supported."
+        ),
+    ):
+        protocol.write_data(empty_array)
+
+
+def test_non_one_dimensional_array():
+    """Test that attempting to write a multidimensional array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    invalid_array: np.ndarray = np.zeros((2, 2), dtype=np.uint8)
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            f"A multidimensional numpy array with {invalid_array.ndim} dimensions encountered when writing data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
+        ),
+    ):
+        protocol.write_data(invalid_array)
+
+
+def test_read_data_empty_array():
+    """Test that attempting to read an empty array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    empty_array: np.ndarray = np.empty(0, dtype=np.uint8)
+
+    # Prepare the reception buffer with dummy data
+    protocol._reception_buffer[:10] = np.arange(10, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 10
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "An empty (size 0) numpy array requested when reading data from _reception_buffer. Reading empty arrays is currently not supported."
+        ),
+    ):
+        protocol.read_data(empty_array)
+
+
+def test_read_data_multidimensional_array():
+    """Test that attempting to read a multidimensional array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    invalid_array: np.ndarray = np.zeros((2, 2), dtype=np.uint8)
+
+    # Prepare the reception buffer with dummy data
+    protocol._reception_buffer[:100] = np.arange(100, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 100
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            f"A multidimensional numpy array with {invalid_array.ndim} dimensions requested when reading data from _reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
+        ),
+    ):
+        protocol.read_data(invalid_array)
 
 
 def test_serial_transfer_protocol_data_transmission():
@@ -817,3 +1038,31 @@ def test_serial_transfer_protocol_data_transmission_errors():
     ):
         protocol.receive_data()
     test_data[-2:] = expected_checksum  # Restores the CRC checksum back to the correct value
+
+
+from typing import Any, Dict, Tuple, Union
+
+
+def list_available_ports() -> Tuple[Dict[str, Union[int, str, Any]], ...]:
+    """Provides the information about each serial port addressable through the pySerial library.
+
+    Returns:
+        A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
+        port.
+    """
+
+    # Gets the list of port objects visible to the pySerial library.
+    available_ports = list_ports.comports()
+
+    # Creates a list of dictionaries with port details
+    information_list = [
+        {
+            "Name": port.name,
+            "Device": port.device,
+            "PID": port.pid,
+            "Description": port.description,
+        }
+        for port in available_ports
+    ]
+
+    return tuple(information_list)
