@@ -7,7 +7,7 @@ class methods.
 import re
 import textwrap
 from dataclasses import dataclass
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from numpy import ndarray, unsignedinteger
@@ -1066,3 +1066,129 @@ def list_available_ports() -> Tuple[Dict[str, Union[int, str, Any]], ...]:
     ]
 
     return tuple(information_list)
+
+
+def test_bytes_available_timeout():
+    """Test the scenario where not enough bytes are available within the timeout."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mocking the port to simulate 'in_waiting' returning 0 bytes (no new bytes available)
+    protocol._port.in_waiting = 0
+    protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout (elapsed > timeout)
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+    # Expected result is False due to timeout
+    assert result is False
+
+
+def test_receive_packet_unknown_status():
+    """Test receiving a packet that returns an unknown status code."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mocking a method to return an invalid status code
+    with patch.object(protocol, "_receive_packet", return_value=999):
+        with pytest.raises(
+            RuntimeError, match="Failed to parse the incoming serial packet data. Encountered an unknown status value"
+        ):
+            protocol.receive_data()
+
+
+def test_not_enough_bytes_received():
+    """Test for scenario where not enough bytes are read from the serial port."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock the serial port to simulate reading fewer bytes than required
+    protocol._port.in_waiting = 5  # Only 5 bytes available when more are needed
+    protocol._port.read = MagicMock(return_value=np.array([1, 2, 3, 4, 5], dtype=np.uint8))
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+    # Expected result is False because only 5 bytes were available instead of the required 10
+    assert result is False
+
+
+def test_crc_checksum_failure():
+    """Test for CRC checksum failure during packet reception."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock the CRCProcessor to simulate a checksum failure
+    with patch.object(CRCProcessor, "calculate_crc_checksum", return_value=1):  # Simulate non-zero checksum
+        reception_buffer = np.arange(20, dtype=np.uint8)  # Simulate received data
+        protocol._reception_buffer = reception_buffer
+        protocol._bytes_in_reception_buffer = 20
+
+        result = protocol.receive_data()
+
+        # Expected result is 0 since the CRC checksum failed
+        assert result == 0
+
+
+def test_start_byte_not_found():
+    """Test the case where the start byte is not found in the available bytes."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock a situation where the start byte is not in the buffer
+    protocol._port.in_waiting = 0  # No bytes available to be the start byte
+    protocol._reception_buffer = np.array([2, 3, 4, 5], dtype=np.uint8)  # Simulate reception buffer without start byte
+
+    with pytest.raises(
+        RuntimeError, match="Failed to parse the incoming serial packet data. Unable to find the start_byte"
+    ):
+        protocol.receive_data()
+
+
+def test_byte_mismatch_in_buffers():
+    """Test when the number of bytes across buffers does not match the required number."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock the in_waiting to simulate a situation where fewer bytes are available
+    protocol._port.in_waiting = 5
+    protocol._port.read = MagicMock(return_value=np.array([1, 2, 3, 4, 5], dtype=np.uint8))
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+    # Expected to return False because not enough bytes are available
+    assert result is False
+
+
+# def test_bytes_available_success():
+#     """Test the case where required bytes are available and read successfully."""
+#     protocol = SerialTransportLayer(
+#         port="COM7",
+#         baudrate=115200,
+#         test_mode=True,
+#     )
+#
+#     # Mock the in_waiting to simulate a successful byte availability
+#     protocol._port.in_waiting = 10
+#     protocol._port.read = MagicMock(return_value=np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=np.uint8))
+#
+#     result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+#
+#     # Expected to return True because the required number of bytes are available
+#     assert result is True
