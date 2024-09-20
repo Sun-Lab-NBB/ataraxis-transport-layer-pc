@@ -55,12 +55,12 @@ class TestSerialTransportLayerInitialization:
         # Add more assertions as needed
 
     # New Tests for Argument Validation
-    # added the coverage for self._port = Serial(port, baudrate, timeout)
-    def test_invalid_port_type():
+
+    def test_invalid_port_type_none(self):
         # Test for None as port
         with pytest.raises(TypeError, match=r"Expected a string value for 'port' argument, but encountered NoneType"):
             SerialTransportLayer(
-                port="",
+                port=None,  # This should trigger the TypeError
                 baudrate=115200,
                 start_byte=129,
                 delimiter_byte=0,
@@ -68,10 +68,11 @@ class TestSerialTransportLayerInitialization:
                 test_mode=True,
             )
 
+    def test_invalid_port_type_int(self):
         # Test for invalid port type (integer instead of string)
         with pytest.raises(TypeError, match=r"Expected a string value for 'port' argument, but encountered int"):
             SerialTransportLayer(
-                port="12345",
+                port=12345,  # This should trigger the TypeError
                 baudrate=115200,
                 start_byte=129,
                 delimiter_byte=0,
