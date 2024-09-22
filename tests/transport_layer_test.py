@@ -1417,3 +1417,137 @@ def test_sufficient_bytes_available():
     protocol._port.in_waiting = 2
     result = protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
     assert result is False
+
+
+# Define a dataclass to simulate the structure serialization
+@dataclass
+class MockDataClass:
+    """Mock class with numpy supported scalar and array types."""
+
+    field1: np.uint8  # Numpy unsigned 8-bit integer
+    field2: np.ndarray  # Numpy array (make sure it's one-dimensional)
+
+
+def test_write_data_break_condition():
+    """Test that the write_data function breaks out of the loop when local_index < start_index."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Create mock data with numpy types (a scalar and an array)
+    data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
+
+    # Mock the internal write_data method to return a value less than start_index
+    with patch.object(protocol, "write_data", side_effect=[6, 4]) as mock_write:  # Simulate failure after first call
+        start_index = 5
+        end_index = protocol.write_data(data_object=data, start_index=start_index)
+
+        # Check if the function breaks when local_index < start_index
+        assert end_index < start_index
+        mock_write.assert_called()  # Ensure write_data was called
+
+
+def test_unsupported_input_type_error():
+    """Test that a TypeError is raised for unsupported input types."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Create an unsupported input type (neither numpy scalar nor dataclass)
+    invalid_data = {"unsupported": "data"}
+
+    # Assert that a TypeError is raised with the correct message
+    with pytest.raises(TypeError, match=r"Encountered an unsupported input data_object type"):
+        protocol.write_data(invalid_data)
+
+
+def test_buffer_size_insufficient_error():
+    """Test that a ValueError is raised when the buffer does not have enough space."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Mock the transmission buffer to simulate insufficient space
+    protocol._transmission_buffer = np.zeros(10, dtype=np.uint8)
+    protocol._bytes_in_transmission_buffer = 8  # Only 2 bytes of space left
+
+    # Create a large numpy array that exceeds the buffer size
+    large_data = np.ones(5, dtype=np.uint8)
+
+    # Assert that a ValueError is raised with the correct message
+    with pytest.raises(ValueError, match=r"The transmission buffer does not have enough space to write the data"):
+        protocol.write_data(large_data, start_index=7)
+
+
+def test_write_data_success():
+    """Test the successful write operation and correct end_index return."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Mock the transmission buffer with enough space
+    protocol._transmission_buffer = np.zeros(20, dtype=np.uint8)
+    protocol._bytes_in_transmission_buffer = 10
+
+    # Create mock data to write
+    data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
+
+    # Call the write_data method and check the returned end_index
+    end_index = protocol.write_data(data_object=data, start_index=10)
+
+    # Ensure that the end_index is greater than the start_index and buffer tracker is updated
+    assert end_index > 10
+    assert protocol._bytes_in_transmission_buffer == end_index
+
+
+def test_buffer_tracker_update():
+    """Test that the buffer tracker (_bytes_in_transmission_buffer) is updated correctly after a successful write."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Mock the transmission buffer with enough space
+    protocol._transmission_buffer = np.zeros(20, dtype=np.uint8)
+    protocol._bytes_in_transmission_buffer = 10
+
+    # Create a numpy scalar and write it to the buffer
+    data = np.uint8(123)
+    end_index = protocol.write_data(data_object=data, start_index=10)
+
+    # Ensure the tracker is updated correctly
+    assert protocol._bytes_in_transmission_buffer == end_index
