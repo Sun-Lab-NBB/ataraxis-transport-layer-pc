@@ -1360,3 +1360,60 @@ def test_crc_failure():
     # Receive the data and expect a failure due to CRC
     with pytest.raises(ValueError, match="CRC checksum verification failed"):
         protocol.receive_data()
+
+
+def test_list_available_ports():
+    """Test that list_available_ports correctly retrieves and formats serial port information."""
+
+    # Mock the output of list_ports.comports()
+    mock_port = MagicMock()
+    mock_port.name = "COM3"
+    mock_port.device = "/dev/ttyS1"
+    mock_port.pid = 1234
+    mock_port.description = "USB Serial Device"
+
+    with patch("serial.tools.list_ports.comports", return_value=[mock_port]):
+        from ataraxis_transport_layer.transport_layer import SerialTransportLayer
+
+        ports = SerialTransportLayer.list_available_ports()
+
+        expected_output = (
+            {
+                "Name": "COM3",
+                "Device": "/dev/ttyS1",
+                "PID": 1234,
+                "Description": "USB Serial Device",
+            },
+        )
+
+        assert ports == expected_output
+
+
+def test_sufficient_bytes_available():
+    """Test the condition when sufficient bytes are available to process."""
+
+    # Create a mock of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Mock the values of in_waiting and leftover bytes
+    protocol._port.in_waiting = 5
+    protocol._leftover_bytes = [1, 2, 3]
+
+    # Mock the minimum packet size
+    protocol._minimum_packet_size = 7
+
+    # Test the condition where in_waiting + leftover_bytes > minimum_packet_size
+    result = protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
+    assert result is True
+
+    # Test the condition where it's not sufficient
+    protocol._port.in_waiting = 2
+    result = protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
+    assert result is False
