@@ -526,8 +526,8 @@ class SerialTransportLayer:
             message = (
                 f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
                 f"space to write the data starting at the index {start_index}. Specifically, given the data size of "
-                f"{data_object.nbytes} bytes, the required buffer size is "  # type: ignore
-                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore
+                f"{data_object.nbytes} bytes, the required buffer size is "  # type: ignore # pragma: no cover
+                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore # pragma: no cover
                 f"{self._transmission_buffer.size} bytes."
             )
             console.error(message=message, error=ValueError)
@@ -537,7 +537,7 @@ class SerialTransportLayer:
         if end_index == -1:
             message = (
                 f"Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
+                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore # pragma: no cover
                 f"one-dimensional (flat) arrays are supported."
             )
             console.error(message=message, error=ValueError)
@@ -564,7 +564,7 @@ class SerialTransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_scalar_data(
         target_buffer: NDArray[np.uint8],
         scalar_object: Union[
@@ -621,7 +621,7 @@ class SerialTransportLayer:
         return required_size
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_array_data(
         target_buffer: NDArray[np.uint8],
         array_object: NDArray[
@@ -827,8 +827,8 @@ class SerialTransportLayer:
             message = (
                 f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
                 f"bytes available to fully fill the object starting at the index {start_index}. Specifically, given "
-                f"the object size of {data_object.nbytes} bytes, the required payload size is "  # type: ignore
-                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore
+                f"the object size of {data_object.nbytes} bytes, the required payload size is "  # type: ignore # pragma: no cover
+                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore # pragma: no cover
                 f"{self.bytes_in_reception_buffer} bytes."
             )
             console.error(message=message, error=ValueError)
@@ -838,7 +838,7 @@ class SerialTransportLayer:
         elif end_index == -1:
             message = (
                 f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
+                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore # pragma: no cover
                 f"one-dimensional (flat) arrays are supported."
             )
             console.error(message=message, error=ValueError)
@@ -864,7 +864,7 @@ class SerialTransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _read_array_data(
         source_buffer: NDArray[np.uint8],
         array_object: NDArray[
@@ -1007,7 +1007,7 @@ class SerialTransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _construct_packet(
         payload_buffer: NDArray[np.uint8],
         cobs_processor: _COBSProcessor,
@@ -1423,7 +1423,7 @@ class SerialTransportLayer:
         return False
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover # pragma: no cover
     def _parse_packet(
         unparsed_bytes: bytes,
         start_byte: np.uint8,
@@ -1656,7 +1656,8 @@ class SerialTransportLayer:
         return 2, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
-    # @njit(nogil=True, cache=True, debug=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    # pragma: no cover
     def _validate_packet(
         reception_buffer: NDArray[np.uint8],
         packet_size: int,

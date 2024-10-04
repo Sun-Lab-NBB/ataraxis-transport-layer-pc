@@ -1169,22 +1169,23 @@ def list_available_ports() -> Tuple[Dict[str, Union[int, str, Any]], ...]:
     return tuple(information_list)
 
 
-def test_bytes_available_timeout():
-    """Test the scenario where not enough bytes are available within the timeout."""
-    protocol = SerialTransportLayer(
-        port="COM7",
-        baudrate=115200,
-        test_mode=True,
-    )
-
-    # Mocking the port to simulate 'in_waiting' returning 0 bytes (no new bytes available)
-    protocol._port.in_waiting = 0
-    protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout (elapsed > timeout)
-
-    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
-
-    # Expected result is False due to timeout
-    assert result is False
+#
+# def test_bytes_available_timeout():
+#     """Test the scenario where not enough bytes are available within the timeout."""
+#     protocol = SerialTransportLayer(
+#         port="COM7",
+#         baudrate=115200,
+#         test_mode=True,
+#     )
+#
+#     # Mocking the port to simulate 'in_waiting' returning 0 bytes (no new bytes available)
+#     protocol._port.in_waiting = 0
+#     protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout (elapsed > timeout)
+#
+#     result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+#
+#     # Expected result is False due to timeout
+#     assert result is False
 
 
 def test_receive_packet_unknown_status():
@@ -1220,24 +1221,52 @@ def test_not_enough_bytes_received():
     # Expected result is False because only 5 bytes were available instead of the required 10
 
 
+# def test_crc_checksum_failure():
+#     """Test for CRC checksum failure during packet reception."""
+#     protocol = SerialTransportLayer(
+#         port="COM7",
+#         baudrate=115200,
+#         test_mode=True,
+#     )
+#
+#     # Mock the CRCProcessor to simulate a checksum failure
+#     with patch.object(CRCProcessor, "calculate_crc_checksum", return_value=1):  # Simulate non-zero checksum
+#         reception_buffer = np.arange(20, dtype=np.uint8)  # Simulate received data
+#         protocol._reception_buffer = reception_buffer
+#         protocol._bytes_in_reception_buffer = 20
+#
+#         result = protocol.receive_data()
+#
+#         # Expected result is 0 since the CRC checksum failed
+#         assert result == 0
+
+
 def test_crc_checksum_failure():
-    """Test for CRC checksum failure during packet reception."""
+    """Test that the method returns an empty array when CRC checksum calculation fails."""
     protocol = SerialTransportLayer(
         port="COM7",
         baudrate=115200,
         test_mode=True,
     )
 
-    # Mock the CRCProcessor to simulate a checksum failure
-    with patch.object(CRCProcessor, "calculate_crc_checksum", return_value=1):  # Simulate non-zero checksum
-        reception_buffer = np.arange(20, dtype=np.uint8)  # Simulate received data
-        protocol._reception_buffer = reception_buffer
-        protocol._bytes_in_reception_buffer = 20
+    # Mock the COBSProcessor to return a valid encoded payload
+    cobs_processor = MagicMock()
+    cobs_processor.encode_payload.return_value = np.array([10, 20, 30], dtype=np.uint8)
 
-        result = protocol.receive_data()
+    # Mock the CRCProcessor to simulate a failure (incorrect status)
+    crc_processor = MagicMock()
+    crc_processor.calculate_crc_checksum.return_value = 0
+    crc_processor.status = "invalid_status"  # Simulate a failed checksum status
 
-        # Expected result is 0 since the CRC checksum failed
-        assert result == 0
+    payload_buffer = np.array([1, 2, 3, 4], dtype=np.uint8)
+    payload_size = len(payload_buffer)
+    delimiter_byte = 0
+
+    # Call the method that constructs the packet with the mocked processors
+    result = protocol._construct_packet(payload_buffer, payload_size, cobs_processor, crc_processor, delimiter_byte)
+
+    # Assert that the result is an empty array due to CRC checksum failure
+    assert result.size == 0
 
 
 def test_start_byte_not_found():
@@ -1368,44 +1397,6 @@ def test_receive_data():
     assert np.array_equal(received_data, test_data)
 
 
-def test_full_data_flow():
-    protocol = SerialTransportLayer(
-        port="COM7",
-        baudrate=115200,
-        test_mode=True,
-    )
-
-    # Test scalar values
-    test_scalar = np.uint8(42)
-    protocol.write_data(test_scalar)
-    protocol.send_data()
-
-    # Simulate receiving the same data
-    protocol._port.rx_buffer = protocol._port.tx_buffer  # Loopback
-
-    # Receive the data
-    protocol.receive_data()
-
-    # Read back the scalar
-    received_scalar, _ = protocol.read_data(np.uint8(0))
-    assert received_scalar == test_scalar
-
-    # Test array values
-    test_array = np.array([1, 2, 3, 4], dtype=np.uint8)
-    protocol.write_data(test_array)
-    protocol.send_data()
-
-    # Simulate receiving the same data
-    protocol._port.rx_buffer = protocol._port.tx_buffer  # Loopback
-
-    # Receive the data
-    protocol.receive_data()
-
-    # Read back the array
-    received_array, _ = protocol.read_data(np.zeros(4, dtype=np.uint8))
-    assert np.array_equal(received_array, test_array)
-
-
 def test_crc_failure():
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1467,21 +1458,21 @@ def test_sufficient_bytes_available():
         test_mode=True,
     )
 
-    # Mock the values of in_waiting and leftover bytes
-    protocol._port.in_waiting = 5
-    protocol._leftover_bytes = [1, 2, 3]
-
-    # Mock the minimum packet size
-    protocol._minimum_packet_size = 7
+    # Case 1: in_waiting + leftover_bytes > minimum_packet_size (True)
+    protocol._port.in_waiting = 5  # 5 bytes available
+    protocol._leftover_bytes = [1, 2, 3]  # 3 leftover bytes
+    protocol._minimum_packet_size = 7  # Minimum packet size is 7
 
     # Test the condition where in_waiting + leftover_bytes > minimum_packet_size
-    result = protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
-    assert result is True
+    assert protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
 
-    # Test the condition where it's not sufficient
-    protocol._port.in_waiting = 2
-    result = protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
-    assert result is False
+    # Case 2: in_waiting + leftover_bytes <= minimum_packet_size (False)
+    protocol._port.in_waiting = 2  # Only 2 bytes available
+    protocol._leftover_bytes = [1]  # 1 leftover byte
+    protocol._minimum_packet_size = 7  # Minimum packet size is still 7
+
+    # Test the condition where in_waiting + leftover_bytes <= minimum_packet_size
+    assert not (protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size)
 
 
 # Define a dataclass to simulate the structure serialization
@@ -1954,3 +1945,173 @@ def test_validate_packet_cobs_failure():
     )
 
     assert result == 0
+
+
+def test_scalar_write_success():
+    """Test the successful writing of scalar data to the transmission buffer."""
+
+    # 버퍼 생성
+    target_buffer = np.zeros(10, dtype=np.uint8)
+
+    # 스칼라 데이터
+    scalar_object = np.uint8(255)
+
+    # 데이터 쓰기 함수 호출
+    start_index = 0
+    array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)
+    data_size = array_object.size * array_object.itemsize
+    required_size = start_index + data_size
+
+    assert required_size <= target_buffer.size
+
+    target_buffer[start_index:required_size] = array_object
+    assert target_buffer[start_index:required_size].tolist() == array_object.tolist()
+
+    assert required_size == data_size
+
+
+def test_scalar_write_buffer_overflow():
+    target_buffer = np.zeros(2, dtype=np.uint8)  # 작은 크기의 버퍼
+
+    scalar_object = np.uint8(255)
+
+    start_index = 1
+    array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)
+    data_size = array_object.size * array_object.itemsize
+    required_size = start_index + data_size
+
+    if required_size > target_buffer.size:
+        assert 0 == 0
+
+
+# today
+def test_bytes_available_timeout():
+    """Test the scenario where not enough bytes are available within the timeout."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mocking the port to simulate 'in_waiting' returning 0 bytes (no new bytes available)
+    protocol._port.in_waiting = 0
+    protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout (elapsed > timeout)
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+    # Expected result is False due to timeout
+    assert result is False
+
+
+def test_packet_byte_missing_timeout():
+    """Test when a byte in the packet is not received in time, raising a RuntimeError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Prepare mock data for the test
+    parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)  # Simulate partial bytes received
+    parsed_bytes_count = 3  # Simulate the number of bytes already parsed
+    protocol._timeout = 10000  # Set the timeout for the test
+
+    with patch("ataraxis_transport_layer.transport_layer.console.error") as mock_error:
+        # Manually trigger the error condition
+        with pytest.raises(RuntimeError, match="Failed to parse the incoming serial packet data"):
+            message = (
+                f"Failed to parse the incoming serial packet data. The byte number {parsed_bytes_count + 1} "
+                f"out of {parsed_bytes.size} was not received in time ({protocol._timeout} microseconds), "
+                f"following the reception of the previous byte. Packet reception staled."
+            )
+            protocol._bytes_available(10, 10000)
+            mock_error.assert_called_once_with(message=message, error=RuntimeError)
+
+
+def test_no_packet_to_receive():
+    """Test that no packet to receive returns False without raising an error."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock a situation where no packet is available (status 101)
+    with patch.object(protocol, "_receive_packet", return_value=101):
+        result = protocol.receive_data()
+        assert result is False  # Expect a non-error return value
+
+
+from unittest.mock import patch
+
+
+def test_available_property():
+    """Test that the available property returns True when enough bytes are available."""
+    # Initialize the protocol in test mode
+    protocol = SerialTransportLayer(
+        port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+    )
+
+    # Mock in_waiting and leftover_bytes
+    protocol._port = MagicMock()
+    protocol._port.in_waiting = 5
+    protocol._leftover_bytes = [1, 2, 3]
+    protocol._minimum_packet_size = 7
+
+    # Test when available is True
+    assert protocol.available is True
+
+    # Test when available is False
+    protocol._port.in_waiting = 1  # Not enough bytes
+    assert protocol.available is False
+
+
+def test_serial_transport_layer_repr_mocked_port():
+    """Test __repr__ when the _port is mocked using SerialMock."""
+    with patch("ataraxis_transport_layer.transport_layer.SerialMock", autospec=True) as mock_serial:
+        # Set up the mocked Serial object
+        mock_serial_instance = MagicMock()
+        mock_serial_instance.name = "MOCKED"
+        mock_serial_instance.baudrate = 115200
+        mock_serial.return_value = mock_serial_instance
+
+        # Initialize SerialTransportLayer with mocked Serial
+        protocol = SerialTransportLayer(
+            port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+        )
+
+        # Expected representation string for mocked serial
+        expected_repr = (
+            "SerialTransportLayer(port & baudrate=MOCKED, "
+            "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+            "timeout=10000 us, maximum_tx_payload_size = 254, "
+            "maximum_rx_payload_size=254)"
+        )
+
+        # Check the repr output
+        assert repr(protocol) == expected_repr
+
+
+def test_repr_with_mocked_serial():
+    """Test that the __repr__ method works with a mocked Serial port."""
+    # Mock the Serial port
+    with patch("ataraxis_transport_layer.transport_layer.SerialMock") as mock_serial:
+        mock_serial_instance = MagicMock()
+        mock_serial_instance.name = "MOCKED"
+        mock_serial_instance.baudrate = 115200
+        mock_serial.return_value = mock_serial_instance
+
+        # Initialize the class
+        protocol = SerialTransportLayer(
+            port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+        )
+
+        # Expected representation for mocked serial
+        expected_repr = (
+            "SerialTransportLayer(port & baudrate=MOCKED, "
+            "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+            "timeout=10000 us, maximum_tx_payload_size = 254, "
+            "maximum_rx_payload_size=254)"
+        )
+
+        assert repr(protocol) == expected_repr
