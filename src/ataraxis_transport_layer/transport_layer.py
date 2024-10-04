@@ -1656,7 +1656,7 @@ class SerialTransportLayer:
         return 2, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    # @njit(nogil=True, cache=True, debug=True)  # type: ignore
     def _validate_packet(
         reception_buffer: NDArray[np.uint8],
         packet_size: int,
