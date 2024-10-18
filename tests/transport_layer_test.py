@@ -176,23 +176,24 @@ def test_empty_array_error(self, mock_error):
         )
 
 
-@patch("ataraxis_base_utilities.console.error")  # Mock the console.error function
-def test_unknown_error_code(self, mock_error):
-    """Test for handling unknown error code in the write_data method."""
+@patch("console.error")  # Mocking the console.error function
+def test_unknown_error_code(mock_error):
+    """Test for handling unknown error code in the read_data method."""
 
     # Create an instance of the SerialTransportLayer with test_mode=True
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
-    # Create mock data with valid numpy types
+    # Mock data with valid numpy types
     data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
 
-    # Patch the internal write_data method to simulate an unknown error code (-99)
-    with patch.object(protocol, "_write_array_data", return_value=-99):
-        protocol.write_data(data_object=data)
+    # Patch the internal method to simulate an unknown error code
+    with patch.object(protocol, "read_data", return_value=(-99)):
+        with pytest.raises(RuntimeError):
+            protocol.receive_data()
 
-        # Check if the appropriate unknown error message was logged
+        # Assert that the appropriate error message was logged
         mock_error.assert_called_with(
-            message="Failed to write the data to the transmission buffer. Encountered an unknown error code (-99) returned by the writer method.",
+            message="Failed to read the data from the reception buffer. Encountered an unknown error code (-99) returned by the reader method.",
             error=RuntimeError,
         )
 
@@ -888,29 +889,6 @@ def test_non_one_dimensional_array():
         ),
     ):
         protocol.write_data(invalid_array)
-
-
-def test_read_data_empty_array():
-    """Test that attempting to read an empty array raises a ValueError."""
-    protocol = SerialTransportLayer(
-        port="COM7",
-        baudrate=115200,
-        test_mode=True,
-    )
-
-    empty_array: np.ndarray = np.empty(0, dtype=np.uint8)
-
-    # Prepare the reception buffer with dummy data
-    protocol._reception_buffer[:10] = np.arange(10, dtype=np.uint8)
-    protocol._bytes_in_reception_buffer = 10
-
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            "An empty (size 0) numpy array requested when reading data from _reception_buffer. Reading empty arrays is currently not supported."
-        ),
-    ):
-        protocol.read_data(empty_array)
 
 
 def test_read_data_multidimensional_array():
@@ -2351,3 +2329,283 @@ def test_write_data():
     # Test buffer overflow
     with pytest.raises(ValueError):
         layer.write_data(np.ones(500, dtype=np.uint8))  # Too large for buffer
+
+
+# 지금
+
+from unittest.mock import patch
+
+import pytest
+
+
+def test_read_data_unknown_error_code():
+    """Test that an unknown error code in read_data raises RuntimeError and logs an error."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+    # Prepare the reception buffer with some data
+    protocol._reception_buffer[:10] = np.arange(10, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 10
+
+    # Create a valid array to read into
+    data_array = np.zeros(5, dtype=np.uint8)
+
+    # Mock the _read_array_data method to return an unknown error code
+    with patch.object(protocol, "_read_array_data", return_value=-99):
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            with pytest.raises(RuntimeError) as exc_info:
+                protocol.read_data(data_array)
+
+            # Verify that the error message was logged
+            mock_error.assert_called_once_with(
+                message=(
+                    f"Failed to read the data from the reception buffer. Encountered an unknown error code (-99)"
+                    f"returned by the reader method."
+                )
+            )
+            # Verify that the exception message is correct
+            assert str(exc_info.value) == (
+                f"Failed to read the data from the reception buffer. Encountered an unknown error code (-99)"
+                f"returned by the reader method."
+            )
+
+
+def test_read_data_empty_array():
+    """Test that attempting to read an empty array raises a ValueError and logs an error."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+    # Prepare the reception buffer with some data, although it shouldn't matter
+    protocol._reception_buffer[:10] = np.arange(10, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 10
+
+    # Create an empty array to read into
+    empty_array = np.empty(0, dtype=np.uint8)
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(ValueError) as exc_info:
+            protocol.read_data(empty_array)
+
+        # Verify that the error message was logged
+        mock_error.assert_called_once_with(
+            message=(
+                "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+                "input data_object. Reading empty arrays is not supported."
+            )
+        )
+        # Verify that the exception message is correct
+        assert str(exc_info.value) == (
+            "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+            "input data_object. Reading empty arrays is not supported."
+        )
+
+
+def test_receive_data_status_0_timeout():
+    """Test the case where status == 0 and bytes are not available, leading to a timeout."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock _parse_packet to return status == 0
+    protocol._parse_packet = lambda *args: (0, 0, b"", np.array([1, 2, 3], dtype=np.uint8))
+
+    # Mock _bytes_available to return False to simulate a timeout
+    protocol._bytes_available = lambda required_bytes_count, timeout: False
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
+
+        # Verify that console.error was called with the correct message
+        message = (
+            f"Failed to parse the incoming serial packet data. Packet reception staled. "
+            f"The byte number {1} out of {3} was not received in time "
+            f"({protocol._timeout} microseconds), following the reception of the previous byte."
+        )
+        mock_error.assert_called_once_with(message=message)
+
+
+def test_receive_data_status_2_timeout():
+    """Test the case where status == 2 and bytes are not available, leading to a timeout."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Simulate partial parsing with status == 2
+    parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)
+    parsed_bytes_count = 2  # Only two bytes parsed
+
+    # Mock _parse_packet to return status == 2
+    protocol._parse_packet = lambda *args: (2, parsed_bytes_count, b"", parsed_bytes)
+
+    # Mock _bytes_available to return False to simulate a timeout
+    protocol._bytes_available = lambda required_bytes_count, timeout: False
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
+
+        # Verify that console.error was called with the correct message
+        message = (
+            f"Failed to parse the incoming serial packet data. The byte number {parsed_bytes_count + 1} "
+            f"out of {parsed_bytes.size} was not received in time ({protocol._timeout} microseconds), "
+            f"following the reception of the previous byte. Packet reception staled."
+        )
+        mock_error.assert_called_once_with(message=message)
+
+        # Verify the exception message
+        assert str(exc_info.value) == message
+
+
+def test_receive_data_status_103():
+    """Test that receive_data handles status == 103 by logging error and raising RuntimeError."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Simulate parsing with status == 103
+    parsed_bytes = np.array([1, 2], dtype=np.uint8)
+    parsed_bytes_count = 0
+
+    # Mock _parse_packet to return status == 103
+    protocol._parse_packet = lambda *args: (103, parsed_bytes_count, b"", parsed_bytes)
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
+
+        payload_size = parsed_bytes.size - int(protocol._postamble_size)
+        message = (
+            f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
+            f"({payload_size}), is outside the expected boundaries "
+            f"({protocol._min_rx_payload_size} to {protocol._max_rx_payload_size}). This likely indicates a "
+            f"mismatch in the transmission parameters between this system and the Microcontroller."
+        )
+        mock_error.assert_called_once_with(message=message)
+
+        # Verify the exception message
+        assert str(exc_info.value) == message
+
+
+def test_receive_data_status_104():
+    """Test that receive_data handles status == 104 by logging error and raising RuntimeError."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Simulate parsing with status == 104
+    parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)
+    parsed_bytes_count = 2  # Delimiter encountered at byte number 3
+
+    # Mock _parse_packet to return status == 104
+    protocol._parse_packet = lambda *args: (104, parsed_bytes_count, b"", parsed_bytes)
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
+
+        expected_byte_number = parsed_bytes.size - int(protocol._postamble_size)
+        message = (
+            f"Failed to parse the incoming serial packet data. Delimiter byte value "
+            f"({protocol._delimiter_byte}) encountered at byte number {parsed_bytes_count + 1}, instead of the "
+            f"expected byte number {expected_byte_number}. This likely indicates packet corruption or mismatch "
+            f"in the transmission parameters between this system and the Microcontroller."
+        )
+        mock_error.assert_called_once_with(message=message)
+
+        # Verify the exception message
+        assert str(exc_info.value) == message
+
+
+def test_receive_data_status_105():
+    """Test that receive_data handles status == 105 by logging error and raising RuntimeError."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Simulate parsing with status == 105
+    parsed_bytes = np.array([1, 2, 3, 99], dtype=np.uint8)  # Last byte is incorrect
+    parsed_bytes_count = 0
+
+    # Mock _parse_packet to return status == 105
+    protocol._parse_packet = lambda *args: (105, parsed_bytes_count, b"", parsed_bytes)
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
+
+        last_payload_byte_index = parsed_bytes.size - int(protocol._postamble_size)
+        message = (
+            f"Failed to parse the incoming serial packet data. Delimiter byte value "
+            f"({protocol._delimiter_byte}) expected as the last payload byte "
+            f"({last_payload_byte_index}), but instead encountered "
+            f"{parsed_bytes[last_payload_byte_index]}. This likely indicates packet "
+            f"corruption or mismatch in the transmission parameters between this system "
+            f"and the Microcontroller."
+        )
+        mock_error.assert_called_once_with(message=message)
+
+        # Verify the exception message
+        assert str(exc_info.value) == message
+
+
+def test_receive_data_status_102():
+    """Test that receive_data handles status == 102 by logging error and raising RuntimeError."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock _parse_packet to return status == 102
+    protocol._parse_packet = lambda *args: (102, 0, b"", np.array([], dtype=np.uint8))
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
+
+        # Verify that console.error was called with the correct message
+        message = (
+            f"Failed to parse the incoming serial packet data. Unable to find the start_byte "
+            f"({protocol._start_byte}) value among the bytes stored inside the serial buffer."
+        )
+        mock_error.assert_called_once_with(message=message)
+
+        # Verify the exception message
+        assert str(exc_info.value) == message
+
+
+def test_construct_packet_error():
+    """Test for handling unexpected errors in the _construct_packet method."""
+
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock the internal CRC processor to simulate an unexpected error in checksum calculation
+    with patch.object(protocol._crc_processor, "calculate_crc_checksum", side_effect=RuntimeError("CRC error")):
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            with pytest.raises(
+                RuntimeError,
+                match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
+            ):
+                protocol.send_data()
+
+            # Verify that the correct error message is logged
+            mock_error.assert_called_once_with(
+                message=(
+                    "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
+                    "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
+                    "error. Manual error resolution required."
+                ),
+                error=RuntimeError,
+            )
+
+
+def test_construct_packet_unexpected_error():
+    """Test for handling unexpected errors during packet construction in the _construct_packet method."""
+
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock the internal CRC processor to simulate an unexpected error in checksum conversion
+    with patch.object(
+        protocol._crc_processor, "convert_checksum_to_bytes", side_effect=RuntimeError("Conversion error")
+    ):
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            # Simulate sending data and trigger the RuntimeError
+            with pytest.raises(
+                RuntimeError,
+                match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
+            ):
+                protocol.send_data()
+
+            # Verify that the correct error message was logged
+            mock_error.assert_called_once_with(
+                message=(
+                    "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
+                    "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
+                    "error. Manual error resolution required."
+                ),
+                error=RuntimeError,
+            )
+
