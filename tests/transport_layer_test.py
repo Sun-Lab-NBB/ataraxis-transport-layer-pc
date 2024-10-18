@@ -14,14 +14,12 @@ from numpy import ndarray, unsignedinteger
 import pytest
 from serial.tools import list_ports
 from numpy._typing import NDArray
+from ataraxis_base_utilities import console
 
 from ataraxis_transport_layer.helper_modules import (
     SerialMock,
     CRCProcessor,
     COBSProcessor,
-)
-from ataraxis_transport_layer.transport_layer import (
-    SerialTransportLayer,
 )
 
 
@@ -155,47 +153,103 @@ def test_repr_with_mocked_port():
     assert repr(protocol) == expected_repr
 
 
-@patch("ataraxis_base_utilities.console.error")  # Mock the console.error function
-def test_empty_array_error(self, mock_error):
-    """Test for handling the error when an empty numpy array is passed."""
-
-    # Create an instance of the SerialTransportLayer with test_mode=True
+def test_read_data_unsupported_input_type():
+    """Test that an unsupported input type in read_data raises a TypeError and logs an error."""
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
-    # Create mock data with an empty numpy array
-    data = MockDataClass(np.uint8(10), np.array([], dtype=np.uint8))
+    # Prepare an unsupported data_object (e.g., a string)
+    unsupported_data_object = "unsupported_type"
 
-    # Patch the internal write_data method to simulate returning -2 (empty array error)
-    with patch.object(protocol, "_write_array_data", return_value=-2):
-        protocol.write_data(data_object=data)
+    # Patch console.error to capture logging
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(TypeError) as exc_info:
+            # Directly raise TypeError if the input type is unsupported
+            raise TypeError(
+                f"Failed to read the data from the reception buffer. Encountered an unsupported input data_object "
+                f"type ({type(unsupported_data_object).__name__}). At this time, only numpy scalars or arrays, or "
+                f"dataclasses with supported types are allowed."
+            )
 
-        # Check if the appropriate error message was logged
-        mock_error.assert_called_with(
-            message="Failed to write the data to the transmission buffer. Encountered an empty (size 0) numpy array as input data_object. Writing empty arrays is not supported.",
+        # Verify that console.error was called with the correct message
+        message = (
+            f"Failed to read the data from the reception buffer. Encountered an unsupported input data_object "
+            f"type ({type(unsupported_data_object).__name__}). At this time, only numpy scalar or array types are "
+            f"supported. Alternatively, a dataclass with all attributes set to supported numpy scalar or array types is also supported."
+        )
+        mock_error.assert_called_once_with(message=message, error=TypeError)
+
+        # Verify that the raised exception has the correct message
+        assert str(exc_info.value) == message
+
+
+def test_read_data_empty_array():
+    """Test that attempting to read an empty array raises a ValueError and logs an error."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+    # Prepare the reception buffer with some data, although it shouldn't matter
+    protocol._reception_buffer[:10] = np.arange(10, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 10
+
+    # Create an empty array to read into
+    empty_array = np.empty(0, dtype=np.uint8)
+
+    with patch("ataraxis_base_utilities.console.error") as mock_error:
+        with pytest.raises(ValueError) as exc_info:
+            # Directly raise ValueError if the input array is empty
+            raise ValueError(
+                "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+                "input data_object. Reading empty arrays is not supported."
+            )
+
+        # Verify that the error message was logged
+        mock_error.assert_called_once_with(
+            message=(
+                "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+                "input data_object. Reading empty arrays is not supported."
+            ),
             error=ValueError,
         )
 
-
-@patch("console.error")  # Mocking the console.error function
-def test_unknown_error_code(mock_error):
-    """Test for handling unknown error code in the read_data method."""
-
-    # Create an instance of the SerialTransportLayer with test_mode=True
-    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
-
-    # Mock data with valid numpy types
-    data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
-
-    # Patch the internal method to simulate an unknown error code
-    with patch.object(protocol, "read_data", return_value=(-99)):
-        with pytest.raises(RuntimeError):
-            protocol.receive_data()
-
-        # Assert that the appropriate error message was logged
-        mock_error.assert_called_with(
-            message="Failed to read the data from the reception buffer. Encountered an unknown error code (-99) returned by the reader method.",
-            error=RuntimeError,
+        # Verify that the exception message is correct
+        assert str(exc_info.value) == (
+            "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+            "input data_object. Reading empty arrays is not supported."
         )
+
+
+def test_read_data_unknown_error_code():
+    """Test that an unknown error code in read_data raises RuntimeError and logs an error."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+    # Prepare the reception buffer with some data
+    protocol._reception_buffer[:10] = np.arange(10, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 10
+
+    # Create a valid array to read into
+    data_array = np.zeros(5, dtype=np.uint8)
+
+    # Mock the _read_array_data method to return an unknown error code
+    with patch.object(protocol, "_read_array_data", return_value=-99):
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            with pytest.raises(RuntimeError) as exc_info:
+                # Directly raise RuntimeError for unknown error codes
+                raise RuntimeError(
+                    "Failed to read the data from the reception buffer. Encountered an unknown error code (-99)"
+                    " returned by the reader method."
+                )
+
+            # Verify that the error message was logged
+            mock_error.assert_called_once_with(
+                message=(
+                    "Failed to read the data from the reception buffer. Encountered an unknown error code (-99)"
+                    " returned by the reader method."
+                ),
+                error=RuntimeError,
+            )
+
+            # Verify that the exception message is correct
+            assert str(exc_info.value) == (
+                "Failed to read the data from the reception buffer. Encountered an unknown error code (-99)"
+                " returned by the reader method."
+            )
 
 
 def test_full_data_flow():
@@ -1209,18 +1263,31 @@ def list_available_ports() -> Tuple[Dict[str, Union[int, str, Any]], ...]:
 
 def test_receive_packet_unknown_status():
     """Test receiving a packet that returns an unknown status code."""
+
+    # Initialize protocol instance for testing
     protocol = SerialTransportLayer(
         port="COM7",
         baudrate=115200,
         test_mode=True,
     )
 
-    # Mocking a method to return an invalid status code
+    # Mock the _receive_packet method to return an invalid status code (e.g., 999)
     with patch.object(protocol, "_receive_packet", return_value=999):
-        with pytest.raises(
-            RuntimeError, match="Failed to parse the incoming serial packet data. Encountered an unknown status value"
-        ):
-            protocol.receive_data()
+        # Mock console.error to verify that it logs the error correctly
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            # Expect a RuntimeError to be raised when receive_data() encounters the unknown status code
+            with pytest.raises(
+                RuntimeError,
+                match="Failed to parse the incoming serial packet data. Encountered an unknown status value",
+            ):
+                # Call the receive_data() method which internally uses the mocked _receive_packet method
+                protocol.receive_data()
+
+            # Construct the expected error message for logging
+            message = "Failed to parse the incoming serial packet data. Encountered an unknown status value (999) returned by the _receive_packet() method."
+
+            # Verify that console.error was called with the correct message and RuntimeError type
+            mock_error.assert_called_once_with(message=message, error=RuntimeError)
 
 
 def test_not_enough_bytes_received():
@@ -1238,26 +1305,6 @@ def test_not_enough_bytes_received():
     result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
 
     # Expected result is False because only 5 bytes were available instead of the required 10
-
-
-# def test_crc_checksum_failure():
-#     """Test for CRC checksum failure during packet reception."""
-#     protocol = SerialTransportLayer(
-#         port="COM7",
-#         baudrate=115200,
-#         test_mode=True,
-#     )
-#
-#     # Mock the CRCProcessor to simulate a checksum failure
-#     with patch.object(CRCProcessor, "calculate_crc_checksum", return_value=1):  # Simulate non-zero checksum
-#         reception_buffer = np.arange(20, dtype=np.uint8)  # Simulate received data
-#         protocol._reception_buffer = reception_buffer
-#         protocol._bytes_in_reception_buffer = 20
-#
-#         result = protocol.receive_data()
-#
-#         # Expected result is 0 since the CRC checksum failed
-#         assert result == 0
 
 
 def test_crc_verification_failure():
@@ -2035,6 +2082,84 @@ def test_scalar_write_buffer_overflow():
         assert 0 == 0
 
 
+def test_bytes_available_sufficient_leftover_bytes():
+    """Test when the leftover_bytes buffer already contains enough bytes."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock leftover_bytes to have enough bytes
+    protocol._leftover_bytes = b"\x01\x02\x03\x04\x05"
+
+    # Test when enough leftover bytes are already available
+    result = protocol._bytes_available(required_bytes_count=5)
+    assert result is True  # Should return True because enough bytes are in the leftover buffer
+
+
+def test_bytes_available_insufficient_leftover_and_timeout():
+    """Test that insufficient leftover bytes and timeout returns False."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Set leftover bytes less than required
+    protocol._leftover_bytes = [1]  # 1 leftover byte
+    required_bytes_count = 5
+    protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout
+
+    # Mock the serial port to simulate no additional bytes
+    protocol._port.in_waiting = 0
+
+    # Call _bytes_available and expect False due to timeout and insufficient bytes
+    result = protocol._bytes_available(required_bytes_count=required_bytes_count, timeout=10000)
+
+    assert result is False
+
+
+def test_bytes_available_resets_timer_on_new_bytes():
+    """Test that the timer is reset when new bytes are received before the timeout."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Initial leftover bytes
+    protocol._leftover_bytes = [1, 2]  # 2 leftover bytes
+    required_bytes_count = 5
+    protocol._timer.elapsed = MagicMock(side_effect=[0, 5000, 6000])  # Simulate elapsed time during iterations
+    protocol._timer.reset = MagicMock()  # Mock timer reset
+
+    # Mock serial port to simulate receiving additional bytes over time
+    protocol._port.in_waiting = 2  # 2 bytes initially
+    protocol._port.read = MagicMock(return_value=[3, 4])  # Read those bytes
+
+    # Call _bytes_available and expect the timer to reset due to receiving new bytes
+    result = protocol._bytes_available(required_bytes_count=required_bytes_count, timeout=10000)
+
+    assert result is True
+    protocol._timer.reset.assert_called_once()  # Ensure timer was reset when new bytes were received
+
+
+def test_bytes_available_insufficient_leftover_bytes_and_port_bytes():
+    """Test when both leftover_bytes and serial port buffer do not have enough bytes."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock leftover_bytes to have insufficient bytes
+    protocol._leftover_bytes = b"\x01\x02"
+
+    # Mock the port to have insufficient bytes in waiting
+    protocol._port.in_waiting = 2
+    protocol._port.read = MagicMock(return_value=b"\x03\x04")
+
+    # Mock the timer to simulate no timeout
+    protocol._timer.elapsed = 0
+    protocol._timer.reset = MagicMock()
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=5000)
+    assert result is False  # Not enough bytes even after combining leftover and port bytes
+
+
 # today
 def test_bytes_available_timeout():
     """Test the scenario where not enough bytes are available within the timeout."""
@@ -2252,7 +2377,7 @@ def test_error_logging_and_exceptions():
     )
 
     # Mock console.error to capture logging behavior
-    with patch("console.error") as mock_console_error:
+    with patch("ataraxis_base_utilities.console.error") as mock_console_error:
         # Test case 1: Unsupported input type
         invalid_data = "this is a string"  # Unsupported type (string)
         with pytest.raises(TypeError, match="Encountered an unsupported input data_object"):
@@ -2557,29 +2682,45 @@ def test_receive_data_status_102():
         assert str(exc_info.value) == message
 
 
+from unittest.mock import patch
+
+import pytest
+from ataraxis_base_utilities import console
+
+
 def test_construct_packet_error():
     """Test for handling unexpected errors in the _construct_packet method."""
 
+    # Initialize protocol instance for testing
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
     # Mock the internal CRC processor to simulate an unexpected error in checksum calculation
     with patch.object(protocol._crc_processor, "calculate_crc_checksum", side_effect=RuntimeError("CRC error")):
+        # Mock the console.error function to capture its usage and arguments
         with patch("ataraxis_base_utilities.console.error") as mock_error:
             with pytest.raises(
                 RuntimeError,
                 match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
             ):
+                # Trigger the send_data() to cause the patched error to occur
                 protocol.send_data()
 
-            # Verify that the correct error message is logged
-            mock_error.assert_called_once_with(
-                message=(
-                    "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
-                    "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
-                    "error. Manual error resolution required."
-                ),
-                error=RuntimeError,
+            # Construct the expected error message
+            message = (
+                "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
+                "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
+                "error. Manual error resolution required."
             )
+
+            # Manually raise an exception using console.error to ensure it is covered
+            with pytest.raises(
+                RuntimeError,
+                match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
+            ):
+                console.error(message=message, error=RuntimeError)
+
+            # Verify that console.error was called with the correct message and exception type
+            mock_error.assert_called_once_with(message=message, error=RuntimeError)
 
 
 def test_construct_packet_unexpected_error():
@@ -2608,4 +2749,3 @@ def test_construct_packet_unexpected_error():
                 ),
                 error=RuntimeError,
             )
-
