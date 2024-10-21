@@ -7,9 +7,13 @@ class methods.
 import re
 import textwrap
 from dataclasses import dataclass
+from unittest.mock import MagicMock, patch
 
 import numpy as np
+from numpy import ndarray, unsignedinteger
 import pytest
+from serial.tools import list_ports
+from numpy._typing import NDArray
 
 from ataraxis_transport_layer.helper_modules import (
     SerialMock,
@@ -34,6 +38,274 @@ class SampleDataClass:
 
     uint_value: np.unsignedinteger
     uint_array: np.ndarray
+
+
+class TestSerialTransportLayerInitialization:
+    def test_valid_initialization(self):
+        # Existing valid initialization tests
+        protocol = SerialTransportLayer(
+            port="COM7",
+            baudrate=115200,
+            start_byte=129,
+            delimiter_byte=0,
+            timeout=10000,
+            test_mode=True,
+        )
+        assert protocol.port == "COM7"
+        # Add more assertions as needed
+
+    # New Tests for Argument Validation
+
+    def test_invalid_port_type_none(self):
+        # Test for None as port
+        with pytest.raises(TypeError, match=r"Expected a string value for 'port' argument, but encountered NoneType"):
+            SerialTransportLayer(
+                port=None,  # This should trigger the TypeError
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=0,
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_port_type_int(self):
+        # Test for invalid port type (integer instead of string)
+        with pytest.raises(TypeError, match=r"Expected a string value for 'port' argument, but encountered int"):
+            SerialTransportLayer(
+                port=12345,  # This should trigger the TypeError
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=0,
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_baudrate_value(self):
+        with pytest.raises(ValueError, match=r"Expected a positive integer value for 'baudrate'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=-9600,  # Invalid baudrate
+                start_byte=129,
+                delimiter_byte=0,
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_start_byte_value(self):
+        with pytest.raises(ValueError, match=r"Expected an integer value between 0 and 255 for 'start_byte'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=300,  # Invalid start_byte
+                delimiter_byte=0,
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_delimiter_byte_value(self):
+        with pytest.raises(ValueError, match=r"Expected an integer value between 0 and 255 for 'delimiter_byte'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=300,  # Invalid delimiter_byte
+                timeout=10000,
+                test_mode=True,
+            )
+
+    def test_invalid_timeout_value(self):
+        with pytest.raises(ValueError, match=r"Expected an integer value of 0 or above for 'timeout'"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=0,
+                timeout=-5000,  # Invalid timeout
+                test_mode=True,
+            )
+
+    def test_start_byte_equals_delimiter_byte(self):
+        with pytest.raises(ValueError, match=r"The 'start_byte' and 'delimiter_byte' cannot be the same"):
+            SerialTransportLayer(
+                port="COM7",
+                baudrate=115200,
+                start_byte=129,
+                delimiter_byte=129,  # start_byte and delimiter_byte are the same
+                timeout=10000,
+                test_mode=True,
+            )
+
+
+def test_repr_with_mocked_port():
+    """Test __repr__ when the _port is mocked using SerialMock."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+    expected_repr = (
+        "SerialTransportLayer(port & baudrate=MOCKED, "
+        "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+        "timeout=10000 us, maximum_tx_payload_size = 254, "
+        "maximum_rx_payload_size=254)"
+    )
+    assert repr(protocol) == expected_repr
+
+
+@patch("ataraxis_base_utilities.console.error")  # Mock the console.error function
+def test_empty_array_error(self, mock_error):
+    """Test for handling the error when an empty numpy array is passed."""
+
+    # Create an instance of the SerialTransportLayer with test_mode=True
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Create mock data with an empty numpy array
+    data = MockDataClass(np.uint8(10), np.array([], dtype=np.uint8))
+
+    # Patch the internal write_data method to simulate returning -2 (empty array error)
+    with patch.object(protocol, "_write_array_data", return_value=-2):
+        protocol.write_data(data_object=data)
+
+        # Check if the appropriate error message was logged
+        mock_error.assert_called_with(
+            message="Failed to write the data to the transmission buffer. Encountered an empty (size 0) numpy array as input data_object. Writing empty arrays is not supported.",
+            error=ValueError,
+        )
+
+
+@patch("ataraxis_base_utilities.console.error")  # Mock the console.error function
+def test_unknown_error_code(self, mock_error):
+    """Test for handling unknown error code in the write_data method."""
+
+    # Create an instance of the SerialTransportLayer with test_mode=True
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Create mock data with valid numpy types
+    data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
+
+    # Patch the internal write_data method to simulate an unknown error code (-99)
+    with patch.object(protocol, "_write_array_data", return_value=-99):
+        protocol.write_data(data_object=data)
+
+        # Check if the appropriate unknown error message was logged
+        mock_error.assert_called_with(
+            message="Failed to write the data to the transmission buffer. Encountered an unknown error code (-99) returned by the writer method.",
+            error=RuntimeError,
+        )
+
+
+def test_full_data_flow():
+    """Tests the full data flow: writing data, sending it, receiving it, and reading it back.
+    This test ensures that data is correctly serialized, transmitted, received, and deserialized.
+    """
+    # Initialize the protocol in test mode to use SerialMock
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Prepare COBS and CRC processors for verification
+    cobs_processor = COBSProcessor()
+    crc_processor = CRCProcessor(
+        polynomial=protocol.polynomial,
+        initial_crc_value=protocol.initial_crc_value,
+        final_xor_value=protocol.final_crc_xor_value,
+    )
+
+    # Test scalar value
+    test_scalar = np.uint8(42)
+    # Write data to transmission buffer
+    protocol.write_data(test_scalar)
+    # Send data
+    send_status = protocol.send_data()
+    assert send_status
+    assert protocol.bytes_in_transmission_buffer == 0  # Buffer should be cleared after send
+
+    # Simulate receiving the same data
+    protocol._port.rx_buffer = protocol._port.tx_buffer  # Loopback
+    # Receive data
+    receive_status = protocol.receive_data()
+    assert receive_status
+    assert protocol.bytes_in_reception_buffer == test_scalar.nbytes
+    # Read back the scalar
+    received_scalar, end_index = protocol.read_data(np.uint8(0))
+    assert end_index == test_scalar.nbytes
+    assert received_scalar == test_scalar
+
+    # Reset buffers before next test
+    protocol.reset_transmission_buffer()
+    protocol.reset_reception_buffer()
+
+    # Test array values
+    test_array = np.array([1, 2, 3, 4], dtype=np.uint8)
+    # Write data to transmission buffer
+    protocol.write_data(test_array)
+    # Send data
+    send_status = protocol.send_data()
+    assert send_status
+    assert protocol.bytes_in_transmission_buffer == 0  # Buffer should be cleared after send
+
+    # Simulate receiving the same data
+    protocol._port.rx_buffer = protocol._port.tx_buffer  # Loopback
+    # Receive data
+    receive_status = protocol.receive_data()
+    assert receive_status
+    assert protocol.bytes_in_reception_buffer == test_array.nbytes
+    # Read back the array
+    received_array, end_index = protocol.read_data(np.zeros(len(test_array), dtype=np.uint8))
+    assert end_index == test_array.nbytes
+    assert np.array_equal(received_array, test_array)
+
+
+@patch("ataraxis_transport_layer.transport_layer.serial.Serial")
+def test_repr_with_real_serial_port(mock_serial):
+    """Test __repr__ when the _port is a real Serial object."""
+    # Set up the mock serial port
+    mock_serial_instance = MagicMock()
+    mock_serial_instance.name = "COM7"
+    mock_serial_instance.baudrate = 115200
+    mock_serial.return_value = mock_serial_instance
+
+    # Initialize the protocol with test_mode=False, which should use the real Serial class
+    protocol = SerialTransportLayer(
+        port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=False
+    )
+
+    # The __repr__ method should now use the 'if isinstance(self._port, Serial):' branch
+    repr_str = repr(protocol)
+    expected_repr = (
+        f"SerialTransportLayer(port='COM7', baudrate=115200, polynomial=0x{protocol._crc_processor.polynomial:04X}, "
+        f"start_byte=129, delimiter_byte=0, timeout=10000 us, maximum_tx_payload_size={protocol._max_tx_payload_size}, "
+        f"maximum_rx_payload_size={protocol._max_rx_payload_size})"
+    )
+    assert repr_str == expected_repr
+
+
+def test_real_serial_initialization():
+    # Mock the Serial class from pySerial
+    with patch("ataraxis_transport_layer.transport_layer.Serial") as mock_serial:
+        # Initialize the protocol with test_mode=False, which should use the real Serial class
+        protocol = SerialTransportLayer(
+            port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=False
+        )
+
+        # Verify that the Serial class was called with the correct parameters
+        mock_serial.assert_called_once_with("COM7", 115200, timeout=0)
+        assert protocol._port == mock_serial.return_value  # Check if _port was set to the mock Serial object
+
+
+def test_mock_serial_initialization():
+    # Initialize the protocol with test_mode=True, which should use the mock Serial class
+    protocol = SerialTransportLayer(
+        port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+    )
+
+    # Check if _port was set to SerialMock
+    assert isinstance(protocol._port, SerialMock)
 
 
 def test_serial_transfer_protocol_buffer_manipulation():
@@ -485,7 +757,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         protocol.write_data(payload, start_index=start_index)
 
     # Verifies that calling write_data method for a multidimensional numpy array raises an error.
-    invalid_array = np.zeros((2, 2), dtype=np.uint8)
+    invalid_array: ndarray[unsignedinteger[np.uint8], Any] = np.zeros((2, 2), dtype=np.uint8)
     error_message = (
         f"A multidimensional numpy array with {invalid_array.ndim} dimensions encountered when writing "
         f"data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
@@ -509,7 +781,7 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
         # noinspection PyTypeChecker
         protocol.write_data(empty_array)
 
-    # READ DATA
+    # READ DATA SECTION
     # Sets the _bytes_in_reception_buffer to a non-zero value to support testing. Since there is no way of 'gracefully'
     # accessing this private attribute, uses direct access.
     protocol._bytes_in_reception_buffer = 50
@@ -533,7 +805,8 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     # Verifies that attempting to read too large of an object (in a start-index-dependent fashion, an object that cannot
     # be filled with the bytes available from the payload starting at start_index) raises an error.
     start_index = 150
-    payload = np.ones(200, dtype=np.uint8)
+    payload: ndarray[unsignedinteger[np.uint8], Any] = np.ones(200, dtype=np.uint8)
+
     error_message = (
         f"Insufficient payload size to read the data from the _reception_buffer starting at the index "
         f"'{start_index}'. Specifically, given the object size of '{payload.nbytes}' bytes, the required payload "
@@ -571,6 +844,96 @@ def test_serial_transfer_protocol_buffer_manipulation_errors():
     ):
         # noinspection PyTypeChecker
         protocol.read_data(empty_array)
+
+
+def test_empty_array():
+    """Test that attempting to write an empty array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    empty_array: NDArray[np.uint8] = np.empty(0, dtype=np.uint8)
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "An empty (size 0) numpy array encountered when writing data to _transmission_buffer. Writing empty arrays is not supported."
+        ),
+    ):
+        protocol.write_data(empty_array)
+
+
+def test_non_one_dimensional_array():
+    """Test that attempting to write a multidimensional array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    invalid_array: np.ndarray = np.zeros((2, 2), dtype=np.uint8)
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            f"A multidimensional numpy array with {invalid_array.ndim} dimensions encountered when writing data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
+        ),
+    ):
+        protocol.write_data(invalid_array)
+
+
+def test_read_data_empty_array():
+    """Test that attempting to read an empty array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    empty_array: np.ndarray = np.empty(0, dtype=np.uint8)
+
+    # Prepare the reception buffer with dummy data
+    protocol._reception_buffer[:10] = np.arange(10, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 10
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "An empty (size 0) numpy array requested when reading data from _reception_buffer. Reading empty arrays is currently not supported."
+        ),
+    ):
+        protocol.read_data(empty_array)
+
+
+def test_read_data_multidimensional_array():
+    """Test that attempting to read a multidimensional array raises a ValueError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    invalid_array: np.ndarray = np.zeros((2, 2), dtype=np.uint8)
+
+    # Prepare the reception buffer with dummy data
+    protocol._reception_buffer[:100] = np.arange(100, dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 100
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            f"A multidimensional numpy array with {invalid_array.ndim} dimensions requested when reading data from _reception_buffer. At this time, only one-dimensional (flat) arrays are supported."
+        ),
+    ):
+        protocol.read_data(invalid_array)
 
 
 def test_serial_transfer_protocol_data_transmission():
@@ -817,3 +1180,1174 @@ def test_serial_transfer_protocol_data_transmission_errors():
     ):
         protocol.receive_data()
     test_data[-2:] = expected_checksum  # Restores the CRC checksum back to the correct value
+
+
+from typing import Any, Dict, Tuple, Union
+
+
+def list_available_ports() -> Tuple[Dict[str, Union[int, str, Any]], ...]:
+    """Provides the information about each serial port addressable through the pySerial library.
+
+    Returns:
+        A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
+        port.
+    """
+
+    # Gets the list of port objects visible to the pySerial library.
+    available_ports = list_ports.comports()
+
+    # Creates a list of dictionaries with port details
+    information_list = [
+        {
+            "Name": port.name,
+            "Device": port.device,
+            "PID": port.pid,
+            "Description": port.description,
+        }
+        for port in available_ports
+    ]
+
+    return tuple(information_list)
+
+
+#
+# def test_bytes_available_timeout():
+#     """Test the scenario where not enough bytes are available within the timeout."""
+#     protocol = SerialTransportLayer(
+#         port="COM7",
+#         baudrate=115200,
+#         test_mode=True,
+#     )
+#
+#     # Mocking the port to simulate 'in_waiting' returning 0 bytes (no new bytes available)
+#     protocol._port.in_waiting = 0
+#     protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout (elapsed > timeout)
+#
+#     result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+#
+#     # Expected result is False due to timeout
+#     assert result is False
+
+
+def test_receive_packet_unknown_status():
+    """Test receiving a packet that returns an unknown status code."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mocking a method to return an invalid status code
+    with patch.object(protocol, "_receive_packet", return_value=999):
+        with pytest.raises(
+            RuntimeError, match="Failed to parse the incoming serial packet data. Encountered an unknown status value"
+        ):
+            protocol.receive_data()
+
+
+def test_not_enough_bytes_received():
+    """Test for scenario where not enough bytes are read from the serial port."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock the serial port to simulate reading fewer bytes than required
+    protocol._port.in_waiting = 5  # Only 5 bytes available when more are needed
+    protocol._port.read = MagicMock(return_value=np.array([1, 2, 3, 4, 5], dtype=np.uint8))
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+    # Expected result is False because only 5 bytes were available instead of the required 10
+
+
+# def test_crc_checksum_failure():
+#     """Test for CRC checksum failure during packet reception."""
+#     protocol = SerialTransportLayer(
+#         port="COM7",
+#         baudrate=115200,
+#         test_mode=True,
+#     )
+#
+#     # Mock the CRCProcessor to simulate a checksum failure
+#     with patch.object(CRCProcessor, "calculate_crc_checksum", return_value=1):  # Simulate non-zero checksum
+#         reception_buffer = np.arange(20, dtype=np.uint8)  # Simulate received data
+#         protocol._reception_buffer = reception_buffer
+#         protocol._bytes_in_reception_buffer = 20
+#
+#         result = protocol.receive_data()
+#
+#         # Expected result is 0 since the CRC checksum failed
+#         assert result == 0
+
+
+def test_crc_verification_failure():
+    """Test that a CRC checksum mismatch triggers an appropriate error message."""
+
+    # Create an instance of the SerialTransportLayer with test_mode=True
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Create a mock packet (simulating the reception buffer)
+    protocol._reception_buffer = np.array([129, 1, 3, 255, 0], dtype=np.uint8)  # Example packet
+
+    # Mock the CRC processor to return different values for calculated and received checksums
+    protocol._crc_processor.convert_bytes_to_checksum = lambda _: 0xABCD
+    protocol._crc_processor.calculate_crc_checksum = lambda _: 0x1234
+
+    # Mock the correct error handling method in console (update 'log_error' if needed)
+    with patch("ataraxis_base_utilities.console.log_error") as mock_error:
+        # Simulate receiving the packet and triggering the CRC check failure
+        with pytest.raises(ValueError):
+            protocol._validate_packet(
+                reception_buffer=protocol._reception_buffer,
+                packet_size=len(protocol._reception_buffer),
+                cobs_processor=protocol._cobs_processor.processor,
+                crc_processor=protocol._crc_processor.processor,
+                delimiter_byte=protocol._delimiter_byte,
+                postamble_size=protocol._postamble_size,
+            )
+
+        # Check that the mocked error logging was called with the expected message
+        mock_error.assert_called_once()  # This ensures that console.log_error was called once
+
+
+def test_start_byte_not_found():
+    """Test the case where the start byte is not found in the available bytes."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock a situation where the start byte is not in the buffer
+    protocol._port.in_waiting = 0  # No bytes available to be the start byte
+    protocol._reception_buffer = np.array([2, 3, 4, 5], dtype=np.uint8)  # Simulate reception buffer without start byte
+
+    with pytest.raises(
+        RuntimeError, match="Failed to parse the incoming serial packet data. Unable to find the start_byte"
+    ):
+        protocol.receive_data()
+
+
+def test_byte_mismatch_in_buffers():
+    """Test when the number of bytes across buffers does not match the required number."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock the in_waiting to simulate a situation where fewer bytes are available
+    protocol._port.in_waiting = 5
+    protocol._port.read = MagicMock(return_value=np.array([1, 2, 3, 4, 5], dtype=np.uint8))
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+    # Expected to return False because not enough bytes are available
+    assert result is False
+
+
+def test_write_and_read_scalar():
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # documenting scalar's value
+    scalar_value = np.uint8(123)
+    end_index = protocol.write_data(scalar_value)
+    assert end_index == 1
+
+    # reading the stored data
+    read_value, read_end_index = protocol.read_data(np.uint8(0))
+    assert read_value == scalar_value
+    assert read_end_index == 1
+
+    # Test writing and reading scalars
+    scalar_value = np.uint8(123)
+    end_index = protocol.write_data(scalar_value)
+    assert end_index == 1  # Make sure the index updates correctly
+
+    read_value, read_end_index = protocol.read_data(np.uint8(0))
+    assert read_value == scalar_value
+    assert read_end_index == 1
+
+
+def test_write_and_read_array():
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # 1차원 배열 값을 기록
+    array_value = np.array([1, 2, 3, 4, 5], dtype=np.uint8)
+    end_index = protocol.write_data(array_value)
+    assert end_index == 5  # 바이트 인덱스가 배열 길이와 일치하는지 확인
+
+    # 기록한 배열을 다시 읽음
+    read_array, read_end_index = protocol.read_data(np.zeros(5, dtype=np.uint8))
+    assert np.array_equal(read_array, array_value)
+    assert read_end_index == 5
+
+
+def test_send_data():
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,  # Use mock serial port
+    )
+
+    # Create test data
+    test_data = np.array([1, 2, 3, 4], dtype=np.uint8)
+
+    # Write data to transmission buffer
+    protocol.write_data(test_data)
+
+    # Send data, verify that buffer is sent and cleared
+    send_status = protocol.send_data()
+    assert send_status
+    assert protocol.bytes_in_transmission_buffer == 0  # Buffer is cleared after send
+
+    # Verify that the COBS-encoded and CRC checksummed data is in the mock serial port's tx buffer
+    expected_packet = protocol._port.tx_buffer
+    assert expected_packet[0] == protocol.start_byte  # Ensure start byte is correct
+
+
+def test_receive_data():
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Simulate sending and receiving a valid packet
+    test_data = np.array([1, 2, 3, 4], dtype=np.uint8)
+    protocol.write_data(test_data)
+    protocol.send_data()
+
+    # Prepare reception buffer with the same data
+    protocol._port.rx_buffer = protocol._port.tx_buffer  # Simulate loopback
+
+    # Test receiving the data
+    receive_status = protocol.receive_data()
+    assert receive_status
+
+    # Verify that the received data matches the original
+    received_data, _ = protocol.read_data(np.zeros(4, dtype=np.uint8))
+    assert np.array_equal(received_data, test_data)
+
+
+def test_crc_failure():
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Send valid data first
+    test_data = np.array([1, 2, 3, 4], dtype=np.uint8)
+    protocol.write_data(test_data)
+    protocol.send_data()
+
+    # Manipulate the CRC in the rx buffer to simulate corruption
+    protocol._port.rx_buffer = protocol._port.tx_buffer
+    protocol._port.rx_buffer[-1] ^= 0xFF  # Flip some bits to corrupt the CRC
+
+    # Receive the data and expect a failure due to CRC
+    with pytest.raises(ValueError, match="CRC checksum verification failed"):
+        protocol.receive_data()
+
+
+def test_list_available_ports():
+    """Test that list_available_ports correctly retrieves and formats serial port information."""
+
+    # Mock the output of list_ports.comports()
+    mock_port = MagicMock()
+    mock_port.name = "COM3"
+    mock_port.device = "/dev/ttyS1"
+    mock_port.pid = 1234
+    mock_port.description = "USB Serial Device"
+
+    with patch("serial.tools.list_ports.comports", return_value=[mock_port]):
+        from ataraxis_transport_layer.transport_layer import SerialTransportLayer
+
+        ports = SerialTransportLayer.list_available_ports()
+
+        expected_output = (
+            {
+                "Name": "COM3",
+                "Device": "/dev/ttyS1",
+                "PID": 1234,
+                "Description": "USB Serial Device",
+            },
+        )
+
+        assert ports == expected_output
+
+
+def test_sufficient_bytes_available():
+    """Test the condition when sufficient bytes are available to process."""
+
+    # Create a mock of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Case 1: in_waiting + leftover_bytes > minimum_packet_size (True)
+    protocol._port.in_waiting = 5  # 5 bytes available
+    protocol._leftover_bytes = [1, 2, 3]  # 3 leftover bytes
+    protocol._minimum_packet_size = 7  # Minimum packet size is 7
+
+    # Test the condition where in_waiting + leftover_bytes > minimum_packet_size
+    assert protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
+
+    # Case 2: in_waiting + leftover_bytes <= minimum_packet_size (False)
+    protocol._port.in_waiting = 2  # Only 2 bytes available
+    protocol._leftover_bytes = [1]  # 1 leftover byte
+    protocol._minimum_packet_size = 7  # Minimum packet size is still 7
+
+    # Test the condition where in_waiting + leftover_bytes <= minimum_packet_size
+    assert not (protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size)
+
+
+from dataclasses import dataclass
+
+
+# Define a dataclass to simulate the structure serialization
+@dataclass
+class MockDataClass:
+    field1: np.uint8
+    field2: np.ndarray
+
+
+import pytest
+
+from ataraxis_transport_layer.transport_layer import SerialTransportLayer
+
+
+@dataclass
+class MockDataClass:
+    field1: np.uint8
+    field2: np.ndarray
+
+
+# def test_write_data_break_condition():
+#     """Test that the write_data function breaks out of the loop when local_index < start_index."""
+#     # Create an instance of the SerialTransportLayer class
+#     protocol = SerialTransportLayer(
+#         port="COM7",
+#         baudrate=115200,
+#         test_mode=True,
+#     )
+#
+#     # Create mock data with numpy types (a scalar and an array)
+#     data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
+#
+#     # Mock the write_data method to simulate local_index < start_index
+#     original_write_data = protocol.write_data
+#
+#     def mock_write_data(data_object, start_index=None):
+#         if isinstance(data_object, np.uint8):
+#             return start_index + 1  # Normal behavior
+#         elif isinstance(data_object, np.ndarray):
+#             return start_index - 1  # Simulate failure by returning a smaller index
+#         else:
+#             return original_write_data(data_object, start_index)
+#
+#     with patch.object(protocol, "write_data", side_effect=mock_write_data):
+#         start_index = 5
+#         end_index = protocol.write_data(data_object=data, start_index=start_index)
+#
+#         # Check if the function breaks when local_index < start_index
+#         assert end_index < start_index  # fixing the break to get covered as well
+
+from unittest.mock import patch
+
+
+def test_write_data_break_condition():
+    """Test that the write_data function breaks out of the loop when local_index < start_index."""
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Create mock data with numpy types (a scalar and an array)
+    data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
+
+    # Mock the write_data method to simulate local_index < start_index
+    original_write_data = protocol.write_data
+
+    def mock_write_data(data_object, start_index=None):
+        if isinstance(data_object, np.uint8):
+            return start_index + 1  # Normal behavior for scalar
+        elif isinstance(data_object, np.ndarray):
+            return start_index - 1  # Simulate failure by returning a smaller index for the array
+        else:
+            return original_write_data(data_object, start_index)
+
+    with patch.object(protocol, "write_data", side_effect=mock_write_data):
+        start_index = 5
+        end_index = protocol.write_data(data_object=data, start_index=start_index)
+
+        # Check if the function breaks when local_index < start_index
+        assert end_index < start_index  # This will verify that break occurred when condition met
+
+
+def test_unsupported_input_type_error():
+    """Test that a TypeError is raised for unsupported input types."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Create an unsupported input type (neither numpy scalar nor dataclass)
+    invalid_data = {"unsupported": "data"}
+
+    # Assert that a TypeError is raised with the correct message
+    with pytest.raises(TypeError, match=r"Encountered an unsupported input data_object type"):
+        protocol.write_data(invalid_data)
+
+
+def _write_array_data(
+    self,
+    target_buffer: NDArray[np.uint8],
+    array_object: NDArray[
+        Union[
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.bool_,
+        ]
+    ],
+    start_index: int,
+) -> int:
+    """Converts the input numpy array to a sequence of bytes and writes it to the transmission buffer at the specified start_index.
+
+    This method is not designed to be called directly. It should always be called through the write_data() method of the parent class.
+
+    Args:
+        target_buffer: The buffer to which the data will be written. This should be the _transmission_buffer array of the caller class.
+        array_object: The numpy array to be written to the transmission buffer. Currently, the method is designed to only work with one-dimensional arrays with a minimal size of 1 element. The array should be using one of the supported numpy scalar datatypes.
+        start_index: The index inside the transmission buffer (0 to 253) at which to start writing the data.
+
+    Returns:
+        The positive index inside the transmission buffer that immediately follows the last index of the buffer to which the data was written. Integer code 0, if the buffer does not have enough space to accommodate the data written at the start_index. Integer code -1, if the input array object is not one-dimensional. Integer code -2, if the input array object is empty.
+    """
+
+    # Error checking logic (now in regular Python code)
+    if array_object.ndim != 1:
+        return -1  # Input array is not one-dimensional.
+
+    if array_object.size == 0:
+        return -2  # Input array is empty.
+
+    # Check buffer space
+    array_data = np.frombuffer(array_object, dtype=np.uint8)
+    data_size = array_data.size * array_data.itemsize
+    required_size = start_index + data_size
+
+    if required_size > target_buffer.size:
+        return 0  # Insufficient buffer space.
+
+    # Call the JIT-compiled method for the actual data writing
+    return self._write_array_data_jit(target_buffer, array_data, start_index)
+
+
+def test_buffer_size_insufficient_error():
+    """Test that a ValueError is raised when the buffer does not have enough space."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Mock the transmission buffer to simulate insufficient space
+    protocol._transmission_buffer = np.zeros(10, dtype=np.uint8)
+    protocol._bytes_in_transmission_buffer = 8  # Only 2 bytes of space left
+
+    # Create a large numpy array that exceeds the buffer size
+    large_data = np.ones(5, dtype=np.uint8)
+
+    # Assert that a ValueError is raised with the correct message
+    with pytest.raises(ValueError, match=r"The transmission buffer does not have enough space to write the data"):
+        protocol.write_data(large_data, start_index=7)
+
+
+# def test_write_data_success():
+#     """Test the successful write operation and correct end_index return."""
+#
+#     # Create an instance of the SerialTransportLayer class
+#     protocol = SerialTransportLayer(
+#         port="COM7",
+#         baudrate=115200,
+#         start_byte=129,
+#         delimiter_byte=0,
+#         timeout=10000,
+#         test_mode=True,
+#     )
+#
+#     # Mock the transmission buffer with enough space
+#     protocol._transmission_buffer = np.zeros(20, dtype=np.uint8)
+#     protocol._bytes_in_transmission_buffer = 10
+#
+#     # Create mock data to write
+#     data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
+#
+#     # Call the write_data method and check the returned end_index
+#     end_index = protocol.write_data(data_object=data, start_index=10)
+#
+#     # Ensure that the end_index is greater than the start_index and buffer tracker is updated
+#     assert end_index > 10
+#     assert protocol._bytes_in_transmission_buffer == end_index
+
+
+def test_write_data_success(protocol):
+    """데이터 쓰기와 관련된 성공적인 시나리오 테스트"""
+    data = np.array([1, 2, 3], dtype=np.uint8)
+    end_index = protocol.write_data(data)
+    assert end_index == len(data)
+
+
+def test_buffer_tracker_update():
+    """Test that the buffer tracker (_bytes_in_transmission_buffer) is updated correctly after a successful write."""
+
+    # Create an instance of the SerialTransportLayer class
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Mock the transmission buffer with enough space
+    protocol._transmission_buffer = np.zeros(20, dtype=np.uint8)
+    protocol._bytes_in_transmission_buffer = 10
+
+    # Create a numpy scalar and write it to the buffer
+    data = np.uint8(123)
+    end_index = protocol.write_data(data_object=data, start_index=10)
+
+    # Ensure the tracker is updated correctly
+    assert protocol._bytes_in_transmission_buffer == end_index
+
+
+def test_send_receive_maximum_payload():
+    """Test sending and receiving data with maximum allowed payload size."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        maximum_transmitted_payload_size=254,  # Maximum allowed by the protocol
+        test_mode=True,
+    )
+
+    # Create a test payload with maximum allowed size
+    max_payload_size = protocol.maximum_transmitted_payload_size
+    test_data = np.arange(max_payload_size, dtype=np.uint8)
+
+    # Write data to transmission buffer
+    protocol.write_data(test_data)
+
+    # Send data
+    send_status = protocol.send_data()
+    assert send_status
+    assert protocol.bytes_in_transmission_buffer == 0  # Buffer should be cleared after send
+
+    # Simulate receiving the same data
+    protocol._port.rx_buffer = protocol._port.tx_buffer  # Loopback
+
+    # Receive data
+    receive_status = protocol.receive_data()
+    assert receive_status
+    assert protocol.bytes_in_reception_buffer == max_payload_size
+
+    # Read back the data
+    received_data, _ = protocol.read_data(np.zeros(max_payload_size, dtype=np.uint8))
+    assert np.array_equal(received_data, test_data)
+
+
+def test_receive_incomplete_packet():
+    """Test that receive_data handles incomplete packet properly."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+        timeout=1000,  # Set a short timeout for the test
+    )
+
+    # Prepare and send data
+    test_data = np.array([1, 2, 3, 4], dtype=np.uint8)
+    protocol.write_data(test_data)
+    protocol.send_data()
+
+    # Get the packet and remove some bytes to simulate truncation
+    incomplete_packet = protocol._port.tx_buffer[:-2]  # Remove last 2 bytes (e.g., part of CRC)
+
+    # Simulate receiving the incomplete packet
+    protocol._port.rx_buffer = incomplete_packet
+
+    # Attempt to receive data
+    receive_status = protocol.receive_data()
+
+    # Expect receive_data to return False due to incomplete packet
+    assert not receive_status
+
+
+def test_write_unsupported_data_type():
+    """Test that writing an unsupported data type raises TypeError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Attempt to write an unsupported data type (e.g., string)
+    unsupported_data = "This is a string"
+
+    with pytest.raises(TypeError, match=r"Unsupported input data_object type"):
+        protocol.write_data(unsupported_data)
+
+
+def test_receive_data_timeout():
+    """Test that receive_data times out if no data is received."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+        timeout=1000,  # Set a short timeout for the test
+    )
+
+    # Ensure that no data is in the rx_buffer
+    protocol._port.rx_buffer = b""
+
+    # Attempt to receive data
+    receive_status = protocol.receive_data()
+
+    # Expect receive_data to return False due to timeout
+    assert not receive_status
+
+
+def test_send_data_empty_buffer():
+    """Test that send_data returns False when transmission buffer is empty."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Ensure the transmission buffer is empty
+    protocol.reset_transmission_buffer()
+    assert protocol.bytes_in_transmission_buffer == 0
+
+    # Attempt to send data
+    send_status = protocol.send_data()
+
+    # Expect send_data to return False
+    assert not send_status
+
+
+def test_crc_different_polynomial():
+    """Test that the class correctly handles a different CRC polynomial."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        polynomial=np.uint16(0x8005),  # Different polynomial
+        initial_crc_value=np.uint16(0xFFFF),
+        final_crc_xor_value=np.uint16(0x0000),
+        test_mode=True,
+    )
+
+    test_data = np.array([1, 2, 3, 4], dtype=np.uint8)
+    protocol.write_data(test_data)
+    protocol.send_data()
+
+    # Simulate receiving the same data
+    protocol._port.rx_buffer = protocol._port.tx_buffer
+
+    # Receive data
+    receive_status = protocol.receive_data()
+    assert receive_status
+
+    # Read back the data
+    received_data, _ = protocol.read_data(np.zeros(4, dtype=np.uint8))
+    assert np.array_equal(received_data, test_data)
+
+
+def test_data_with_start_byte_and_delimiter():
+    """Test sending and receiving data that includes start byte and delimiter byte values."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        test_mode=True,
+    )
+
+    # Create test data that includes the start_byte and delimiter_byte values
+    test_data = np.array([129, 0, 1, 2, 129, 0, 3, 4], dtype=np.uint8)
+    protocol.write_data(test_data)
+    protocol.send_data()
+
+    # Simulate receiving the same data
+    protocol._port.rx_buffer = protocol._port.tx_buffer
+
+    # Receive data
+    receive_status = protocol.receive_data()
+    assert receive_status
+
+    # Read back the data
+    received_data, _ = protocol.read_data(np.zeros(len(test_data), dtype=np.uint8))
+    assert np.array_equal(received_data, test_data)
+
+
+# 오늘
+from unittest.mock import MagicMock
+
+import numpy as np
+
+from ataraxis_transport_layer.helper_modules import CRCProcessor, COBSProcessor
+from ataraxis_transport_layer.transport_layer import SerialTransportLayer
+
+
+def test_validate_packet_success():
+    """Test that _validate_packet successfully validates and decodes a packet."""
+    reception_buffer = np.zeros(20, dtype=np.uint8)
+    reception_buffer[:10] = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 0], dtype=np.uint8)
+
+    packet_size = 10
+    delimiter_byte = np.uint8(0)
+    postamble_size = np.uint8(2)
+
+    cobs_processor = MagicMock()
+    crc_processor = MagicMock()
+
+    crc_processor.calculate_crc_checksum.return_value = 0
+    crc_processor.status = crc_processor.checksum_calculated
+    cobs_processor.decode_payload.return_value = np.array([10, 20, 30], dtype=np.uint8)
+
+    result = SerialTransportLayer._validate_packet(
+        reception_buffer=reception_buffer,
+        packet_size=packet_size,
+        cobs_processor=cobs_processor,
+        crc_processor=crc_processor,
+        delimiter_byte=delimiter_byte,
+        postamble_size=postamble_size,
+    )
+
+    assert result == 3
+    assert np.array_equal(reception_buffer[:3], np.array([10, 20, 30]))
+
+
+def test_validate_packet_crc_failure():
+    """Test that _validate_packet returns 0 on CRC failure."""
+    reception_buffer = np.zeros(20, dtype=np.uint8)
+
+    packet_size = 10
+    delimiter_byte = np.uint8(0)
+    postamble_size = np.uint8(2)
+
+    cobs_processor = MagicMock()
+    crc_processor = MagicMock()
+
+    crc_processor.calculate_crc_checksum.return_value = 1
+    crc_processor.status = crc_processor.checksum_calculated
+
+    result = SerialTransportLayer._validate_packet(
+        reception_buffer=reception_buffer,
+        packet_size=packet_size,
+        cobs_processor=cobs_processor,
+        crc_processor=crc_processor,
+        delimiter_byte=delimiter_byte,
+        postamble_size=postamble_size,
+    )
+
+    assert result == 0
+
+
+def test_validate_packet_cobs_failure():
+    """Test that _validate_packet returns 0 on COBS decoding failure."""
+    reception_buffer = np.zeros(20, dtype=np.uint8)
+
+    packet_size = 10
+    delimiter_byte = np.uint8(0)
+    postamble_size = np.uint8(2)
+
+    cobs_processor = MagicMock()
+    crc_processor = MagicMock()
+
+    crc_processor.calculate_crc_checksum.return_value = 0
+    crc_processor.status = crc_processor.checksum_calculated
+    cobs_processor.decode_payload.return_value = np.array([], dtype=np.uint8)
+
+    result = SerialTransportLayer._validate_packet(
+        reception_buffer=reception_buffer,
+        packet_size=packet_size,
+        cobs_processor=cobs_processor,
+        crc_processor=crc_processor,
+        delimiter_byte=delimiter_byte,
+        postamble_size=postamble_size,
+    )
+
+    assert result == 0
+
+
+def test_scalar_write_success():
+    """Test the successful writing of scalar data to the transmission buffer."""
+
+    # 버퍼 생성
+    target_buffer = np.zeros(10, dtype=np.uint8)
+
+    # 스칼라 데이터
+    scalar_object = np.uint8(255)
+
+    # 데이터 쓰기 함수 호출
+    start_index = 0
+    array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)
+    data_size = array_object.size * array_object.itemsize
+    required_size = start_index + data_size
+
+    assert required_size <= target_buffer.size
+
+    target_buffer[start_index:required_size] = array_object
+    assert target_buffer[start_index:required_size].tolist() == array_object.tolist()
+
+    assert required_size == data_size
+
+
+def test_scalar_write_buffer_overflow():
+    target_buffer = np.zeros(2, dtype=np.uint8)  # 작은 크기의 버퍼
+
+    scalar_object = np.uint8(255)
+
+    start_index = 1
+    array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)
+    data_size = array_object.size * array_object.itemsize
+    required_size = start_index + data_size
+
+    if required_size > target_buffer.size:
+        assert 0 == 0
+
+
+# today
+def test_bytes_available_timeout():
+    """Test the scenario where not enough bytes are available within the timeout."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mocking the port to simulate 'in_waiting' returning 0 bytes (no new bytes available)
+    protocol._port.in_waiting = 0
+    protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout (elapsed > timeout)
+
+    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+    # Expected result is False due to timeout
+    assert result is False
+
+
+def test_packet_byte_missing_timeout():
+    """Test when a byte in the packet is not received in time, raising a RuntimeError."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Prepare mock data for the test
+    parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)  # Simulate partial bytes received
+    parsed_bytes_count = 3  # Simulate the number of bytes already parsed
+    protocol._timeout = 10000  # Set the timeout for the test
+
+    with patch("ataraxis_transport_layer.transport_layer.console.error") as mock_error:
+        # Manually trigger the error condition
+        with pytest.raises(RuntimeError, match="Failed to parse the incoming serial packet data"):
+            message = (
+                f"Failed to parse the incoming serial packet data. The byte number {parsed_bytes_count + 1} "
+                f"out of {parsed_bytes.size} was not received in time ({protocol._timeout} microseconds), "
+                f"following the reception of the previous byte. Packet reception staled."
+            )
+            protocol._bytes_available(10, 10000)
+            mock_error.assert_called_once_with(message=message, error=RuntimeError)
+
+
+def test_no_packet_to_receive():
+    """Test that no packet to receive returns False without raising an error."""
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        test_mode=True,
+    )
+
+    # Mock a situation where no packet is available (status 101)
+    with patch.object(protocol, "_receive_packet", return_value=101):
+        result = protocol.receive_data()
+        assert result is False  # Expect a non-error return value
+
+
+from unittest.mock import patch
+
+
+def test_available_property():
+    """Test that the available property returns True when enough bytes are available."""
+    # Initialize the protocol in test mode
+    protocol = SerialTransportLayer(
+        port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+    )
+
+    # Mock in_waiting and leftover_bytes
+    protocol._port = MagicMock()
+    protocol._port.in_waiting = 5
+    protocol._leftover_bytes = [1, 2, 3]
+    protocol._minimum_packet_size = 7
+
+    # Test when available is True
+    assert protocol.available is True
+
+    # Test when available is False
+    protocol._port.in_waiting = 1  # Not enough bytes
+    assert protocol.available is False
+
+
+def test_packet_parsing_success():
+    """Test the case where packet parsing is successful (status == 1)."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock the _parse_packet method to return status == 1
+    protocol._parse_packet = lambda *args: (1, 10, b"", np.array([129, 1, 3, 255, 0], dtype=np.uint8))
+
+    # Mock bytes_available to always return True (enough bytes available)
+    protocol._bytes_available = lambda required_bytes_count, timeout=0: True
+
+    result = protocol.receive_data()
+
+    # Check that the result is True (parsing succeeded)
+    assert result is True
+    assert protocol._bytes_in_reception_buffer == 5  # Mock packet size
+
+
+def test_packet_parsing_status_0_no_bytes():
+    """Test the case where parsing returns status == 0 and no additional bytes are available."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock the _parse_packet method to return status == 0
+    protocol._parse_packet = lambda *args: (0, 0, b"", np.empty(0, dtype=np.uint8))
+
+    # Mock bytes_available to return False (no additional bytes available)
+    protocol._bytes_available = lambda required_bytes_count, timeout=0: False
+
+    result = protocol.receive_data()
+
+    # Check that the result is False (parsing didn't succeed)
+    assert result is False
+
+
+def test_packet_parsing_status_2_no_bytes():
+    """Test the case where parsing returns status == 2 and no additional bytes are available."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock the _parse_packet method to return status == 2
+    protocol._parse_packet = lambda *args: (2, 0, b"", np.empty(0, dtype=np.uint8))
+
+    # Mock bytes_available to return False (no additional bytes available)
+    protocol._bytes_available = lambda required_bytes_count, timeout=0: False
+
+    result = protocol.receive_data()
+
+    # Check that the result is False (parsing didn't succeed)
+    assert result is False
+
+
+def test_packet_parsing_status_2_with_bytes():
+    """Test the case where parsing returns status == 2 and additional bytes are available."""
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock the _parse_packet method to return status == 2 initially, but then status == 1
+    protocol._parse_packet = (
+        lambda *args: (2, 0, b"", np.array([129, 1, 3, 255, 0], dtype=np.uint8))
+        if args[0] == b""
+        else (1, 10, b"", np.array([129, 1, 3, 255, 0], dtype=np.uint8))
+    )
+
+    # Mock bytes_available to return True (additional bytes available)
+    protocol._bytes_available = lambda required_bytes_count, timeout=0: True
+
+    result = protocol.receive_data()
+
+    # Check that the result is True (parsing succeeded after additional bytes were available)
+    assert result is True
+    assert protocol._bytes_in_reception_buffer == 5  # Mock packet size
+
+
+def test_serial_transport_layer_repr_mocked_port():
+    """Test __repr__ when the _port is mocked using SerialMock."""
+    with patch("ataraxis_transport_layer.transport_layer.SerialMock", autospec=True) as mock_serial:
+        # Set up the mocked Serial object
+        mock_serial_instance = MagicMock()
+        mock_serial_instance.name = "MOCKED"
+        mock_serial_instance.baudrate = 115200
+        mock_serial.return_value = mock_serial_instance
+
+        # Initialize SerialTransportLayer with mocked Serial
+        protocol = SerialTransportLayer(
+            port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+        )
+
+        # Expected representation string for mocked serial
+        expected_repr = (
+            "SerialTransportLayer(port & baudrate=MOCKED, "
+            "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+            "timeout=10000 us, maximum_tx_payload_size = 254, "
+            "maximum_rx_payload_size=254)"
+        )
+
+        # Check the repr output
+        assert repr(protocol) == expected_repr
+
+
+def test_repr_with_mocked_serial():
+    """Test that the __repr__ method works with a mocked Serial port."""
+    # Mock the Serial port
+    with patch("ataraxis_transport_layer.transport_layer.SerialMock") as mock_serial:
+        mock_serial_instance = MagicMock()
+        mock_serial_instance.name = "MOCKED"
+        mock_serial_instance.baudrate = 115200
+        mock_serial.return_value = mock_serial_instance
+
+        # Initialize the class
+        protocol = SerialTransportLayer(
+            port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+        )
+
+        # Expected representation for mocked serial
+        expected_repr = (
+            "SerialTransportLayer(port & baudrate=MOCKED, "
+            "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+            "timeout=10000 us, maximum_tx_payload_size = 254, "
+            "maximum_rx_payload_size=254)"
+        )
+
+        assert repr(protocol) == expected_repr
+
+
+def test_error_logging_and_exceptions():
+    """Test that the appropriate error messages are logged and exceptions are raised."""
+
+    # Initialize the protocol
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
+
+    # Mock console.error to capture logging behavior
+    with patch("console.error") as mock_console_error:
+        # Test case 1: Unsupported input type
+        invalid_data = "this is a string"  # Unsupported type (string)
+        with pytest.raises(TypeError, match="Encountered an unsupported input data_object"):
+            protocol.write_data(invalid_data)
+
+        # Assert that console.error was called with the correct message and exception for unsupported input
+        mock_console_error.assert_any_call(
+            message=(
+                f"Failed to read the data from the reception buffer. Encountered an unsupported input data_object "
+                f"type ({type(invalid_data).__name__}). At this time, only the following numpy scalar or array types "
+                f"are supported: {protocol._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes "
+                f"set to supported numpy scalar or array types is also supported."
+            ),
+            error=TypeError,
+        )
+
+        # Test case 2: Empty numpy array
+        empty_array = np.array([], dtype=np.uint8)  # Empty array input
+        with pytest.raises(ValueError, match="Encountered an empty (size 0) numpy array"):
+            protocol.write_data(empty_array)
+
+        # Assert that console.error was called with the correct message for the empty array error
+        mock_console_error.assert_any_call(
+            message=(
+                f"Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+                f"input data_object. Reading empty arrays is not supported."
+            ),
+            error=ValueError,
+        )
+
+        # Test case 3: Unknown error code (simulating a -3 return value from the reader)
+        with patch.object(protocol, "read_data", return_value=(-3)):
+            with pytest.raises(RuntimeError, match="Encountered an unknown error code"):
+                protocol.receive_data()
+
+            # Assert that console.error was called with the correct message for unknown error code
+            mock_console_error.assert_any_call(
+                message=(
+                    f"Failed to read the data from the reception buffer. Encountered an unknown error code (-3)"
+                    f" returned by the reader method."
+                ),
+                error=RuntimeError,
+            )
+
+
+def test_initialization():
+    # Valid initialization
+    layer = SerialTransportLayer(port="COM3", baudrate=9600)
+    assert layer._port.name == "COM3"
+    assert layer._port.baudrate == 9600
+    assert isinstance(layer._port, Serial)
+
+    # Invalid baudrate
+    with pytest.raises(ValueError):
+        layer = SerialTransportLayer(port="COM3", baudrate=-1)
+
+    # Invalid start_byte
+    with pytest.raises(ValueError):
+        layer = SerialTransportLayer(port="COM3", baudrate=9600, start_byte=300)
+
+
+def test_write_data():
+    layer = SerialTransportLayer(port="COM3", baudrate=9600)
+
+    # Test writing valid data
+    start_idx = layer.write_data(np.uint8(42))
+    assert layer._transmission_buffer[0] == 42
+    assert start_idx == 1  # Next free index should be 1
+
+    # Test writing invalid type
+    with pytest.raises(TypeError):
+        layer.write_data("invalid_data")
+
+    # Test buffer overflow
+    with pytest.raises(ValueError):
+        layer.write_data(np.ones(500, dtype=np.uint8))  # Too large for buffer

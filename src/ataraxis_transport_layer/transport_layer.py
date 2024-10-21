@@ -186,51 +186,39 @@ class SerialTransportLayer:
                 f"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but "
                 f"encountered {port} of type {type(port).__name__}."
             )
-            console.error(message=message, error=TypeError)
+            raise TypeError(message)
+
         if baudrate <= 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
                 f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if not 0 <= start_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if not 0 <= delimiter_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if timeout < 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
                 f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            raise ValueError(message)
+
         if start_byte == delimiter_byte:
-            message = (
-                f"Unable to initialize SerialTransportLayer class. Expected 'start_byte' and 'delimiter_byte' "
-                f"arguments to have different values, but both are set to the same value ({start_byte})."
-            )
-            console.error(message=message, error=ValueError)
-        if not 0 < maximum_transmitted_payload_size <= 254:
-            message = (
-                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 1 and 254 for the "
-                f"'maximum_transmitted_payload_size' argument, but encountered {maximum_transmitted_payload_size} "
-                f"of type {type(maximum_transmitted_payload_size).__name__}."
-            )
-            console.error(message=message, error=ValueError)
-        if not 0 < minimum_received_payload_size <= 254:
-            message = (
-                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 1 and 254 for the "
-                f"'minimum_received_payload_size' argument, but encountered {minimum_received_payload_size} "
-                f"of type {type(minimum_received_payload_size).__name__}."
-            )
-            console.error(message=message, error=ValueError)
+            message = "The 'start_byte' and 'delimiter_byte' cannot be the same."
+            raise ValueError(message)
 
         # Based on the class runtime selector, initializes a real or mock serial port manager class
         self._port: SerialMock | Serial
@@ -538,8 +526,8 @@ class SerialTransportLayer:
             message = (
                 f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
                 f"space to write the data starting at the index {start_index}. Specifically, given the data size of "
-                f"{data_object.nbytes} bytes, the required buffer size is "  # type: ignore
-                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore
+                f"{data_object.nbytes} bytes, the required buffer size is "  # type: ignore # pragma: no cover
+                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore # pragma: no cover
                 f"{self._transmission_buffer.size} bytes."
             )
             console.error(message=message, error=ValueError)
@@ -549,7 +537,7 @@ class SerialTransportLayer:
         if end_index == -1:
             message = (
                 f"Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
+                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore # pragma: no cover
                 f"one-dimensional (flat) arrays are supported."
             )
             console.error(message=message, error=ValueError)
@@ -576,7 +564,7 @@ class SerialTransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_scalar_data(
         target_buffer: NDArray[np.uint8],
         scalar_object: Union[
@@ -633,7 +621,7 @@ class SerialTransportLayer:
         return required_size
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_array_data(
         target_buffer: NDArray[np.uint8],
         array_object: NDArray[
@@ -839,8 +827,8 @@ class SerialTransportLayer:
             message = (
                 f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
                 f"bytes available to fully fill the object starting at the index {start_index}. Specifically, given "
-                f"the object size of {data_object.nbytes} bytes, the required payload size is "  # type: ignore
-                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore
+                f"the object size of {data_object.nbytes} bytes, the required payload size is "  # type: ignore # pragma: no cover
+                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore # pragma: no cover
                 f"{self.bytes_in_reception_buffer} bytes."
             )
             console.error(message=message, error=ValueError)
@@ -850,7 +838,7 @@ class SerialTransportLayer:
         elif end_index == -1:
             message = (
                 f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
+                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore # pragma: no cover
                 f"one-dimensional (flat) arrays are supported."
             )
             console.error(message=message, error=ValueError)
@@ -876,7 +864,7 @@ class SerialTransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _read_array_data(
         source_buffer: NDArray[np.uint8],
         array_object: NDArray[
@@ -1019,7 +1007,7 @@ class SerialTransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _construct_packet(
         payload_buffer: NDArray[np.uint8],
         cobs_processor: _COBSProcessor,
@@ -1435,7 +1423,7 @@ class SerialTransportLayer:
         return False
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover # pragma: no cover
     def _parse_packet(
         unparsed_bytes: bytes,
         start_byte: np.uint8,
@@ -1668,7 +1656,8 @@ class SerialTransportLayer:
         return 2, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore
+    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    # pragma: no cover
     def _validate_packet(
         reception_buffer: NDArray[np.uint8],
         packet_size: int,

@@ -469,10 +469,10 @@ class CRCProcessor:
     def crc_byte_length(self) -> np.uint8:
         """Returns the byte-size used by CRC checksums."""
     @property
-    def crc_table(self) -> NDArray[np.uint8 | np.uint16 | np.uint32]:
+    def crc_table(self) -> np.ndarray:
         """Returns the CRC checksum lookup table."""
     @property
-    def processor(self) -> _CRCProcessor:
+    def processor(self):
         """Returns the jit-compiled _CRCProcessor class instance.
 
         This accessor represents a convenient way of unwrapping the jit-compiled class, so that its methods can be
@@ -502,9 +502,9 @@ class SerialMock:
         methods without the confounding of a third-party library. Additionally, it simplifies testing, as it removes
         the need for a working serial communication.
 
-        Also, unlike its Serial class prototype, this class exposes the rx_buffer and tx_buffer, while using similar
-        logic for adding data to the buffers. This makes it possible to verify the outcome of a would-be data
-        transmission or reception runtime.
+        Also, unlike its Serial class prototype, this class exposes the rx_ and tx_ buffers while using similar logic
+        for adding data to the buffers. This makes it possible to verify the outcome of a would-be data transmission or
+        reception runtime.
 
     Attributes:
         is_open: The boolean flag that tracks the state of the serial port.
