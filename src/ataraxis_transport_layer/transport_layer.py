@@ -26,8 +26,8 @@ from serial.tools import list_ports
 from ataraxis_time import PrecisionTimer
 from ataraxis_base_utilities import console
 
-# noinspection PyProtectedMember
-from ataraxis_transport_layer.helper_modules import (
+# noinspection PyProtectedMember,PyUnresolvedReferences
+from .helper_modules import (
     SerialMock,
     CRCProcessor,
     COBSProcessor,
@@ -527,8 +527,8 @@ class SerialTransportLayer:
                 f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
                 f"space to write the data starting at the index {start_index}. Specifically, given the data size of "
                 f"{data_object.nbytes} bytes, the required buffer size is "  # type: ignore # pragma: no cover
-                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore # pragma: no cover
-                f"{self._transmission_buffer.size} bytes."
+                f"{start_index + data_object.nbytes} bytes, but the available size "  # type: ignore # pragma: no cover
+                f"is {self._transmission_buffer.size} bytes."
             )
             console.error(message=message, error=ValueError)
 
