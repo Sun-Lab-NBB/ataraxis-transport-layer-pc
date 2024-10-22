@@ -2626,6 +2626,26 @@ def test_receive_data_status_102():
         assert str(exc_info.value) == message
 
 
+def test_receive_data_success():
+    """Test that the receive_data method returns True when a packet is successfully received and validated."""
+
+    # Initialize protocol instance for testing
+    protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+
+    # Mock the _receive_packet method to simulate successful packet reception
+    with patch.object(protocol, "_receive_packet", return_value=True):
+        # Mock the _validate_packet method to simulate successful payload validation
+        with patch.object(protocol, "_validate_packet", return_value=10):  # Simulate a payload size of 10
+            # Trigger the receive_data method
+            result = protocol.receive_data()
+
+            # Ensure the method returns True, indicating successful reception and validation
+            assert result is True
+
+            # Ensure that the _bytes_in_reception_buffer was updated to the payload size (10)
+            assert protocol._bytes_in_reception_buffer == 10
+
+
 from unittest.mock import patch
 
 import pytest
