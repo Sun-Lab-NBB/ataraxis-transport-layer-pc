@@ -1242,25 +1242,6 @@ def list_available_ports() -> Tuple[Dict[str, Union[int, str, Any]], ...]:
     return tuple(information_list)
 
 
-#
-# def test_bytes_available_timeout():
-#     """Test the scenario where not enough bytes are available within the timeout."""
-#     protocol = SerialTransportLayer(
-#         port="COM7",
-#         baudrate=115200,
-#         test_mode=True,
-#     )
-#
-#     # Mocking the port to simulate 'in_waiting' returning 0 bytes (no new bytes available)
-#     protocol._port.in_waiting = 0
-#     protocol._timer.elapsed = MagicMock(return_value=10001)  # Simulate timeout (elapsed > timeout)
-#
-#     result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
-#
-#     # Expected result is False due to timeout
-#     assert result is False
-
-
 def test_receive_packet_unknown_status():
     """Test receiving a packet that returns an unknown status code."""
 
@@ -1564,41 +1545,23 @@ class MockDataClass:
     field2: np.ndarray
 
 
-# def test_write_data_break_condition():
-#     """Test that the write_data function breaks out of the loop when local_index < start_index."""
-#     # Create an instance of the SerialTransportLayer class
-#     protocol = SerialTransportLayer(
-#         port="COM7",
-#         baudrate=115200,
-#         test_mode=True,
-#     )
-#
-#     # Create mock data with numpy types (a scalar and an array)
-#     data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
-#
-#     # Mock the write_data method to simulate local_index < start_index
-#     original_write_data = protocol.write_data
-#
-#     def mock_write_data(data_object, start_index=None):
-#         if isinstance(data_object, np.uint8):
-#             return start_index + 1  # Normal behavior
-#         elif isinstance(data_object, np.ndarray):
-#             return start_index - 1  # Simulate failure by returning a smaller index
-#         else:
-#             return original_write_data(data_object, start_index)
-#
-#     with patch.object(protocol, "write_data", side_effect=mock_write_data):
-#         start_index = 5
-#         end_index = protocol.write_data(data_object=data, start_index=start_index)
-#
-#         # Check if the function breaks when local_index < start_index
-#         assert end_index < start_index  # fixing the break to get covered as well
-
+from dataclasses import dataclass
 from unittest.mock import patch
 
+import numpy as np
 
-def test_write_data_break_condition():
-    """Test that the write_data function breaks out of the loop when local_index < start_index."""
+from ataraxis_transport_layer.transport_layer import SerialTransportLayer
+
+
+# Define a mock dataclass for testing
+@dataclass
+class MockDataClass:
+    field1: np.uint8
+    field2: np.ndarray
+
+
+def test_read_data_unsupported_type():
+    """Test that read_data raises a TypeError for unsupported data_object types."""
     # Create an instance of the SerialTransportLayer class
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1606,26 +1569,15 @@ def test_write_data_break_condition():
         test_mode=True,
     )
 
-    # Create mock data with numpy types (a scalar and an array)
-    data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
+    # Create an unsupported data type (e.g., a string, which is not a numpy scalar, array, or dataclass)
+    unsupported_data_object = "unsupported_string_type"
 
-    # Mock the write_data method to simulate local_index < start_index
-    original_write_data = protocol.write_data
+    # Use pytest to check if the proper exception and error message are raised
+    with pytest.raises(TypeError) as exc_info:
+        protocol.read_data(data_object=unsupported_data_object, start_index=0)
 
-    def mock_write_data(data_object, start_index=None):
-        if isinstance(data_object, np.uint8):
-            return start_index + 1  # Normal behavior for scalar
-        elif isinstance(data_object, np.ndarray):
-            return start_index - 1  # Simulate failure by returning a smaller index for the array
-        else:
-            return original_write_data(data_object, start_index)
-
-    with patch.object(protocol, "write_data", side_effect=mock_write_data):
-        start_index = 5
-        end_index = protocol.write_data(data_object=data, start_index=start_index)
-
-        # Check if the function breaks when local_index < start_index
-        assert end_index < start_index  # This will verify that break occurred when condition met
+    # Check if the error message was logged
+    assert "unsupported input data_object type" in str(exc_info.value), "TypeError message not logged as expected."
 
 
 def test_unsupported_input_type_error():
@@ -2339,7 +2291,7 @@ def test_serial_transport_layer_repr_mocked_port():
 
 
 def test_repr_with_mocked_serial():
-    """Test that the __repr__ method works with a mocked Serial port."""
+    """Test that the __repr__ method works with a mocked Serial port or mocked SerialMock."""
     # Mock the Serial port
     with patch("ataraxis_transport_layer.transport_layer.SerialMock") as mock_serial:
         mock_serial_instance = MagicMock()
@@ -2347,16 +2299,37 @@ def test_repr_with_mocked_serial():
         mock_serial_instance.baudrate = 115200
         mock_serial.return_value = mock_serial_instance
 
-        # Initialize the class
+        # Initialize the class with test_mode=True (which should use SerialMock)
         protocol = SerialTransportLayer(
             port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
         )
 
-        # Expected representation for mocked serial
+        # Expected representation for mocked serial with SerialMock
         expected_repr = (
             "SerialTransportLayer(port & baudrate=MOCKED, "
             "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
             "timeout=10000 us, maximum_tx_payload_size = 254, "
+            "maximum_rx_payload_size=254)"
+        )
+
+        assert repr(protocol) == expected_repr
+
+    # Mock the Serial class itself
+    with patch("ataraxis_transport_layer.transport_layer.Serial") as mock_serial:
+        mock_serial_instance = MagicMock()
+        mock_serial_instance.name = "COM3"
+        mock_serial_instance.baudrate = 115200
+        mock_serial.return_value = mock_serial_instance
+
+        # Initialize the class with test_mode=False (which should use Serial)
+        protocol = SerialTransportLayer(
+            port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=False
+        )
+
+        # Expected representation for real serial
+        expected_repr = (
+            "SerialTransportLayer(port='COM3', baudrate=115200, polynomial=0x1021, start_byte=129, "
+            "delimiter_byte=0, timeout=10000 us, maximum_tx_payload_size = 254, "
             "maximum_rx_payload_size=254)"
         )
 
