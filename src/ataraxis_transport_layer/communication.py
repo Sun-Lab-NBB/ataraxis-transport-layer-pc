@@ -1,9 +1,62 @@
 from .transport_layer import SerialTransportLayer
 from dataclasses import dataclass
 import numpy as np
-from typing import Any
+from numpy.typing import NDArray
+from typing import Any, Optional
 from enum import Enum
 from ataraxis_base_utilities import console
+
+
+@dataclass()
+class CommandMessage:
+    """The payload structure used by the outgoing Command messages.
+
+    Currently, only the PC can send command messages. This structure is used to both issue commands to execute and
+    terminate (end) a currently active and all queued commands (by setting command to 0).
+
+    Attributes:
+        module_type: The type-code of the module to which the command is addressed.
+        module_id: The specific module ID within the broader module family specified by module_type.
+        command: The unique code of the command to execute. Note, 0 is not a valid command code and will instead be
+            interpreted as an instruction to forcibly terminate (stop) any currently running command of the
+            addressed Module or Kernel.
+        return_code: When this argument is set to a value other than 0, the microcontroller will send this code
+            back to the sender PC upon successfully processing the received command. This is to notify the sender
+            that the command was received intact, ensuring message delivery. Setting this argument to 0 disables
+            delivery assurance.
+        noblock: Determines whether the command runs in blocking or non-blocking mode. If set to false, the
+            controller runtime will block in-place for any sensor- or time-waiting loops during command execution.
+            Otherwise, the controller will run other commands concurrently, while waiting for the block to complete.
+        cycle: Determines whether the command is executed once or repeatedly cycled with a certain periodicity.
+            Together with cycle_delay, this allows triggering both one-shot and cyclic command runtimes.
+        cycle_delay: The period of time, in microseconds, to delay before repeating (cycling) the command. This is
+            only used if the cycle flag is True.
+        packed_data: Stores the packed attribute data. After this class is instantiated, all attribute values are packed
+            into a byte numpy array, which is the preferred TransportLayer format. This allows 'pre-packing' the data at
+            the beginning of each time-sensitive runtime. Do not overwrite this attribute manually!
+    """
+    module_type: np.uint8
+    module_id: np.uint8
+    command: np.uint8
+    return_code: np.uint8 = 0
+    noblock: np.bool = True
+    cycle: np.bool = False
+    cycle_delay: np.uint32 = 0
+    packed_data: Optional[NDArray[np.uint8]] = None
+
+    def __post_init__(self):
+        """Packs the data into the numpy array to optimize future transmission speed."""
+
+        # Packages the input data into a byte numpy array. Prepends the 'command' protocol code to the packaged data.
+        self.packed_data = np.empty(11, dtype=np.uint8)
+        self.packed_data[0] = Protocols.COMMAND.value
+        self.packed_data[1] = self.module_type
+        self.packed_data[2] = self.module_id
+        self.packed_data[3] = self.return_code
+        self.packed_data[4] = self.command
+        self.packed_data[5] = self.noblock
+        self.packed_data[6] = self.cycle
+        self.packed_data[7] = self.cycle_delay
 
 
 @dataclass
@@ -13,6 +66,13 @@ class DataMessage:
     command: np.uint8 = np.uint8(0)
     event: np.uint8 = np.uint8(0)
     object_size: np.uint8 = np.uint8(0)
+
+    def __repr__(self):
+        message = (
+            f"DataMessage(module_type={self.module_type}, module_id={self.module_id}, command={self.command}, "
+            f"event={self.event}, object_size={self.object_size})."
+        )
+        return message
 
 
 @dataclass
@@ -93,12 +153,11 @@ class SerialCommunication:
     """
 
     def __init__(
-        self,
-        usb_port: str,
-        baudrate: int = 115200,
-        maximum_transmitted_payload_size: int = 254,
+            self,
+            usb_port: str,
+            baudrate: int = 115200,
+            maximum_transmitted_payload_size: int = 254,
     ) -> None:
-
         # Specializes the TransportLayer to mostly match a similar specialization carried out by the microcontroller
         # Communication class.
         self._transport_layer = SerialTransportLayer(
@@ -108,7 +167,7 @@ class SerialCommunication:
             initial_crc_value=np.uint16(0xFFFF),
             final_crc_xor_value=np.uint16(0x0000),
             maximum_transmitted_payload_size=maximum_transmitted_payload_size,
-            minimum_received_payload_size=7,  # Data message header size (5) + protocol (1) + minimum object size (1)
+            minimum_received_payload_size=2,  # Protocol (1) and Service code (1)
             start_byte=129,
             delimiter_byte=0,
             timeout=20000,
@@ -121,7 +180,8 @@ class SerialCommunication:
 
         self._data_object_index = 6
 
-    def list_available_ports(self) -> tuple[dict[str, int | str], ...]:
+    @staticmethod
+    def list_available_ports() -> tuple[dict[str, int | str], ...]:
         """Provides the information about each serial port addressable through the pySerial library.
 
         This method is intended to be used for discovering and selecting the serial port 'names' to use with this
@@ -132,131 +192,29 @@ class SerialCommunication:
             port.
         """
         # The method itself is defined in TransportLayer class, this wrapper just calls that method
-        return self._transport_layer.list_available_ports()
+        return SerialTransportLayer.list_available_ports()
 
-    def reset_transmission_state(self) -> None:
-        """Resets the transmission_buffer and associated tracker variables involved in the data transmission process."""
-        self._transport_layer.reset_transmission_buffer()
-
-    def reset_reception_state(self) -> None:
-        """Resets the reception_buffer and associated tracker variables involved in the data reception process."""
-        self._transport_layer.reset_reception_buffer()
-
-    def send_command_message(
-        self,
-        module_type: np.uint8,
-        module_id: np.uint8,
-        command: np.uint8,
-        return_code: np.uint8 = 0,
-        noblock: np.bool = True,
-        cycle: np.bool = False,
-        cycle_delay: np.uint32 = 0,
-    ) -> None:
+    def send_command_message(self, message: CommandMessage) -> None:
         """Packages the input data into a Command message and sends it to the connected microcontroller.
 
         This method can be used to issue commands to specific hardware Modules of the microcontroller or the Kernel
         class that manages the microcontroller modules.
 
         Args:
-            module_type: The type-code of the module to which the command is addressed.
-            module_id: The specific module ID within the broader module family specified by module_type.
-            command: The unique code of the command to execute. Note, 0 is not a valid command code and will instead be
-                interpreted as an instruction to forcibly terminate (stop) any currently running command of the
-                addressed Module or Kernel.
-            return_code: When this argument is set to a value other than 0, the microcontroller will send this code
-                back to the sender PC upon successfully processing the received command. This is to notify the sender
-                that the command was received intact, ensuring message delivery. Setting this argument to 0 disables
-                delivery assurance.
-            noblock: Determines whether the command runs in blocking or non-blocking mode. If set to false, the
-                controller runtime will block in-place for any sensor- or time-waiting loops during command execution.
-                Otherwise, the controller will run other commands concurrently, while waiting for the block to complete.
-            cycle: Determines whether the command is executed once or repeatedly cycled with a certain periodicity.
-                Together with cycle_delay, this allows triggering both one-shot and cyclic command runtimes.
-            cycle_delay: The period of time, in microseconds, to delay before repeating (cycling) the command. This is
-                only used if the cycle flag is True.
+            message: The Command message to send to the microcontroller.
         """
-        # Ensures the transmission_buffer is cleared
-        self.reset_transmission_state()
-
-        # Ensures that the command is above 0. Code 0 is used by the dedicated 'stop' command message method.
-        if command < 1:
-            message = (
-                f"Invalid command code {command} encountered when sending a command message. Valid command codes are "
-                f"positive values between 1 and 255. Command code 0 is reserved for the 'Stop' commands, which are "
-                f"sent using the send_stop_command_message() method."
-            )
-            raise ValueError(message, ValueError)
-
-        # Packages the input data into a byte numpy array. Prepends the 'command' protocol code to the packaged data.
-        packed_data = np.array(
-            [
-                Protocols.COMMAND.value,
-                module_type,
-                module_id,
-                return_code,
-                command,
-                noblock,
-                cycle,
-                cycle_delay,
-            ],
-            dtype=np.uint8,
-        )
-
         # Writes the packaged data into the transmission buffer.
-        # noinspection PyTypeChecker
-        self._transport_layer.write_data(data_object=packed_data)
-
-        # Constructs and sends the data message to the connected system.
-        self._transport_layer.send_data()
-
-    def send_stop_command_message(
-        self, module_type: np.uint8, module_id: np.uint8, return_code: np.uint8 = np.uint8(0)
-    ) -> None:
-        """Sends a specialized Command message that terminates (stops) any currently running command of the addressed
-        Module or Kernel.
-
-        This method simplifies sending stop commands by requiring fewer parameters and providing a direct separation
-        between the stop command and all other commands.
-
-        Args:
-            module_type: The type-code of the module to which the command is addressed.
-            module_id: The specific module ID within the broader module family specified by module_type.
-            return_code: When this argument is set to a value other than 0, the microcontroller will send this code
-                back to the sender PC upon successfully processing the received command. This is to notify the sender
-                that the command was received intact, ensuring message delivery. Setting this argument to 0 disables
-                delivery assurance.
-        """
-        # Ensures the transmission_buffer is cleared
-        self.reset_transmission_state()
-
-        # Packages the input data into a byte numpy array. Prepends the 'command' protocol code to the packaged data.
-        packed_data = np.array(
-            [
-                Protocols.COMMAND.value,
-                module_type,
-                module_id,
-                return_code,
-                0,  # Statically uses the '0' command)
-                False,
-                False,
-                0,
-            ],
-            dtype=np.uint8,
-        )
-
-        # Writes the packaged data into the transmission buffer.
-        # noinspection PyTypeChecker
-        self._transport_layer.write_data(data_object=packed_data)
+        self._transport_layer.write_data(data_object=message.packed_data)
 
         # Constructs and sends the data message to the connected system.
         self._transport_layer.send_data()
 
     def send_parameter_message(
-        self,
-        module_type: np.uint8,
-        module_id: np.uint8,
-        parameter_object: Any,
-        return_code: np.uint8 = np.uint8(0),
+            self,
+            module_type: np.uint8,
+            module_id: np.uint8,
+            parameter_object: Any,
+            return_code: np.uint8 = np.uint8(0),
     ) -> None:
         """Packages the input data into a Parameters message and sends it to the connected microcontroller.
 
@@ -306,7 +264,7 @@ class SerialCommunication:
 
         self._transport_layer.send_data()
 
-    def receive_message(self) -> DataMessage | IdentificationMessage | ReceptionMessage | None:
+    def receive_message(self) -> tuple[bool, DataMessage | IdentificationMessage | ReceptionMessage | int]:
         """Receives and processes the message from the connected microcontroller.
 
         This method determines the type of the received message and extracts message data into the appropriate
@@ -325,12 +283,9 @@ class SerialCommunication:
             ValueError: If the received protocol code is not recognized.
 
         """
-        # Ensures the reception buffer is cleared
-        self.reset_reception_state()
-
         # Attempts to receive the data message. If there is no data to receive, returns None
         if not self._transport_layer.receive_data():
-            return None
+            return False, 0
 
         # If the data was received, first reads the protocol code, that is expected to be the first value of every
         # message payload
@@ -339,11 +294,11 @@ class SerialCommunication:
 
         # Uses the protocol to determine the type of the received message and read the data
         if protocol == Protocols.DATA.value:
-            data: DataMessage
-        elif protocol == Protocols.IDENTIFICATION.value:
-            data: IdentificationMessage
+            data = self._data_message
         elif protocol == Protocols.RECEPTION.value:
-            data: ReceptionMessage
+            data = self._reception_message
+        elif protocol == Protocols.IDENTIFICATION.value:
+            data = self._identification_message
         else:
             message = (
                 f"Unable to recognize the protocol code {protocol} of the received message. Currently, only the codes "
@@ -351,12 +306,12 @@ class SerialCommunication:
             )
             console.error(message, error=ValueError)
 
-        # noinspection PyTypeChecker
-        data, _ = self._transport_layer.read_data(self._data_message, start_index=next_index)
+        # noinspection PyTypeChecker,PyUnboundLocalVariable
+        data, _ = self._transport_layer.read_data(data, start_index=next_index)
 
         # Note, for Data messages, this is not the entire Data message. To process the data object,
         # extract_data_object() method needs to be called next
-        return data
+        return True, data
 
     def extract_data_object(self, data_message: DataMessage, prototype_object: Any) -> Any:
         """Extracts the data object from the last received message and formats it to match the structure of the
