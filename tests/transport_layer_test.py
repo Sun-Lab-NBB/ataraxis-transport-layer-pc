@@ -1678,36 +1678,7 @@ def test_buffer_size_insufficient_error():
         protocol.write_data(large_data, start_index=7)
 
 
-# def test_write_data_success():
-#     """Test the successful write operation and correct end_index return."""
-#
-#     # Create an instance of the SerialTransportLayer class
-#     protocol = SerialTransportLayer(
-#         port="COM7",
-#         baudrate=115200,
-#         start_byte=129,
-#         delimiter_byte=0,
-#         timeout=10000,
-#         test_mode=True,
-#     )
-#
-#     # Mock the transmission buffer with enough space
-#     protocol._transmission_buffer = np.zeros(20, dtype=np.uint8)
-#     protocol._bytes_in_transmission_buffer = 10
-#
-#     # Create mock data to write
-#     data = MockDataClass(np.uint8(10), np.array([1, 2, 3], dtype=np.uint8))
-#
-#     # Call the write_data method and check the returned end_index
-#     end_index = protocol.write_data(data_object=data, start_index=10)
-#
-#     # Ensure that the end_index is greater than the start_index and buffer tracker is updated
-#     assert end_index > 10
-#     assert protocol._bytes_in_transmission_buffer == end_index
-
-
 def test_write_data_success(protocol):
-    """데이터 쓰기와 관련된 성공적인 시나리오 테스트"""
     data = np.array([1, 2, 3], dtype=np.uint8)
     end_index = protocol.write_data(data)
     assert end_index == len(data)
@@ -2667,33 +2638,29 @@ def test_construct_packet_error():
     # Initialize protocol instance for testing
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
-    # Mock the internal CRC processor to simulate an unexpected error in checksum calculation
-    with patch.object(protocol._crc_processor, "calculate_crc_checksum", side_effect=RuntimeError("CRC error")):
-        # Mock the console.error function to capture its usage and arguments
-        with patch("ataraxis_base_utilities.console.error") as mock_error:
-            with pytest.raises(
-                RuntimeError,
-                match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
-            ):
-                # Trigger the send_data() to cause the patched error to occur
-                protocol.send_data()
+    # Mock the _construct_packet to return an empty packet (size = 0), simulating a failure
+    with patch.object(protocol, "_construct_packet", return_value=np.array([])):
+        # Mock the COBS processor to return a valid packet after the failure
+        with patch.object(protocol._cobs_processor, "encode_payload", return_value=np.array([1, 2, 3])):
+            # Mock the CRC processor to return a valid checksum
+            with patch.object(protocol._crc_processor, "calculate_crc_checksum", return_value=1234):
+                # Mock the console.error function to capture its usage and arguments
+                with patch("ataraxis_base_utilities.console.error") as mock_error:
+                    # Trigger the send_data() to cause the patched error to occur
+                    result = protocol.send_data()
 
-            # Construct the expected error message
-            message = (
-                "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
-                "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
-                "error. Manual error resolution required."
-            )
+                    # Construct the expected error message
+                    message = (
+                        "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
+                        "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
+                        "error. Manual error resolution required."
+                    )
 
-            # Manually raise an exception using console.error to ensure it is covered
-            with pytest.raises(
-                RuntimeError,
-                match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
-            ):
-                console.error(message=message, error=RuntimeError)
+                    # Verify that console.error was called with the correct message and exception type
+                    mock_error.assert_called_once_with(message=message, error=RuntimeError)
 
-            # Verify that console.error was called with the correct message and exception type
-            mock_error.assert_called_once_with(message=message, error=RuntimeError)
+                    # Ensure send_data returns False since the data transmission failed
+                    assert result is False
 
 
 def test_construct_packet_unexpected_error():
