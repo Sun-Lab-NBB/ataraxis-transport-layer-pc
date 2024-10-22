@@ -13,7 +13,7 @@ message = CommandMessage(module_type=np.uint8(1), module_id=np.uint8(0), command
                          return_code=np.uint8(187), noblock=np.bool(True), cycle=np.bool(True),
                          cycle_delay=np.uint32(654))
 
-samples = 7
+samples = 122
 send_arr = np.zeros(samples, np.uint64)
 rec_arr = np.zeros(samples, np.uint64)
 id_arr = np.zeros(samples, np.uint64)

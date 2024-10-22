@@ -140,12 +140,12 @@ class SerialCommunication:
 
     Attributes:
         _transport_layer: An instance of the SerialTransportLayer class used for communication with the microcontroller.
-        _data_message: A DataMessage instance used to optimize processing received DataMessages.
-        _identification_message: An IdentificationMessage instance used to optimize processing received service messages
+        data_message: A DataMessage instance used to optimize processing received DataMessages.
+        identification_message: An IdentificationMessage instance used to optimize processing received service messages
             that communicate connected controller ID code.
-        _reception_message: A ReceptionMessage instance used to optimize processing received service messages used to
+        reception_message: A ReceptionMessage instance used to optimize processing received service messages used to
             acknowledge the reception of PC-sent command or parameters.
-        _data_object_index: Stores the index of the data object in the received DataMessage payloads. This is needed
+        data_object_index: Stores the index of the data object in the received DataMessage payloads. This is needed
             as data messages are processed in two steps: the first extracts the header structure that stores the ID
             information, and the second is used to specifically read the stored data object. This is similar to how
             the microcontrollers handle Parameters messages.
@@ -174,11 +174,11 @@ class SerialCommunication:
             test_mode=False,
         )
 
-        self._data_message = DataMessage()
-        self._identification_message = IdentificationMessage()
-        self._reception_message = ReceptionMessage()
+        self.data_message = DataMessage()
+        self.identification_message = IdentificationMessage()
+        self.reception_message = ReceptionMessage()
 
-        self._data_object_index = 6
+        self.data_object_index = 6
 
     @staticmethod
     def list_available_ports() -> tuple[dict[str, int | str], ...]:
@@ -292,26 +292,26 @@ class SerialCommunication:
         protocol = np.uint8(0)
         protocol, next_index = self._transport_layer.read_data(protocol, start_index=0)
 
+        data: np.uint8 | NDArray[np.uint8]
+
         # Uses the protocol to determine the type of the received message and read the data
         if protocol == Protocols.DATA.value:
-            data = self._data_message
+            # Note, for Data messages, this is not the entire Data message. To process the data object,
+            # extract_data_object() method needs to be called next
+            # data = self._transport_layer.read_data(np.uint8(0), start_index=0)  # TODO
+            return False, 0
         elif protocol == Protocols.RECEPTION.value:
-            data = self._reception_message
+            self.reception_message.reception_code, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
+            return True, protocol
         elif protocol == Protocols.IDENTIFICATION.value:
-            data = self._identification_message
+            self.identification_message.controller_id, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
+            return True, protocol
         else:
             message = (
                 f"Unable to recognize the protocol code {protocol} of the received message. Currently, only the codes "
                 f"available through the Protocols enumeration are supported."
             )
             console.error(message, error=ValueError)
-
-        # noinspection PyTypeChecker,PyUnboundLocalVariable
-        data, _ = self._transport_layer.read_data(data, start_index=next_index)
-
-        # Note, for Data messages, this is not the entire Data message. To process the data object,
-        # extract_data_object() method needs to be called next
-        return True, data
 
     def extract_data_object(self, data_message: DataMessage, prototype_object: Any) -> Any:
         """Extracts the data object from the last received message and formats it to match the structure of the
