@@ -515,7 +515,7 @@ class SerialTransportLayer:
         # end index to caller to indicate runtime success.
         if end_index > start_index:
             # Sets the _bytes_in_transmission_buffer tracker variable to the maximum of its current value and the
-            # index that immediately follows the final index of the buffer that was overwritten with he input data.
+            # index that immediately follows the final index of the buffer that was overwritten with the input data.
             # This only increases the tracker value if write operation increased the size of the payload.
             self._bytes_in_transmission_buffer = max(self._bytes_in_transmission_buffer, end_index)
             return end_index  # Returns the end_index to support chained overwrite operations
@@ -537,7 +537,7 @@ class SerialTransportLayer:
         if end_index == -1:
             message = (
                 f"Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore # pragma: no cover
+                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
                 f"one-dimensional (flat) arrays are supported."
             )
             console.error(message=message, error=ValueError)
@@ -827,8 +827,8 @@ class SerialTransportLayer:
             message = (
                 f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
                 f"bytes available to fully fill the object starting at the index {start_index}. Specifically, given "
-                f"the object size of {data_object.nbytes} bytes, the required payload size is "  # type: ignore # pragma: no cover
-                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore # pragma: no cover
+                f"the object size of {data_object.nbytes} bytes, the required payload size is "  # type: ignore
+                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore
                 f"{self.bytes_in_reception_buffer} bytes."
             )
             console.error(message=message, error=ValueError)
@@ -838,7 +838,7 @@ class SerialTransportLayer:
         elif end_index == -1:
             message = (
                 f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore # pragma: no cover
+                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
                 f"one-dimensional (flat) arrays are supported."
             )
             console.error(message=message, error=ValueError)
@@ -1089,7 +1089,7 @@ class SerialTransportLayer:
             Expects the received data to be organized in the following format:
             [START BYTE]_[PAYLOAD SIZE BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
 
-            Prior to doing any processing, the method checks for whether the data is present in the first place. Even if
+            Before doing any processing, the method checks for whether the data is present in the first place. Even if
             the class 'available' property returns True, this method can still return False. This would be the case if
             the 'data' available for reading is actually the communication line noise. Overall, there is no need to
             check the 'available' property before calling this method, as the method does this internally anyway.
@@ -1224,7 +1224,7 @@ class SerialTransportLayer:
         if not self._bytes_available(required_bytes_count=self._minimum_packet_size):
             return False
 
-        # Preinitializes the variables that support proper iteration of the parsing process below.
+        # Pre-initializes the variables that support proper iteration of the parsing process below.
         status: int = 150  # This is not a valid status code
         parsed_bytes_count: int = 0
         parsed_bytes: NDArray[np.uint8] = np.empty(shape=0, dtype=np.uint8)
@@ -1644,7 +1644,7 @@ class SerialTransportLayer:
                 return 1, parsed_byte_count, remaining_bytes, parsed_bytes
 
             processed_bytes += 1  # Increments the processed bytes counter
-            parsed_byte_count += 1  # Increments the parsed packet + postamble byte tracker
+            parsed_byte_count += 1  # Increments the parsed packet and postamble byte tracker
             remaining_crc_bytes -= 1  # Decrements remaining CRC bytes counter with each processed byte
 
             # Transfers the evaluated byte from the unparsed buffer into the parsed buffer
