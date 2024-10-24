@@ -2467,55 +2467,71 @@ def test_read_data_empty_array():
 
 def test_receive_data_status_0_timeout():
     """Test the case where status == 0 and bytes are not available, leading to a timeout."""
+
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
-    # Mock _parse_packet to return status == 0
-    protocol._parse_packet = lambda *args: (0, 0, b"", np.array([1, 2, 3], dtype=np.uint8))
+    # Set up protocol state for testing
+    protocol._minimum_packet_size = 5  # Define minimum packet size
+    protocol._timeout = 1000  # Set a reasonable timeout
 
-    # Mock _bytes_available to return False to simulate a timeout
-    protocol._bytes_available = lambda required_bytes_count, timeout: False
+    parsed_bytes = np.array([1, 2, 3], dtype=np.uint8)  # Simulate a partially received packet
+    parsed_bytes_count = 2  # Two bytes have been processed so far
 
-    with patch("ataraxis_base_utilities.console.error") as mock_error:
-        with pytest.raises(RuntimeError) as exc_info:
-            protocol.receive_data()
+    # Mock _parse_packet to return status == 0 (incomplete packet)
+    with patch.object(protocol, "_parse_packet", return_value=(0, parsed_bytes_count, b"", parsed_bytes)):
+        # Mock _bytes_available to return False (simulating timeout)
+        with patch.object(protocol, "_bytes_available", return_value=False):
+            # Mock console.error to capture the log
+            with patch("ataraxis_base_utilities.console.error") as mock_error:
+                # Expect RuntimeError due to timeout
+                with pytest.raises(RuntimeError) as exc_info:
+                    protocol.receive_data()
 
-        # Verify that console.error was called with the correct message
-        message = (
-            f"Failed to parse the incoming serial packet data. Packet reception staled. "
-            f"The byte number {1} out of {3} was not received in time "
-            f"({protocol._timeout} microseconds), following the reception of the previous byte."
-        )
-        mock_error.assert_called_once_with(message=message)
+                # Construct the expected error message
+                message = (
+                    f"Failed to parse the incoming serial packet data. Packet reception staled. "
+                    f"The byte number {parsed_bytes_count + 1} out of {parsed_bytes.size} was not received in time "
+                    f"({protocol._timeout} microseconds), following the reception of the previous byte."
+                )
+
+                # Ensure console.error was called once with the correct message
+                mock_error.assert_called_once_with(message=message, error=RuntimeError)
+
+                # Verify that the raised exception contains the correct message
+                assert str(exc_info.value) == message
 
 
 def test_receive_data_status_2_timeout():
     """Test the case where status == 2 and bytes are not available, leading to a timeout."""
+
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
-    # Simulate partial parsing with status == 2
-    parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)
-    parsed_bytes_count = 2  # Only two bytes parsed
+    # Set up protocol state for testing
+    parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)  # Simulate received bytes
+    parsed_bytes_count = 2  # Only two bytes have been processed
 
-    # Mock _parse_packet to return status == 2
-    protocol._parse_packet = lambda *args: (2, parsed_bytes_count, b"", parsed_bytes)
+    # Mock _parse_packet to return status == 2 (partial parsing with payload size known)
+    with patch.object(protocol, "_parse_packet", return_value=(2, parsed_bytes_count, b"", parsed_bytes)):
+        # Mock _bytes_available to return False (simulating timeout)
+        with patch.object(protocol, "_bytes_available", return_value=False):
+            # Mock console.error to capture the log
+            with patch("ataraxis_base_utilities.console.error") as mock_error:
+                # Expect RuntimeError due to timeout
+                with pytest.raises(RuntimeError) as exc_info:
+                    protocol.receive_data()
 
-    # Mock _bytes_available to return False to simulate a timeout
-    protocol._bytes_available = lambda required_bytes_count, timeout: False
+                # Construct the expected error message
+                message = (
+                    f"Failed to parse the incoming serial packet data. The byte number {parsed_bytes_count + 1} "
+                    f"out of {parsed_bytes.size} was not received in time ({protocol._timeout} microseconds), "
+                    f"following the reception of the previous byte. Packet reception staled."
+                )
 
-    with patch("ataraxis_base_utilities.console.error") as mock_error:
-        with pytest.raises(RuntimeError) as exc_info:
-            protocol.receive_data()
+                # Ensure console.error was called once with the correct message
+                mock_error.assert_called_once_with(message=message, error=RuntimeError)
 
-        # Verify that console.error was called with the correct message
-        message = (
-            f"Failed to parse the incoming serial packet data. The byte number {parsed_bytes_count + 1} "
-            f"out of {parsed_bytes.size} was not received in time ({protocol._timeout} microseconds), "
-            f"following the reception of the previous byte. Packet reception staled."
-        )
-        mock_error.assert_called_once_with(message=message)
-
-        # Verify the exception message
-        assert str(exc_info.value) == message
+                # Verify the raised exception contains the correct message
+                assert str(exc_info.value) == message
 
 
 def test_receive_data_status_103():
@@ -2527,23 +2543,26 @@ def test_receive_data_status_103():
     parsed_bytes_count = 0
 
     # Mock _parse_packet to return status == 103
-    protocol._parse_packet = lambda *args: (103, parsed_bytes_count, b"", parsed_bytes)
+    with patch.object(protocol, "_parse_packet", return_value=(103, parsed_bytes_count, b"", parsed_bytes)):
+        # Mock console.error to capture the log
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            # Expect a RuntimeError due to invalid packet size
+            with pytest.raises(RuntimeError) as exc_info:
+                protocol.receive_data()
 
-    with patch("ataraxis_base_utilities.console.error") as mock_error:
-        with pytest.raises(RuntimeError) as exc_info:
-            protocol.receive_data()
+            payload_size = parsed_bytes.size - int(protocol._postamble_size)
+            message = (
+                f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
+                f"({payload_size}), is outside the expected boundaries "
+                f"({protocol._min_rx_payload_size} to {protocol._max_rx_payload_size}). This likely indicates a "
+                f"mismatch in the transmission parameters between this system and the Microcontroller."
+            )
 
-        payload_size = parsed_bytes.size - int(protocol._postamble_size)
-        message = (
-            f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
-            f"({payload_size}), is outside the expected boundaries "
-            f"({protocol._min_rx_payload_size} to {protocol._max_rx_payload_size}). This likely indicates a "
-            f"mismatch in the transmission parameters between this system and the Microcontroller."
-        )
-        mock_error.assert_called_once_with(message=message)
+            # Ensure the correct message is logged
+            mock_error.assert_called_once_with(message=message, error=RuntimeError)
 
-        # Verify the exception message
-        assert str(exc_info.value) == message
+            # Check the raised exception message
+            assert str(exc_info.value) == message
 
 
 def test_receive_data_status_104():
@@ -2552,26 +2571,29 @@ def test_receive_data_status_104():
 
     # Simulate parsing with status == 104
     parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)
-    parsed_bytes_count = 2  # Delimiter encountered at byte number 3
+    parsed_bytes_count = 2
 
     # Mock _parse_packet to return status == 104
-    protocol._parse_packet = lambda *args: (104, parsed_bytes_count, b"", parsed_bytes)
+    with patch.object(protocol, "_parse_packet", return_value=(104, parsed_bytes_count, b"", parsed_bytes)):
+        # Mock console.error to capture the log
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            # Expect a RuntimeError due to incorrect delimiter byte
+            with pytest.raises(RuntimeError) as exc_info:
+                protocol.receive_data()
 
-    with patch("ataraxis_base_utilities.console.error") as mock_error:
-        with pytest.raises(RuntimeError) as exc_info:
-            protocol.receive_data()
+            expected_byte_number = parsed_bytes.size - int(protocol._postamble_size)
+            message = (
+                f"Failed to parse the incoming serial packet data. Delimiter byte value "
+                f"({protocol._delimiter_byte}) encountered at byte number {parsed_bytes_count + 1}, instead of the "
+                f"expected byte number {expected_byte_number}. This likely indicates packet corruption or mismatch "
+                f"in the transmission parameters between this system and the Microcontroller."
+            )
 
-        expected_byte_number = parsed_bytes.size - int(protocol._postamble_size)
-        message = (
-            f"Failed to parse the incoming serial packet data. Delimiter byte value "
-            f"({protocol._delimiter_byte}) encountered at byte number {parsed_bytes_count + 1}, instead of the "
-            f"expected byte number {expected_byte_number}. This likely indicates packet corruption or mismatch "
-            f"in the transmission parameters between this system and the Microcontroller."
-        )
-        mock_error.assert_called_once_with(message=message)
+            # Ensure the correct message is logged
+            mock_error.assert_called_once_with(message=message, error=RuntimeError)
 
-        # Verify the exception message
-        assert str(exc_info.value) == message
+            # Check the raised exception message
+            assert str(exc_info.value) == message
 
 
 def test_receive_data_status_105():
@@ -2579,29 +2601,32 @@ def test_receive_data_status_105():
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
     # Simulate parsing with status == 105
-    parsed_bytes = np.array([1, 2, 3, 99], dtype=np.uint8)  # Last byte is incorrect
+    parsed_bytes = np.array([1, 2, 3, 99], dtype=np.uint8)
     parsed_bytes_count = 0
 
     # Mock _parse_packet to return status == 105
-    protocol._parse_packet = lambda *args: (105, parsed_bytes_count, b"", parsed_bytes)
+    with patch.object(protocol, "_parse_packet", return_value=(105, parsed_bytes_count, b"", parsed_bytes)):
+        # Mock console.error to capture the log
+        with patch("ataraxis_base_utilities.console.error") as mock_error:
+            # Expect a RuntimeError due to incorrect last byte
+            with pytest.raises(RuntimeError) as exc_info:
+                protocol.receive_data()
 
-    with patch("ataraxis_base_utilities.console.error") as mock_error:
-        with pytest.raises(RuntimeError) as exc_info:
-            protocol.receive_data()
+            last_payload_byte_index = parsed_bytes.size - int(protocol._postamble_size)
+            message = (
+                f"Failed to parse the incoming serial packet data. Delimiter byte value "
+                f"({protocol._delimiter_byte}) expected as the last payload byte "
+                f"({last_payload_byte_index}), but instead encountered "
+                f"{parsed_bytes[last_payload_byte_index]}. This likely indicates packet "
+                f"corruption or mismatch in the transmission parameters between this system "
+                f"and the Microcontroller."
+            )
 
-        last_payload_byte_index = parsed_bytes.size - int(protocol._postamble_size)
-        message = (
-            f"Failed to parse the incoming serial packet data. Delimiter byte value "
-            f"({protocol._delimiter_byte}) expected as the last payload byte "
-            f"({last_payload_byte_index}), but instead encountered "
-            f"{parsed_bytes[last_payload_byte_index]}. This likely indicates packet "
-            f"corruption or mismatch in the transmission parameters between this system "
-            f"and the Microcontroller."
-        )
-        mock_error.assert_called_once_with(message=message)
+            # Ensure the correct message is logged
+            mock_error.assert_called_once_with(message=message, error=RuntimeError)
 
-        # Verify the exception message
-        assert str(exc_info.value) == message
+            # Check the raised exception message
+            assert str(exc_info.value) == message
 
 
 def test_receive_data_status_102():

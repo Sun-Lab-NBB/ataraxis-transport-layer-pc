@@ -1,13 +1,12 @@
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from dataclasses import dataclass
 
 import numpy as np
+from _typeshed import Incomplete
 from numpy.typing import NDArray
-from ataraxis_base_utilities import console
 
-from .transport_layer import SerialTransportLayer
-
+from .transport_layer import SerialTransportLayer as SerialTransportLayer
 
 @dataclass()
 class CommandMessage:
@@ -41,52 +40,30 @@ class CommandMessage:
     module_type: np.uint8
     module_id: np.uint8
     command: np.uint8
-    return_code: np.uint8 = 0
-    noblock: np.bool = True
-    cycle: np.bool = False
-    cycle_delay: np.uint32 = 0
-    packed_data: Optional[NDArray[np.uint8]] = None
-
-    def __post_init__(self):
+    return_code: np.uint8 = ...
+    noblock: np.bool = ...
+    cycle: np.bool = ...
+    cycle_delay: np.uint32 = ...
+    packed_data: NDArray[np.uint8] | None = ...
+    def __post_init__(self) -> None:
         """Packs the data into the numpy array to optimize future transmission speed."""
-
-        # Packages the input data into a byte numpy array. Prepends the 'command' protocol code to the packaged data.
-        self.packed_data = np.empty(11, dtype=np.uint8)
-        self.packed_data[0] = Protocols.COMMAND.value
-        self.packed_data[1] = self.module_type
-        self.packed_data[2] = self.module_id
-        self.packed_data[3] = self.return_code
-        self.packed_data[4] = self.command
-        self.packed_data[5] = self.noblock
-        self.packed_data[6] = self.cycle
-        self.packed_data[7] = self.cycle_delay
-
 
 @dataclass
 class DataMessage:
-    module_type: np.uint8 = np.uint8(0)
-    module_id: np.uint8 = np.uint8(0)
-    command: np.uint8 = np.uint8(0)
-    event: np.uint8 = np.uint8(0)
-    object_size: np.uint8 = np.uint8(0)
-
-    def __repr__(self):
-        message = (
-            f"DataMessage(module_type={self.module_type}, module_id={self.module_id}, command={self.command}, "
-            f"event={self.event}, object_size={self.object_size})."
-        )
-        return message
-
+    module_type: np.uint8 = ...
+    module_id: np.uint8 = ...
+    command: np.uint8 = ...
+    event: np.uint8 = ...
+    object_size: np.uint8 = ...
+    def __repr__(self) -> str: ...
 
 @dataclass
 class IdentificationMessage:
-    controller_id: np.uint8 = np.uint8(0)
-
+    controller_id: np.uint8 = ...
 
 @dataclass
 class ReceptionMessage:
-    reception_code: np.uint8 = np.uint8(0)
-
+    reception_code: np.uint8 = ...
 
 class Protocols(Enum):
     """Stores currently supported protocol codes used in data transmission.
@@ -95,27 +72,11 @@ class Protocols(Enum):
     rest of the data payload. The contents of this enumeration have to mach across all used systems.
     """
 
-    COMMAND = np.uint8(1)
-    """The protocol used by messages that communicate a command to be executed by the target microcontroller Kernel or
-    Module class instance. Commands trigger direct manipulation of the connected hardware, such as engaging breaks or
-    spinning motors. Currently, only the PC can send the commands to the microcontroller."""
-    PARAMETERS = np.uint8(2)
-    """The protocol used by messages that allow changing the runtime-addressable parameters of the target 
-    microcontroller Kernel or Module class instance. For example, this message would be used to adjust the motor speed
-    or the sensitivity of a lick sensor. Currently, only the PC can set the parameters of the microcontroller."""
-    DATA = np.uint8(3)
-    """The protocol used by messages that communicate the microcontroller-originating data. This protocol is used to 
-    both send data and communicate runtime errors. Currently, only the microcontroller can send data messages to the 
-    PC."""
-    RECEPTION = np.uint8(4)
-    """The service protocol used by the microcontroller to optionally acknowledge the reception of a Command or 
-    Parameters message. This is used to ensure the delivery of critical messages to the microcontroller and, currently, 
-    this feature is only supported by Command and Parameters messages."""
-    IDENTIFICATION = np.uint8(5)
-    """The service protocol used by the microcontroller to respond to the identification request sent by the PC. This 
-    is typically used during the initial system architecture setup to map controllers with specific microcode versions 
-    to the USB ports they use for communication with the PC."""
-
+    COMMAND: Incomplete
+    PARAMETERS: Incomplete
+    DATA: Incomplete
+    RECEPTION: Incomplete
+    IDENTIFICATION: Incomplete
 
 class SerialCommunication:
     """Specializes an instance of the SerialTransportLayer and exposes methods that allow communicating with a
@@ -155,34 +116,12 @@ class SerialCommunication:
 
     """
 
-    def __init__(
-        self,
-        usb_port: str,
-        baudrate: int = 115200,
-        maximum_transmitted_payload_size: int = 254,
-    ) -> None:
-        # Specializes the TransportLayer to mostly match a similar specialization carried out by the microcontroller
-        # Communication class.
-        self._transport_layer = SerialTransportLayer(
-            port=usb_port,
-            baudrate=baudrate,
-            polynomial=np.uint16(0x1021),
-            initial_crc_value=np.uint16(0xFFFF),
-            final_crc_xor_value=np.uint16(0x0000),
-            maximum_transmitted_payload_size=maximum_transmitted_payload_size,
-            minimum_received_payload_size=2,  # Protocol (1) and Service code (1)
-            start_byte=129,
-            delimiter_byte=0,
-            timeout=20000,
-            test_mode=False,
-        )
-
-        self.data_message = DataMessage()
-        self.identification_message = IdentificationMessage()
-        self.reception_message = ReceptionMessage()
-
-        self.data_object_index = 6
-
+    _transport_layer: Incomplete
+    data_message: Incomplete
+    identification_message: Incomplete
+    reception_message: Incomplete
+    data_object_index: int
+    def __init__(self, usb_port: str, baudrate: int = 115200, maximum_transmitted_payload_size: int = 254) -> None: ...
     @staticmethod
     def list_available_ports() -> tuple[dict[str, int | str], ...]:
         """Provides the information about each serial port addressable through the pySerial library.
@@ -194,9 +133,6 @@ class SerialCommunication:
             A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
             port.
         """
-        # The method itself is defined in TransportLayer class, this wrapper just calls that method
-        return SerialTransportLayer.list_available_ports()
-
     def send_command_message(self, message: CommandMessage) -> None:
         """Packages the input data into a Command message and sends it to the connected microcontroller.
 
@@ -206,18 +142,8 @@ class SerialCommunication:
         Args:
             message: The Command message to send to the microcontroller.
         """
-        # Writes the packaged data into the transmission buffer.
-        self._transport_layer.write_data(data_object=message.packed_data)
-
-        # Constructs and sends the data message to the connected system.
-        self._transport_layer.send_data()
-
     def send_parameter_message(
-        self,
-        module_type: np.uint8,
-        module_id: np.uint8,
-        parameter_object: Any,
-        return_code: np.uint8 = np.uint8(0),
+        self, module_type: np.uint8, module_id: np.uint8, parameter_object: Any, return_code: np.uint8 = ...
     ) -> None:
         """Packages the input data into a Parameters message and sends it to the connected microcontroller.
 
@@ -241,32 +167,6 @@ class SerialCommunication:
                 that the parameters were received intact, ensuring message delivery. Setting this argument to 0 disables
                 delivery assurance.
         """
-
-        # Ensures the transmission_buffer is cleared
-        self.reset_transmission_state()
-
-        # Packages the header data for the parameter message and writes it to the transmission buffer
-        packed_data = np.array(
-            [
-                Protocols.PARAMETERS.value,
-                module_type,
-                module_id,
-                return_code,
-            ],
-            dtype=np.uint8,
-        )
-
-        # noinspection PyTypeChecker
-        next_index = self._transport_layer.write_data(data_object=packed_data)
-
-        size_index = next_index
-        object_index = next_index + 1
-        next_index = self._transport_layer.write_data(data_object=parameter_object, start_index=object_index)
-
-        self._transport_layer.write_data(data_object=np.uint8(next_index - object_index), start_index=size_index)
-
-        self._transport_layer.send_data()
-
     def receive_message(self) -> tuple[bool, DataMessage | IdentificationMessage | ReceptionMessage | int]:
         """Receives and processes the message from the connected microcontroller.
 
@@ -286,36 +186,6 @@ class SerialCommunication:
             ValueError: If the received protocol code is not recognized.
 
         """
-        # Attempts to receive the data message. If there is no data to receive, returns None
-        if not self._transport_layer.receive_data():
-            return False, 0
-
-        # If the data was received, first reads the protocol code, that is expected to be the first value of every
-        # message payload
-        protocol = np.uint8(0)
-        protocol, next_index = self._transport_layer.read_data(protocol, start_index=0)
-
-        data: np.uint8 | NDArray[np.uint8]
-
-        # Uses the protocol to determine the type of the received message and read the data
-        if protocol == Protocols.DATA.value:
-            # Note, for Data messages, this is not the entire Data message. To process the data object,
-            # extract_data_object() method needs to be called next
-            # data = self._transport_layer.read_data(np.uint8(0), start_index=0)  # TODO
-            return False, 0
-        elif protocol == Protocols.RECEPTION.value:
-            self.reception_message.reception_code, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
-            return True, protocol
-        elif protocol == Protocols.IDENTIFICATION.value:
-            self.identification_message.controller_id, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
-            return True, protocol
-        else:
-            message = (
-                f"Unable to recognize the protocol code {protocol} of the received message. Currently, only the codes "
-                f"available through the Protocols enumeration are supported."
-            )
-            console.error(message, error=ValueError)
-
     def extract_data_object(self, data_message: DataMessage, prototype_object: Any) -> Any:
         """Extracts the data object from the last received message and formats it to match the structure of the
         provided prototype object.
@@ -333,19 +203,3 @@ class SerialCommunication:
         Raises:
             ValueError: If the size of the extracted data does not match the object size declared in the data message.
         """
-
-        # Attempts to extract the data and save it into the format that matches the prototype object
-        extracted_object, next_index = self._transport_layer.read_data(
-            prototype_object, start_index=self._data_object_index
-        )
-
-        # Verifies that the size of the extracted object matches the size declared in the data message
-        extracted_size = next_index - self._data_object_index
-
-        if extracted_size != data_message.object_size:
-            message = (
-                "Unable to extract the requested data object from the received message payload. The size of the object "
-                f"declared by the incoming data message {data_message.object_size} does not match the factual size of "
-                f"the extracted data {extracted_size} (in bytes). This may indicate a data corruption."
-            )
-            console.error(message, error=ValueError)

@@ -164,20 +164,20 @@ class SerialTransportLayer:
     )  # Sets up a tuple of types used to verify transmitted data
 
     def __init__(
-            self,
-            port: str,
-            baudrate: int = 115200,
-            polynomial: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x1021),
-            initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
-            final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
-            maximum_transmitted_payload_size: int = 254,
-            minimum_received_payload_size: int = 1,
-            start_byte: int = 129,
-            delimiter_byte: int = 0,
-            timeout: int = 20000,
-            *,
-            test_mode: bool = False,
-            allow_start_byte_errors: bool = False,
+        self,
+        port: str,
+        baudrate: int = 115200,
+        polynomial: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x1021),
+        initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
+        final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
+        maximum_transmitted_payload_size: int = 254,
+        minimum_received_payload_size: int = 1,
+        start_byte: int = 129,
+        delimiter_byte: int = 0,
+        timeout: int = 20000,
+        *,
+        test_mode: bool = False,
+        allow_start_byte_errors: bool = False,
     ) -> None:
         # Verifies that input arguments are valid. Does not check polynomial parameters, that is offloaded to the
         # CRCProcessor class.
@@ -385,37 +385,37 @@ class SerialTransportLayer:
         self._bytes_in_reception_buffer = 0
 
     def write_data(
-            self,
-            data_object: Union[
-                np.uint8,
-                np.uint16,
-                np.uint32,
-                np.uint64,
-                np.int8,
-                np.int16,
-                np.int32,
-                np.int64,
-                np.float32,
-                np.float64,
-                np.bool,
-                NDArray[
-                    Union[
-                        np.uint8,
-                        np.uint16,
-                        np.uint32,
-                        np.uint64,
-                        np.int8,
-                        np.int16,
-                        np.int32,
-                        np.int64,
-                        np.float32,
-                        np.float64,
-                        np.bool,
-                    ]
-                ],
-                Type[Any],
+        self,
+        data_object: Union[
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.bool,
+            NDArray[
+                Union[
+                    np.uint8,
+                    np.uint16,
+                    np.uint32,
+                    np.uint64,
+                    np.int8,
+                    np.int16,
+                    np.int32,
+                    np.int64,
+                    np.float32,
+                    np.float64,
+                    np.bool,
+                ]
             ],
-            start_index: Optional[int] = None,
+            Type[Any],
+        ],
+        start_index: Optional[int] = None,
     ) -> int:
         """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
         start_index.
@@ -566,21 +566,21 @@ class SerialTransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_scalar_data(
-            target_buffer: NDArray[np.uint8],
-            scalar_object: Union[
-                np.uint8,
-                np.uint16,
-                np.uint32,
-                np.uint64,
-                np.int8,
-                np.int16,
-                np.int32,
-                np.int64,
-                np.float32,
-                np.float64,
-                np.bool,
-            ],
-            start_index: int,
+        target_buffer: NDArray[np.uint8],
+        scalar_object: Union[
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.bool,
+        ],
+        start_index: int,
     ) -> int:
         """Converts the input numpy scalar to a sequence of bytes and writes it to the transmission buffer at the
         specified start_index.
@@ -623,23 +623,23 @@ class SerialTransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_array_data(
-            target_buffer: NDArray[np.uint8],
-            array_object: NDArray[
-                Union[
-                    np.uint8,
-                    np.uint16,
-                    np.uint32,
-                    np.uint64,
-                    np.int8,
-                    np.int16,
-                    np.int32,
-                    np.int64,
-                    np.float32,
-                    np.float64,
-                    np.bool,
-                ]
-            ],
-            start_index: int,
+        target_buffer: NDArray[np.uint8],
+        array_object: NDArray[
+            Union[
+                np.uint8,
+                np.uint16,
+                np.uint32,
+                np.uint64,
+                np.int8,
+                np.int16,
+                np.int32,
+                np.int64,
+                np.float32,
+                np.float64,
+                np.bool,
+            ]
+        ],
+        start_index: int,
     ) -> int:
         """Converts the input numpy array to a sequence of bytes and writes it to the transmission buffer at the
         specified start_index.
@@ -684,37 +684,37 @@ class SerialTransportLayer:
         return required_size
 
     def read_data(
-            self,
-            data_object: Union[
-                np.uint8,
-                np.uint16,
-                np.uint32,
-                np.uint64,
-                np.int8,
-                np.int16,
-                np.int32,
-                np.int64,
-                np.float32,
-                np.float64,
-                np.bool,
-                NDArray[
-                    Union[
-                        np.uint8,
-                        np.uint16,
-                        np.uint32,
-                        np.uint64,
-                        np.int8,
-                        np.int16,
-                        np.int32,
-                        np.int64,
-                        np.float32,
-                        np.float64,
-                        np.bool,
-                    ]
-                ],
-                Type[Any],
+        self,
+        data_object: Union[
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.float32,
+            np.float64,
+            np.bool,
+            NDArray[
+                Union[
+                    np.uint8,
+                    np.uint16,
+                    np.uint32,
+                    np.uint64,
+                    np.int8,
+                    np.int16,
+                    np.int32,
+                    np.int64,
+                    np.float32,
+                    np.float64,
+                    np.bool,
+                ]
             ],
-            start_index: int = 0,
+            Type[Any],
+        ],
+        start_index: int = 0,
     ) -> tuple[Any, int]:
         """Recreates the input data_object using the data read from the payload stored inside the class reception
         buffer.
@@ -866,24 +866,24 @@ class SerialTransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _read_array_data(
-            source_buffer: NDArray[np.uint8],
-            array_object: NDArray[
-                Union[
-                    np.uint8,
-                    np.uint16,
-                    np.uint32,
-                    np.uint64,
-                    np.int8,
-                    np.int16,
-                    np.int32,
-                    np.int64,
-                    np.float32,
-                    np.float64,
-                    np.bool,
-                ]
-            ],
-            start_index: int,
-            payload_size: int,
+        source_buffer: NDArray[np.uint8],
+        array_object: NDArray[
+            Union[
+                np.uint8,
+                np.uint16,
+                np.uint32,
+                np.uint64,
+                np.int8,
+                np.int16,
+                np.int32,
+                np.int64,
+                np.float32,
+                np.float64,
+                np.bool,
+            ]
+        ],
+        start_index: int,
+        payload_size: int,
     ) -> tuple[NDArray[Any], int]:
         """Reads the requested array_object from the reception buffer of the caller class.
 
@@ -1009,12 +1009,12 @@ class SerialTransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _construct_packet(
-            payload_buffer: NDArray[np.uint8],
-            cobs_processor: _COBSProcessor,
-            crc_processor: _CRCProcessor,
-            payload_size: int,
-            delimiter_byte: np.uint8,
-            start_byte: np.uint8,
+        payload_buffer: NDArray[np.uint8],
+        cobs_processor: _COBSProcessor,
+        crc_processor: _CRCProcessor,
+        payload_size: int,
+        delimiter_byte: np.uint8,
+        start_byte: np.uint8,
     ) -> NDArray[np.uint8]:
         """Constructs the serial packet using the payload stored inside the input buffer.
 
@@ -1151,7 +1151,10 @@ class SerialTransportLayer:
         # If CRC calculation ran successfully, resolves the status of COBS decoding (provided COBS decoder status is not
         # standby or encoding success). If verification failed due to COBS decoding error, this method will raise the
         # appropriate error.
-        if self._cobs_processor.processor.status != self._cobs_processor.processor.standby and self._cobs_processor.processor.status != self._cobs_processor.processor.payload_encoded:
+        if (
+            self._cobs_processor.processor.status != self._cobs_processor.processor.standby
+            and self._cobs_processor.processor.status != self._cobs_processor.processor.payload_encoded
+        ):
             # Removes the CRC bytes before running the decoder.
             # noinspection PyProtectedMember
             self._cobs_processor._resolve_decoding_status(packet=packet[: packet.size - int(self._postamble_size)])
@@ -1162,7 +1165,7 @@ class SerialTransportLayer:
 
         # Converts the CRC checksum extracted from the end of the packet from a byte array to an integer. This uses the
         # wrapper class that raises the appropriate error if method runtime fails.
-        byte_checksum = packet[-self._postamble_size:]  # Extracts the received CRC checksum as a bytes' array
+        byte_checksum = packet[-self._postamble_size :]  # Extracts the received CRC checksum as a bytes' array
         received_checksum = self._crc_processor.convert_bytes_to_checksum(byte_checksum)
 
         # Calculates the expected CRC checksum for the encoded payload.
@@ -1234,7 +1237,6 @@ class SerialTransportLayer:
         # Enters the packet parsing loop. Due to the parsing implementation, the packet can be resolved over at most
         # three iterations of the parsing method. Therefore, this loop is statically capped at 3 iterations.
         for call_count in range(3):
-
             # Converts leftover_bytes (bytes) to a numpy uint8 array for compatibility with _parse_packet
             remaining_bytes = np.frombuffer(self._leftover_bytes, dtype=np.uint8).copy()
 
@@ -1272,7 +1274,7 @@ class SerialTransportLayer:
             # maximizes the chances of successfully parsing the full packet during iteration 2. That said, since the
             # exact size of the packet is not known, iteration 3 may be necessary.
             if status == 0 and not self._bytes_available(
-                    required_bytes_count=self._minimum_packet_size - 1, timeout=self._timeout
+                required_bytes_count=self._minimum_packet_size - 1, timeout=self._timeout
             ):
                 # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
                 # reception.
@@ -1291,7 +1293,7 @@ class SerialTransportLayer:
             # is known. This method, therefore, blocks until the class is able to receive enough bytes to fully
             # represent the packet or until the reception timeout.
             if status == 2 and not self._bytes_available(
-                    required_bytes_count=parsed_bytes.size - parsed_bytes_count, timeout=self._timeout
+                required_bytes_count=parsed_bytes.size - parsed_bytes_count, timeout=self._timeout
             ):
                 # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
                 # reception.
@@ -1410,7 +1412,6 @@ class SerialTransportLayer:
         previous_additional_bytes = 0  # Tracks how many bytes were available during the previous iteration of the loop
         once = True  # Allows the loop below to run once even if timeout is 0
         while self._timer.elapsed < timeout or once:
-
             # Deactivates the 'once' condition to make future loop iterations correctly depend on timeout
             if once:
                 once = False
@@ -1438,16 +1439,16 @@ class SerialTransportLayer:
     @staticmethod
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover # pragma: no cover
     def _parse_packet(
-            unparsed_bytes: NDArray[np.uint8],
-            start_byte: np.uint8,
-            delimiter_byte: np.uint8,
-            max_payload_size: np.uint8,
-            min_payload_size: np.uint8,
-            postamble_size: np.uint8,
-            allow_start_byte_errors: bool,
-            start_found: bool = False,
-            parsed_byte_count: int = 0,
-            parsed_bytes: NDArray[np.uint8] = np.empty(0, dtype=np.uint8),
+        unparsed_bytes: NDArray[np.uint8],
+        start_byte: np.uint8,
+        delimiter_byte: np.uint8,
+        max_payload_size: np.uint8,
+        min_payload_size: np.uint8,
+        postamble_size: np.uint8,
+        allow_start_byte_errors: bool,
+        start_found: bool = False,
+        parsed_byte_count: int = 0,
+        parsed_bytes: NDArray[np.uint8] = np.empty(0, dtype=np.uint8),
     ) -> tuple[int, int, NDArray[np.uint8], NDArray[np.uint8]]:
         """Parses as much of the packet data as possible using the input unparsed_bytes object.
 
@@ -1620,9 +1621,7 @@ class SerialTransportLayer:
                 # payload, the packet is likely corrupted. Returns with error code 104: Delimiter byte encountered too
                 # early.
                 if unparsed_bytes[i] == delimiter_byte and remaining_packet_bytes != 0:
-                    remaining_bytes = unparsed_bytes[
-                                      processed_bytes:
-                                      ].copy()  # Returns any remaining unprocessed bytes
+                    remaining_bytes = unparsed_bytes[processed_bytes:].copy()  # Returns any remaining unprocessed bytes
                     return 104, parsed_byte_count, remaining_bytes, parsed_bytes
 
                 # If the evaluated byte is a delimiter byte value and this is the last byte of the encoded payload, the
@@ -1633,9 +1632,7 @@ class SerialTransportLayer:
                 # If the last evaluated payload byte is not a delimiter byte value, this also indicates that the
                 # packet is likely corrupted. Returns with code 105: Delimiter byte not found.
                 if remaining_packet_bytes == 0 and unparsed_bytes[i] != delimiter_byte:
-                    remaining_bytes = unparsed_bytes[
-                                      processed_bytes:
-                                      ].copy()  # Returns any remaining unprocessed bytes
+                    remaining_bytes = unparsed_bytes[processed_bytes:].copy()  # Returns any remaining unprocessed bytes
                     return 105, parsed_byte_count, remaining_bytes, parsed_bytes
 
             # If this stage uses up all unprocessed bytes, ends method runtime with partial success code (2)
@@ -1677,12 +1674,12 @@ class SerialTransportLayer:
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     # pragma: no cover
     def _validate_packet(
-            reception_buffer: NDArray[np.uint8],
-            packet_size: int,
-            cobs_processor: _COBSProcessor,
-            crc_processor: _CRCProcessor,
-            delimiter_byte: np.uint8,
-            postamble_size: np.uint8,
+        reception_buffer: NDArray[np.uint8],
+        packet_size: int,
+        cobs_processor: _COBSProcessor,
+        crc_processor: _CRCProcessor,
+        delimiter_byte: np.uint8,
+        postamble_size: np.uint8,
     ) -> int:
         """Validates the packet by passing it through a CRC checksum calculator, decodes the COBS-encoded payload, and
         saves it back to the input reception_buffer.
