@@ -1,3 +1,6 @@
+from numpy import dtype
+from numpy.ma.core import frombuffer
+
 from .transport_layer import SerialTransportLayer
 from dataclasses import dataclass
 import numpy as np
@@ -5,84 +8,6 @@ from numpy.typing import NDArray
 from typing import Any, Optional
 from enum import Enum
 from ataraxis_base_utilities import console
-
-
-@dataclass()
-class CommandMessage:
-    """The payload structure used by the outgoing Command messages.
-
-    Currently, only the PC can send command messages. This structure is used to both issue commands to execute and
-    terminate (end) a currently active and all queued commands (by setting command to 0).
-
-    Attributes:
-        module_type: The type-code of the module to which the command is addressed.
-        module_id: The specific module ID within the broader module family specified by module_type.
-        command: The unique code of the command to execute. Note, 0 is not a valid command code and will instead be
-            interpreted as an instruction to forcibly terminate (stop) any currently running command of the
-            addressed Module or Kernel.
-        return_code: When this argument is set to a value other than 0, the microcontroller will send this code
-            back to the sender PC upon successfully processing the received command. This is to notify the sender
-            that the command was received intact, ensuring message delivery. Setting this argument to 0 disables
-            delivery assurance.
-        noblock: Determines whether the command runs in blocking or non-blocking mode. If set to false, the
-            controller runtime will block in-place for any sensor- or time-waiting loops during command execution.
-            Otherwise, the controller will run other commands concurrently, while waiting for the block to complete.
-        cycle: Determines whether the command is executed once or repeatedly cycled with a certain periodicity.
-            Together with cycle_delay, this allows triggering both one-shot and cyclic command runtimes.
-        cycle_delay: The period of time, in microseconds, to delay before repeating (cycling) the command. This is
-            only used if the cycle flag is True.
-        packed_data: Stores the packed attribute data. After this class is instantiated, all attribute values are packed
-            into a byte numpy array, which is the preferred TransportLayer format. This allows 'pre-packing' the data at
-            the beginning of each time-sensitive runtime. Do not overwrite this attribute manually!
-    """
-    module_type: np.uint8
-    module_id: np.uint8
-    command: np.uint8
-    return_code: np.uint8 = 0
-    noblock: np.bool = True
-    cycle: np.bool = False
-    cycle_delay: np.uint32 = 0
-    packed_data: Optional[NDArray[np.uint8]] = None
-
-    def __post_init__(self):
-        """Packs the data into the numpy array to optimize future transmission speed."""
-
-        # Packages the input data into a byte numpy array. Prepends the 'command' protocol code to the packaged data.
-        self.packed_data = np.empty(11, dtype=np.uint8)
-        self.packed_data[0] = Protocols.COMMAND.value
-        self.packed_data[1] = self.module_type
-        self.packed_data[2] = self.module_id
-        self.packed_data[3] = self.return_code
-        self.packed_data[4] = self.command
-        self.packed_data[5] = self.noblock
-        self.packed_data[6] = self.cycle
-        self.packed_data[7] = self.cycle_delay
-
-
-@dataclass
-class DataMessage:
-    module_type: np.uint8 = np.uint8(0)
-    module_id: np.uint8 = np.uint8(0)
-    command: np.uint8 = np.uint8(0)
-    event: np.uint8 = np.uint8(0)
-    object_size: np.uint8 = np.uint8(0)
-
-    def __repr__(self):
-        message = (
-            f"DataMessage(module_type={self.module_type}, module_id={self.module_id}, command={self.command}, "
-            f"event={self.event}, object_size={self.object_size})."
-        )
-        return message
-
-
-@dataclass
-class IdentificationMessage:
-    controller_id: np.uint8 = np.uint8(0)
-
-
-@dataclass
-class ReceptionMessage:
-    reception_code: np.uint8 = np.uint8(0)
 
 
 class Protocols(Enum):
@@ -112,6 +37,117 @@ class Protocols(Enum):
     """The service protocol used by the microcontroller to respond to the identification request sent by the PC. This 
     is typically used during the initial system architecture setup to map controllers with specific microcode versions 
     to the USB ports they use for communication with the PC."""
+
+
+@dataclass()
+class CommandMessage:
+    """ The payload structure used by the outgoing Command messages.
+
+    Currently, only the PC can send command messages. This structure is used to both issue commands to execute and
+    terminate (end) the currently active and all queued commands (by setting command variable to 0).
+
+    Attributes:
+        module_type: The type-code of the module to which the command is addressed.
+        module_id: The specific module ID within the broader module family specified by module_type.
+        command: The unique code of the command to execute. Note, 0 is not a valid command code and will instead be
+            interpreted as an instruction to forcibly terminate (stop) any currently running command of the
+            addressed Module or Kernel.
+        return_code: When this argument is set to a value other than 0, the microcontroller will send this code
+            back to the sender PC upon successfully processing the received command. This is to notify the sender
+            that the command was received intact, ensuring message delivery. Setting this argument to 0 disables
+            delivery assurance.
+        noblock: Determines whether the command runs in blocking or non-blocking mode. If set to false, the
+            controller runtime will block in-place for any sensor- or time-waiting loops during command execution.
+            Otherwise, the controller will run other commands concurrently, while waiting for the block to complete.
+        cycle: Determines whether the command is executed once or repeatedly cycled with a certain periodicity.
+            Together with cycle_delay, this allows triggering both one-shot and cyclic command runtimes.
+        cycle_delay: The period of time, in microseconds, to delay before repeating (cycling) the command. This is
+            only used if the cycle flag is True.
+        packed_data: Stores the packed attribute data. After this class is instantiated, all attribute values are packed
+            into a byte numpy array, which is the preferred TransportLayer format. This allows 'pre-packing' the data at
+            the beginning of each time-sensitive runtime to. Do not overwrite this attribute manually!
+    """
+    module_type: np.uint8
+    module_id: np.uint8
+    command: np.uint8
+    return_code: np.uint8 = 0
+    noblock: np.bool = True
+    cycle: np.bool = False
+    cycle_delay: np.uint32 = 0
+    packed_data: Optional[NDArray[np.uint8]] = None
+
+    def __post_init__(self):
+        """Packs the data into the numpy array to optimize future transmission speed."""
+
+        # Packages the input data into a byte numpy array. Prepends the 'command' protocol code to the packaged data.
+        self.packed_data = np.empty(11, dtype=np.uint8)
+        self.packed_data[0] = Protocols.COMMAND.value
+        self.packed_data[1] = self.module_type
+        self.packed_data[2] = self.module_id
+        self.packed_data[3] = self.return_code
+        self.packed_data[4] = self.command
+        self.packed_data[5] = self.noblock
+        self.packed_data[6] = self.cycle
+        # noinspection PyTypeChecker
+        self.packed_data[7:] = np.astype(self.cycle_delay, dtype=np.uint8)
+
+
+@dataclass
+class ParametersMessage:
+    module_type: np.uint8
+    module_id: np.uint8
+    parameter_data: tuple[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any] | np.bool, ...]
+    return_code: np.uint8 = 0
+    packed_data: Optional[NDArray[np.uint8]] = None
+
+    def __post_init__(self):
+        """Packs the data into the numpy array to optimize future transmission speed."""
+
+        # Loops over the individual parameters and casts them to sequences of bytes.
+        byte_parameters = [np.astype(parameter, dtype=np.uint8) for parameter in self.parameter_data]
+
+        # Serializes the parameter data into an array
+        serialized_parameters = np.empty(1, dtype=np.uint8)
+        for parameter in byte_parameters:
+            serialized_parameters = np.concatenate((serialized_parameters, parameter))
+
+        serialized_size = serialized_parameters.size
+        overall_size = serialized_size + 5
+
+        # Precreates the header of the message data array
+        self.packed_data = np.empty(overall_size, dtype=np.uint8)
+        self.packed_data[0] = Protocols.COMMAND.value
+        self.packed_data[1] = self.module_type
+        self.packed_data[2] = self.module_id
+        self.packed_data[3] = self.return_code
+        self.packed_data[4] = self.return_code
+        self.packed_data[5:] = np.astype(serialized_parameters, dtype=np.uint8)
+
+
+@dataclass
+class DataMessage:
+    module_type: np.uint8 = np.uint8(0)
+    module_id: np.uint8 = np.uint8(0)
+    command: np.uint8 = np.uint8(0)
+    event: np.uint8 = np.uint8(0)
+    object_size: np.uint8 = np.uint8(0)
+
+    def __repr__(self):
+        message = (
+            f"DataMessage(module_type={self.module_type}, module_id={self.module_id}, command={self.command}, "
+            f"event={self.event}, object_size={self.object_size})."
+        )
+        return message
+
+
+@dataclass
+class IdentificationMessage:
+    controller_id: np.uint8 = np.uint8(0)
+
+
+@dataclass
+class ReceptionMessage:
+    reception_code: np.uint8 = np.uint8(0)
 
 
 class SerialCommunication:
