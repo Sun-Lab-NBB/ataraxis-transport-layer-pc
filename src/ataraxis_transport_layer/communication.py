@@ -1,6 +1,3 @@
-from numpy import dtype
-from numpy.ma.core import frombuffer
-
 from .transport_layer import SerialTransportLayer
 from dataclasses import dataclass
 import numpy as np
@@ -10,21 +7,21 @@ from enum import Enum
 from ataraxis_base_utilities import console
 
 
-class Protocols(Enum):
-    """Stores currently supported protocol codes used in data transmission.
+class SerialProtocols(Enum):
+    """Stores the protocol codes used in data transmission between the PC and the microcontroller over the serial port.
 
-    Each transmitted message starts with the specific protocol code used to instruct the receiver on how to process the
-    rest of the data payload. The contents of this enumeration have to mach across all used systems.
+    Each transmitted message starts with the specific protocol code from is enumeration that instructs the receiver on
+    how to process the rest of the data payload. The contents of this enumeration have to mach across all used systems.
     """
 
     COMMAND = np.uint8(1)
-    """The protocol used by messages that communicate a command to be executed by the target microcontroller Kernel or
-    Module class instance. Commands trigger direct manipulation of the connected hardware, such as engaging breaks or
-    spinning motors. Currently, only the PC can send the commands to the microcontroller."""
+    """The protocol used by messages that communicate commands to be executed by the target microcontroller Kernel or
+    Module. Commands trigger direct manipulation of the connected hardware, such as engaging breaks or spinning motors. 
+    Currently, only the PC can send the commands to the microcontroller."""
     PARAMETERS = np.uint8(2)
     """The protocol used by messages that allow changing the runtime-addressable parameters of the target 
-    microcontroller Kernel or Module class instance. For example, this message would be used to adjust the motor speed
-    or the sensitivity of a lick sensor. Currently, only the PC can set the parameters of the microcontroller."""
+    microcontroller Kernel or Module. For example, this message would be used to adjust the motor speed or the 
+    sensitivity of a lick sensor. Currently, only the PC can send updated parameters data to the microcontroller."""
     DATA = np.uint8(3)
     """The protocol used by messages that communicate the microcontroller-originating data. This protocol is used to 
     both send data and communicate runtime errors. Currently, only the microcontroller can send data messages to the 
@@ -41,10 +38,11 @@ class Protocols(Enum):
 
 @dataclass()
 class CommandMessage:
-    """ The payload structure used by the outgoing Command messages.
+    """The payload structure used by the outgoing Command messages.
 
-    Currently, only the PC can send command messages. This structure is used to both issue commands to execute and
-    terminate (end) the currently active and all queued commands (by setting command variable to 0).
+    This structure is used to both issue commands to execute and terminate (end) the currently active and all queued
+    commands (by setting command variable to 0). Overall, it aggregates and pre-packages the command data into a bytes'
+    array to improve transmission speeds during time-critical runtimes.
 
     Attributes:
         module_type: The type-code of the module to which the command is addressed.
@@ -52,7 +50,7 @@ class CommandMessage:
         command: The unique code of the command to execute. Note, 0 is not a valid command code and will instead be
             interpreted as an instruction to forcibly terminate (stop) any currently running command of the
             addressed Module or Kernel.
-        return_code: When this argument is set to a value other than 0, the microcontroller will send this code
+        return_code: When this attribute is set to a value other than 0, the microcontroller will send this code
             back to the sender PC upon successfully processing the received command. This is to notify the sender
             that the command was received intact, ensuring message delivery. Setting this argument to 0 disables
             delivery assurance.
@@ -67,6 +65,7 @@ class CommandMessage:
             into a byte numpy array, which is the preferred TransportLayer format. This allows 'pre-packing' the data at
             the beginning of each time-sensitive runtime to. Do not overwrite this attribute manually!
     """
+
     module_type: np.uint8
     module_id: np.uint8
     command: np.uint8
@@ -76,61 +75,213 @@ class CommandMessage:
     cycle_delay: np.uint32 = 0
     packed_data: Optional[NDArray[np.uint8]] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Packs the data into the numpy array to optimize future transmission speed."""
 
         # Packages the input data into a byte numpy array. Prepends the 'command' protocol code to the packaged data.
-        self.packed_data = np.empty(11, dtype=np.uint8)
-        self.packed_data[0] = Protocols.COMMAND.value
-        self.packed_data[1] = self.module_type
-        self.packed_data[2] = self.module_id
-        self.packed_data[3] = self.return_code
-        self.packed_data[4] = self.command
-        self.packed_data[5] = self.noblock
-        self.packed_data[6] = self.cycle
-        # noinspection PyTypeChecker
-        self.packed_data[7:] = np.astype(self.cycle_delay, dtype=np.uint8)
+        self.packed_data = np.empty(11, dtype=np.uint8)  # Empty initialization is a bit faster than zeros.
+        self.packed_data[0:7] = [
+            SerialProtocols.COMMAND.value,
+            self.module_type,
+            self.module_id,
+            self.return_code,
+            self.command,
+            self.noblock,
+            self.cycle,
+        ]
+        self.packed_data[7:11] = np.array([self.cycle_delay], dtype=np.uint32).view(np.uint8)
+
+    def __repr__(self) -> str:
+        """Returns a string representation of the CommandMessage object."""
+        message = (
+            f"CommandMessage(module_type={self.module_type}, module_id={self.module_id}, command={self.command}, "
+            f"return_code={self.return_code}, noblock={self.noblock}, cycle={self.cycle} "
+            f"cycle_delay={self.cycle_delay} us)."
+        )
+        return message
 
 
 @dataclass
 class ParametersMessage:
+    """The payload structure used by the outgoing Parameters messages.
+
+    This structure is used to update addressable runtime parameters of microcontroller Kernel and Modules. Regardless
+    of the structure used to store the parameters on the microcontroller, this class expects them to be provided as a
+    tuple of numpy scalars. These scalars are automatically serialized into a byte array for efficient transmission
+    during time-critical runtimes and can then be deserialized into the required data format by the microcontroller.
+
+    Attributes:
+        module_type: The type-code of the module to which the parameters are addressed.
+        module_id: The specific module ID within the broader module family specified by module_type.
+        parameter_data: A tuple of parameter values to send. Each value will be serialized into bytes and sequentially
+            written into the payload Parameters object memory. Subsequently, they will be deserialized by the
+            microcontroller in the same order as they were written.
+        return_code: When this attribute is set to a value other than 0, the microcontroller will send this code
+            back to the sender PC upon successfully processing the received parameters. This is to notify the sender
+            that the parameters were received intact, ensuring message delivery. Setting this argument to 0 disables
+            delivery assurance.
+        packed_data: Stores the packed attribute data. After this class is instantiated, all attribute values are packed
+            into a byte numpy array, which is the preferred TransportLayer format. This allows 'pre-packing' the data at
+            the beginning of each time-sensitive runtime. Do not overwrite this attribute manually!
+        parameters_size: The size, in bytes, of the serialized parameters data object. This is calculated automatically
+             during data packaging and on the microcontroller interpreted as the 'object_size' variable.
+    """
+
     module_type: np.uint8
     module_id: np.uint8
     parameter_data: tuple[np.signedinteger[Any] | np.unsignedinteger[Any] | np.floating[Any] | np.bool, ...]
     return_code: np.uint8 = 0
     packed_data: Optional[NDArray[np.uint8]] = None
+    parameters_size: np.uint8 = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Packs the data into the numpy array to optimize future transmission speed."""
 
-        # Loops over the individual parameters and casts them to sequences of bytes.
-        byte_parameters = [np.astype(parameter, dtype=np.uint8) for parameter in self.parameter_data]
+        # Converts parameters to byte arrays using numpy view (likely the most efficient method right now)
+        byte_parameters = [np.array([param]).view(np.uint8) for param in self.parameter_data]
 
-        # Serializes the parameter data into an array
-        serialized_parameters = np.empty(1, dtype=np.uint8)
-        for parameter in byte_parameters:
-            serialized_parameters = np.concatenate((serialized_parameters, parameter))
+        # Calculates total size of serialized parameters
+        self.parameters_size = np.uint8(sum(param.size for param in byte_parameters))
 
-        serialized_size = serialized_parameters.size
-        overall_size = serialized_size + 5
+        # Pre-allocates the full array with exact size (header and parameters)
+        self.packed_data = np.empty(5 + self.parameters_size, dtype=np.uint8)
 
-        # Precreates the header of the message data array
-        self.packed_data = np.empty(overall_size, dtype=np.uint8)
-        self.packed_data[0] = Protocols.COMMAND.value
-        self.packed_data[1] = self.module_type
-        self.packed_data[2] = self.module_id
-        self.packed_data[3] = self.return_code
-        self.packed_data[4] = self.return_code
-        self.packed_data[5:] = np.astype(serialized_parameters, dtype=np.uint8)
+        # Packs the header data into the precreated array
+        self.packed_data[0:5] = [
+            SerialProtocols.COMMAND.value,
+            self.module_type,
+            self.module_id,
+            self.return_code,
+            self.parameters_size,
+        ]
+
+        # Loops over and sequentially packs parameter data into the array.
+        current_position = 5
+        for param_bytes in byte_parameters:
+            param_size = param_bytes.size
+            self.packed_data[current_position : current_position + param_size] = param_bytes
+            current_position += param_size
+
+    def __repr__(self) -> str:
+        """Returns a string representation of the ParametersMessage object."""
+        message = (
+            f"ParametersMessage(module_type={self.module_type}, module_id={self.module_id}, "
+            f"return_code={self.return_code}, parameter_object_size={self.parameters_size} bytes)."
+        )
+        return message
+
+
+@dataclass()
+class IdentificationMessage:
+    """The payload structure used by the incoming Identification messages.
+
+    This structure is used to parse the incoming service messages that communicate the unique ID of the microcontroller.
+    These messages are sent in response to the 'Identification' Kernel-addressed command and allow mapping controllers
+    to interface USB ports. Additionally, since controller IDs are hardcoded in microcontroller firmware, these codes
+    help track which AtaraxisMicroController (AXMC) firmware is running on the given controller.
+
+    Attributes:
+        message: The original serialized message payload, from which the rest of the structure data was decoded.
+            This is used to optimize data logging by saving the serialized data during active runtime and decoding it
+            into a unified log format offline.
+        controller_id: The unique ID of the microcontroller. This ID is hardcoded in the microcontroller firmware
+            and helps track which AXMC firmware is running on the given controller.
+    """
+
+    message: NDArray[np.uint8]
+    controller_id: np.uint8
+
+    def __repr__(self) -> str:
+        """Returns a string representation of the IdentificationMessage object."""
+        message = f"IdentificationMessage(controller_id_code={self.controller_id})."
+        return message
+
+
+@dataclass
+class ReceptionMessage:
+    """The payload structure used by the incoming Reception messages.
+
+    This structure is used to parse the incoming service messages that return the reception code originally sent as
+    part of the outgoing Command or Parameters messages. This is used to verify that the controller has received and
+    successfully parsed a particular message sent by PC, ensuring critical message delivery.
+
+    Attributes:
+        message: The original serialized message payload, from which the rest of the structure data was decoded.
+            This is used to optimize data logging by saving the serialized data during active runtime and decoding it
+            into a unified log format offline.
+        reception_code: The reception code originally sent as part of the outgoing Command or Parameters messages.
+    """
+
+    message: NDArray[np.uint8]
+    reception_code: np.uint8
+
+    def __repr__(self) -> str:
+        """Returns a string representation of the ReceptionMessage object."""
+        message = f"ReceptionMessage(reception_code={self.reception_code})."
+        return message
 
 
 @dataclass
 class DataMessage:
-    module_type: np.uint8 = np.uint8(0)
-    module_id: np.uint8 = np.uint8(0)
-    command: np.uint8 = np.uint8(0)
-    event: np.uint8 = np.uint8(0)
-    object_size: np.uint8 = np.uint8(0)
+    """The payload structure used by the incoming Data messages.
+
+    This structure is used to parse the incoming data messages, which are used to communicate microcontroller-recorded
+    data and runtime errors to the PC. Unlike other currently supported message structures, this structure is not able
+    to fully parse the incoming message at instantiation, as each data message contains a unique data object that
+    differs for each module-command-event combination. Use the parse_data_object() method exposed by this structure.
+
+    Attributes:
+        message: The original serialized message payload, from which the rest of the structure data was decoded.
+            This is used to optimize data logging by saving the serialized data during active runtime and decoding it
+            into a unified log format offline.
+        module_type: The type-code of the module which sent the data message.
+        module_id: The specific module ID within the broader module family specified by module_type.
+        command: The unique code of the command that was executed by the module that sent the data message.
+        event: The unique byte-code of the event that prompted sending the data message. Event codes are unique within
+            each executed command cycle (each command can have multiple data events).
+        object_size: The size of the included serialized data object, in bytes.
+        data_object: The serialized data object. Use parse_data_object() to decode the serialized data.
+    """
+
+    message: NDArray[np.uint8]
+    module_type: np.uint8
+    module_id: np.uint8
+    command: np.uint8
+    event: np.uint8
+    object_size: np.uint8
+    data_object: NDArray[np.uint8]
+
+    def extract_data_object(self, prototype_object: Any) -> Any:
+        """Reconstructs the data object from the serialized object bytes using the provided prototype.
+
+        This step completed data message reception by processing the additional message data. This has to be carried
+        out separately, as data object structure is not known until the exact object prototype is determined based on
+        the module-command-event ID information extracted from the message.
+
+        Args:
+            prototype_object: The prototype object that will be used to format the extracted data. This object depends
+                on the specific data format used by the sender module and has to be determined by the user for each
+                received data message.
+
+        Raises:
+            ValueError: If the size of the extracted data does not match the object size declared in the data message.
+        """
+
+        # Attempts to extract the data and save it into the format that matches the prototype object
+        extracted_object, next_index = self._transport_layer.read_data(
+            prototype_object, start_index=self._data_object_index
+        )
+
+        # Verifies that the size of the extracted object matches the size declared in the data message
+        extracted_size = next_index - self._data_object_index
+
+        if extracted_size != data_message.object_size:
+            message = (
+                "Unable to extract the requested data object from the received message payload. The size of the object "
+                f"declared by the incoming data message {data_message.object_size} does not match the factual size of "
+                f"the extracted data {extracted_size} (in bytes). This may indicate a data corruption."
+            )
+            console.error(message, error=ValueError)
 
     def __repr__(self):
         message = (
@@ -138,16 +289,6 @@ class DataMessage:
             f"event={self.event}, object_size={self.object_size})."
         )
         return message
-
-
-@dataclass
-class IdentificationMessage:
-    controller_id: np.uint8 = np.uint8(0)
-
-
-@dataclass
-class ReceptionMessage:
-    reception_code: np.uint8 = np.uint8(0)
 
 
 class SerialCommunication:
@@ -176,23 +317,25 @@ class SerialCommunication:
 
     Attributes:
         _transport_layer: An instance of the SerialTransportLayer class used for communication with the microcontroller.
-        data_message: A DataMessage instance used to optimize processing received DataMessages.
-        identification_message: An IdentificationMessage instance used to optimize processing received service messages
-            that communicate connected controller ID code.
-        reception_message: A ReceptionMessage instance used to optimize processing received service messages used to
-            acknowledge the reception of PC-sent command or parameters.
-        data_object_index: Stores the index of the data object in the received DataMessage payloads. This is needed
+        _data_message: A class instance used to store incoming DataMessage payloads. Pre-initializing this class
+            instance allows optimizing data reception speed by reusing the same object for all incoming messages.
+        _identification_message: A class instance used to store incoming IdentificationMessage payloads.
+            Pre-initializing this class instance allows optimizing data reception speed by reusing the same object for
+            all incoming messages.
+        _reception_message: A class instance used to store incoming ReceptionMessage payloads. Pre-initializing
+            this class instance allows optimizing data reception speed by reusing the same object for all incoming
+            messages.
+        _data_object_index: Stores the index of the data object in the received DataMessage payloads. This is needed
             as data messages are processed in two steps: the first extracts the header structure that stores the ID
             information, and the second is used to specifically read the stored data object. This is similar to how
             the microcontrollers handle Parameters messages.
-
     """
 
     def __init__(
-            self,
-            usb_port: str,
-            baudrate: int = 115200,
-            maximum_transmitted_payload_size: int = 254,
+        self,
+        usb_port: str,
+        baudrate: int = 115200,
+        maximum_transmitted_payload_size: int = 254,
     ) -> None:
         # Specializes the TransportLayer to mostly match a similar specialization carried out by the microcontroller
         # Communication class.
@@ -203,18 +346,32 @@ class SerialCommunication:
             initial_crc_value=np.uint16(0xFFFF),
             final_crc_xor_value=np.uint16(0x0000),
             maximum_transmitted_payload_size=maximum_transmitted_payload_size,
-            minimum_received_payload_size=2,  # Protocol (1) and Service code (1)
+            minimum_received_payload_size=2,  # Protocol (1) and Service Message byte-code (1), 2 bytes total
             start_byte=129,
             delimiter_byte=0,
             timeout=20000,
             test_mode=False,
         )
 
-        self.data_message = DataMessage()
-        self.identification_message = IdentificationMessage()
-        self.reception_message = ReceptionMessage()
-
-        self.data_object_index = 6
+        # Pre-initializes structures used for processing received data
+        self._data_message = DataMessage(
+            message=np.empty(7, dtype=np.uint8),
+            module_type=np.uint8(0),
+            module_id=np.uint8(0),
+            command=np.uint8(0),
+            event=np.uint8(0),
+            object_size=np.uint8(0),
+            data_object=np.empty(shape=1, dtype=np.uint8),
+        )
+        self._identification_message = IdentificationMessage(
+            message=np.empty(2, dtype=np.uint8),
+            controller_id=np.uint8(0),
+        )
+        self._reception_message = ReceptionMessage(
+            message=np.empty(2, dtype=np.uint8),
+            reception_code=np.uint8(0),
+        )
+        self._data_object_index = 6
 
     @staticmethod
     def list_available_ports() -> tuple[dict[str, int | str], ...]:
@@ -230,74 +387,20 @@ class SerialCommunication:
         # The method itself is defined in TransportLayer class, this wrapper just calls that method
         return SerialTransportLayer.list_available_ports()
 
-    def send_command_message(self, message: CommandMessage) -> None:
-        """Packages the input data into a Command message and sends it to the connected microcontroller.
+    def send_message(self, message: CommandMessage | ParametersMessage) -> None:
+        """Packages the input Command or Parameters data into a payload and sends it to the connected microcontroller.
 
-        This method can be used to issue commands to specific hardware Modules of the microcontroller or the Kernel
-        class that manages the microcontroller modules.
+        This method can be used any outgoing message format to the microcontroller. To do so, it relies on every message
+        structure exposing a packed_data attribute, that contains the serialized payload data to be sent. Overall, this
+        method is a wrapper around the SerialTransportLayer's write_data() and send_data() methods.
 
         Args:
-            message: The Command message to send to the microcontroller.
+            message: The Command or Parameters message to send to the microcontroller.
         """
-        # Writes the packaged data into the transmission buffer.
+        # Writes the pre-packaged data into the transmission buffer.
         self._transport_layer.write_data(data_object=message.packed_data)
 
         # Constructs and sends the data message to the connected system.
-        self._transport_layer.send_data()
-
-    def send_parameter_message(
-            self,
-            module_type: np.uint8,
-            module_id: np.uint8,
-            parameter_object: Any,
-            return_code: np.uint8 = np.uint8(0),
-    ) -> None:
-        """Packages the input data into a Parameters message and sends it to the connected microcontroller.
-
-        This method can be used to send parameters to specific hardware Modules of the microcontroller or the Kernel
-        class that manages the microcontroller modules.
-
-        Notes:
-            It is expected that all addressable parameters of a given module are set at the same time, as they are often
-            stored in a structure or array. The receiver will overwrite the host structure memory with the received data
-            in one step. Therefore, make sure that the parameter_object is configured to represent the desired values
-            for all parameters stored in this object on the microcontroller.
-
-        Args:
-            module_type: The type-code of the module to which the parameters are addressed.
-            module_id: The specific module ID within the broader module family specified by module_type.
-            parameter_object: The data object containing the parameter to be sent to the microcontroller. Currently,
-                this argument only supports numpy scalar or array inputs, or dataclasses that contain only numpy
-                scalars or array fields.
-            return_code: When this argument is set to a value other than 0, the microcontroller will send this code
-                back to the sender PC upon successfully processing the received parameters. This is to notify the sender
-                that the parameters were received intact, ensuring message delivery. Setting this argument to 0 disables
-                delivery assurance.
-        """
-
-        # Ensures the transmission_buffer is cleared
-        self.reset_transmission_state()
-
-        # Packages the header data for the parameter message and writes it to the transmission buffer
-        packed_data = np.array(
-            [
-                Protocols.PARAMETERS.value,
-                module_type,
-                module_id,
-                return_code,
-            ],
-            dtype=np.uint8,
-        )
-
-        # noinspection PyTypeChecker
-        next_index = self._transport_layer.write_data(data_object=packed_data)
-
-        size_index = next_index
-        object_index = next_index + 1
-        next_index = self._transport_layer.write_data(data_object=parameter_object, start_index=object_index)
-
-        self._transport_layer.write_data(data_object=np.uint8(next_index - object_index), start_index=size_index)
-
         self._transport_layer.send_data()
 
     def receive_message(self) -> tuple[bool, DataMessage | IdentificationMessage | ReceptionMessage | int]:
@@ -331,54 +434,20 @@ class SerialCommunication:
         data: np.uint8 | NDArray[np.uint8]
 
         # Uses the protocol to determine the type of the received message and read the data
-        if protocol == Protocols.DATA.value:
+        if protocol == SerialProtocols.DATA.value:
             # Note, for Data messages, this is not the entire Data message. To process the data object,
             # extract_data_object() method needs to be called next
             # data = self._transport_layer.read_data(np.uint8(0), start_index=0)  # TODO
             return False, 0
-        elif protocol == Protocols.RECEPTION.value:
-            self.reception_message.reception_code, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
+        elif protocol == SerialProtocols.RECEPTION.value:
+            self._reception_message.reception_code, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
             return True, protocol
-        elif protocol == Protocols.IDENTIFICATION.value:
-            self.identification_message.controller_id, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
+        elif protocol == SerialProtocols.IDENTIFICATION.value:
+            self._identification_message.controller_id, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
             return True, protocol
         else:
             message = (
                 f"Unable to recognize the protocol code {protocol} of the received message. Currently, only the codes "
                 f"available through the Protocols enumeration are supported."
-            )
-            console.error(message, error=ValueError)
-
-    def extract_data_object(self, data_message: DataMessage, prototype_object: Any) -> Any:
-        """Extracts the data object from the last received message and formats it to match the structure of the
-        provided prototype object.
-
-        This method completes receiving the DataMessage by extracting the transmitted data object. It should be called
-        after the receive_message(0 method returns a DataMessage header structure.
-
-        Args:
-            data_message: The DataMessage structure that stores the necessary ID information to extract the data object.
-                This structure is returned by the receive_message() method.
-            prototype_object: The prototype object that will be used to format the extracted data. This object depends
-                on the specific data format used by the sender module and has to be determined by the user for each
-                received data message.
-
-        Raises:
-            ValueError: If the size of the extracted data does not match the object size declared in the data message.
-        """
-
-        # Attempts to extract the data and save it into the format that matches the prototype object
-        extracted_object, next_index = self._transport_layer.read_data(
-            prototype_object, start_index=self._data_object_index
-        )
-
-        # Verifies that the size of the extracted object matches the size declared in the data message
-        extracted_size = next_index - self._data_object_index
-
-        if extracted_size != data_message.object_size:
-            message = (
-                "Unable to extract the requested data object from the received message payload. The size of the object "
-                f"declared by the incoming data message {data_message.object_size} does not match the factual size of "
-                f"the extracted data {extracted_size} (in bytes). This may indicate a data corruption."
             )
             console.error(message, error=ValueError)

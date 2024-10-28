@@ -59,4 +59,3 @@ print(f'{round(np.average(comm_rec_arr[2:]), 3)} +- {round(np.std(comm_rec_arr[2
 
 print('Command to ID Time:')
 print(f'{round(np.average(comm_id_arr[2:]), 3)} +- {round(np.std(comm_id_arr[2:]), 3)} us')
-
