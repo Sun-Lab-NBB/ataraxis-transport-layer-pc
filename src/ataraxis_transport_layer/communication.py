@@ -196,6 +196,11 @@ class IdentificationMessage:
         message = f"IdentificationMessage(controller_id_code={self.controller_id})."
         return message
 
+    def parse_payload(self) -> None:
+        """Parses the data stored inside the serialized message payload into appropriate class fields."""
+        # noinspection PyTypeChecker
+        self.controller_id = self.message[1]
+
 
 @dataclass
 class ReceptionMessage:
@@ -219,6 +224,11 @@ class ReceptionMessage:
         """Returns a string representation of the ReceptionMessage object."""
         message = f"ReceptionMessage(reception_code={self.reception_code})."
         return message
+
+    def parse_payload(self) -> None:
+        """Parses the data stored inside the serialized message payload into appropriate class fields."""
+        # noinspection PyTypeChecker
+        self.reception_code = self.message[1]
 
 
 @dataclass
@@ -256,6 +266,15 @@ class DataMessage:
             f"event={self.event}, object_size={self.object_size})."
         )
         return message
+
+    # noinspection PyTypeChecker
+    def parse_payload(self) -> None:
+        """Parses the data stored inside the serialized message payload into appropriate class fields."""
+        self.module_type = self.message[1]
+        self.module_id = self.message[2]
+        self.command = self.message[3]
+        self.event = self.message[4]
+        self.object_size = self.message[5]
 
 
 class SerialCommunication:
@@ -321,7 +340,7 @@ class SerialCommunication:
 
         # Pre-initializes structures used for processing received data
         self.data_message = DataMessage(
-            message=np.empty(7, dtype=np.uint8),
+            message=np.empty(1, dtype=np.uint8),
             module_type=np.uint8(0),
             module_id=np.uint8(0),
             command=np.uint8(0),
@@ -413,63 +432,60 @@ class SerialCommunication:
 
         # Uses the extracted protocol value to determine the type of the received message and process the received data.
         if protocol == SerialProtocols.DATA.value:
-            # Note, for Data messages, this is not the entire Data message. If data object,
-            # extract_data_object() method needs to be called next
-            message_data = self._transport_layer.read_data(message_prototype, start_index=0)
-            return False, 0
+            # Extracts the message payload, parses the header data and saves it into the DataMessage attribute.
+            self.data_message.message, _ = self._transport_layer.read_data(message_prototype, start_index=0)
+            self.data_message.parse_payload()  # Parses header data from message bytes
+            return self.data_message
         elif protocol == SerialProtocols.RECEPTION.value:
-            self.reception_message
-            self.reception_message.reception_code, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
-            return True, protocol
+            self.reception_message, _ = self._transport_layer.read_data(self._service_message_prototype, start_index=0)
+            self.reception_message.parse_payload()  # Parses reception code value from the structure
+            return self.reception_message
         elif protocol == SerialProtocols.IDENTIFICATION.value:
-            self.identification_message.controller_id, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
-            return True, protocol
+            self.identification_message, _ = self._transport_layer.read_data(
+                self._service_message_prototype, start_index=0
+            )
+            self.identification_message.parse_payload()  # Parses controlled ID code value from the structure
+            return self.identification_message
         else:
             message = (
-                f"Unable to recognize the protocol code {protocol} of the received message. Currently, only the codes "
-                f"available through the Protocols enumeration are supported."
+                f"Unable to recognize the protocol code {protocol} of the received message.See the Protocols "
+                f"enumeration for currently supported incoming message codes."
             )
             console.error(message, error=ValueError)
 
+    def extract_data_object(
+        self,
+        prototype_object: np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool | NDArray[Any],
+    ) -> np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool | NDArray[Any]:
+        """Reconstructs the data object from the serialized data bytes using the provided prototype.
 
-# def extract_data_object(
-#         self,
-#         prototype_object: np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool |
-#                           NDArray[Any],
-# ) -> np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool | NDArray[Any]:
-#     """Reconstructs the data object from the serialized data bytes using the provided prototype.
-#
-#     This step completed data message reception by processing the additional message data. This has to be carried
-#     out separately, as data object structure is not known until the exact object prototype is determined based on
-#     the module-command-event ID information extracted from the message.
-#
-#     Args:
-#         prototype_object: The prototype object that will be used to format the extracted data. The appropriate
-#             prototype for data extraction depends on the data format used by the sender module and has to be
-#             determined individually for each received data message. Currently, only numpy scalar or array prototypes
-#             are supported.
-#
-#     Raises:
-#         ValueError: If the size of the extracted data does not match the object size declared in the data message.
-#     """
+        This step completed data message reception by processing the additional message data. This has to be carried
+        out separately, as data object structure is not known until the exact object prototype is determined based on
+        the module-command-event ID information extracted from the message.
 
-# # If the provided prototype's byte-size does not match the object size, raises an error.
-# if self.object_size != prototype_object.nbytes:
-#     message = (
-#         "Unable to extract the requested data object from the received message payload. The size of the object "
-#         f"declared by the incoming data message {self.object_size} does not match the size of the provided "
-#         f"prototype {prototype_object.size} (in bytes). This may indicate that the data was corrupted in "
-#         f"transmission."
-#     )
-#     console.error(message, error=ValueError)
-#
-# # Reconstructs the prototype object using the serialized data
-# target_dtype = prototype_object.dtype
-# data_object = np.frombuffer(self.data_object, dtype=target_dtype)
-#
-# # If the object is a one-element array, casts it to a scalar numpy type
-# if data_object.size == 1:
-#     return data_object[0].copy()
-#
-# # Otherwise, returns the object as a numpy array.
-# return data_object.copy()
+        Args:
+            prototype_object: The prototype object that will be used to format the extracted data. The appropriate
+                prototype for data extraction depends on the data format used by the sender module and has to be
+                determined individually for each received data message. Currently, only numpy scalar or array prototypes
+                are supported.
+
+        Raises:
+            ValueError: If the size of the provided prototype (in bytes) does not match the object size declared in the
+            data message.
+        """
+
+        # If the provided prototype's byte-size does not match the object size declared in the received message,
+        # raises an error.
+        if self.data_message.object_size != prototype_object.nbytes:
+            message = (
+                "Unable to extract the requested data object from the received message payload. The size of the object "
+                f"declared by the incoming data message {self.data_message.object_size} does not match the size of the "
+                f"provided prototype {prototype_object.size} (in bytes). This may indicate that the data was "
+                f"corrupted in transmission."
+            )
+            console.error(message, error=ValueError)
+
+        # Uses the prototype to extract object data from the storage buffer, reconstruct the object and return it to
+        # caller.
+        data_object, _ = self._transport_layer.read_data(prototype_object, start_index=self.data_object_index)
+        return data_object
