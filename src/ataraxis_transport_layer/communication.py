@@ -89,7 +89,7 @@ class CommandMessage:
             self.noblock,
             self.cycle,
         ]
-        self.packed_data[7:11] = np.array([self.cycle_delay], dtype=np.uint32).view(np.uint8)
+        self.packed_data[7:11] = np.frombuffer(self.cycle_delay, dtype=np.uint8)
 
     def __repr__(self) -> str:
         """Returns a string representation of the CommandMessage object."""
@@ -137,8 +137,8 @@ class ParametersMessage:
     def __post_init__(self) -> None:
         """Packs the data into the numpy array to optimize future transmission speed."""
 
-        # Converts parameters to byte arrays using numpy view (likely the most efficient method right now)
-        byte_parameters = [np.array([param]).view(np.uint8) for param in self.parameter_data]
+        # Converts parameters to byte arrays
+        byte_parameters = [np.frombuffer(np.array([param]), dtype=np.uint8).copy() for param in self.parameter_data]
 
         # Calculates total size of serialized parameters
         self.parameters_size = np.uint8(sum(param.size for param in byte_parameters))
@@ -228,7 +228,8 @@ class DataMessage:
     This structure is used to parse the incoming data messages, which are used to communicate microcontroller-recorded
     data and runtime errors to the PC. Unlike other currently supported message structures, this structure is not able
     to fully parse the incoming message at instantiation, as each data message contains a unique data object that
-    differs for each module-command-event combination. Use the parse_data_object() method exposed by this structure.
+    differs for each module-command-event combination. Use the parse_data_object() Communication class method
+    to parse the data object if you need to know its value(s) during runtime.
 
     Attributes:
         message: The original serialized message payload, from which the rest of the structure data was decoded.
@@ -239,8 +240,7 @@ class DataMessage:
         command: The unique code of the command that was executed by the module that sent the data message.
         event: The unique byte-code of the event that prompted sending the data message. Event codes are unique within
             each executed command cycle (each command can have multiple data events).
-        object_size: The size of the included serialized data object, in bytes.
-        data_object: The serialized data object. Use parse_data_object() to decode the serialized data.
+        object_size: The size of the serialized data object transmitted with the message, in bytes.
     """
 
     message: NDArray[np.uint8]
@@ -249,39 +249,6 @@ class DataMessage:
     command: np.uint8
     event: np.uint8
     object_size: np.uint8
-    data_object: NDArray[np.uint8]
-
-    def extract_data_object(self, prototype_object: Any) -> Any:
-        """Reconstructs the data object from the serialized object bytes using the provided prototype.
-
-        This step completed data message reception by processing the additional message data. This has to be carried
-        out separately, as data object structure is not known until the exact object prototype is determined based on
-        the module-command-event ID information extracted from the message.
-
-        Args:
-            prototype_object: The prototype object that will be used to format the extracted data. This object depends
-                on the specific data format used by the sender module and has to be determined by the user for each
-                received data message.
-
-        Raises:
-            ValueError: If the size of the extracted data does not match the object size declared in the data message.
-        """
-
-        # Attempts to extract the data and save it into the format that matches the prototype object
-        extracted_object, next_index = self._transport_layer.read_data(
-            prototype_object, start_index=self._data_object_index
-        )
-
-        # Verifies that the size of the extracted object matches the size declared in the data message
-        extracted_size = next_index - self._data_object_index
-
-        if extracted_size != data_message.object_size:
-            message = (
-                "Unable to extract the requested data object from the received message payload. The size of the object "
-                f"declared by the incoming data message {data_message.object_size} does not match the factual size of "
-                f"the extracted data {extracted_size} (in bytes). This may indicate a data corruption."
-            )
-            console.error(message, error=ValueError)
 
     def __repr__(self):
         message = (
@@ -292,12 +259,13 @@ class DataMessage:
 
 
 class SerialCommunication:
-    """Specializes an instance of the SerialTransportLayer and exposes methods that allow communicating with a
-    connected microcontroller system running project Ataraxis code.
+    """Wraps a specialized SerialTransportLayer instance and exposes methods that allow communicating with a
+    connected microcontroller system running project Ataraxis microcode.
 
-    This class is built on top of the SerialTransportLayer. It provides a set of predefined message structures designed
-    to efficiently integrate with the existing Ataraxis Micro Controller (AxMC) codebase. Overall, this class provides a
-    stable API that can be used to communicate with any AXMC system.
+    This class is built on top of the SerialTransportLayer and is designed to provide a default communication
+    interface. It provides a set of predefined message structures designed to efficiently integrate with the existing
+    Ataraxis Micro Controller (AxMC) codebase. Overall, this class provides a stable API that can be used to communicate
+    with any AXMC system.
 
     Notes:
         This class is explicitly designed to use the same parameters as the Communication class used by the
@@ -316,19 +284,17 @@ class SerialCommunication:
             The default value is 254, which is a typical size for most microcontroller systems.
 
     Attributes:
-        _transport_layer: An instance of the SerialTransportLayer class used for communication with the microcontroller.
-        _data_message: A class instance used to store incoming DataMessage payloads. Pre-initializing this class
-            instance allows optimizing data reception speed by reusing the same object for all incoming messages.
-        _identification_message: A class instance used to store incoming IdentificationMessage payloads.
-            Pre-initializing this class instance allows optimizing data reception speed by reusing the same object for
-            all incoming messages.
-        _reception_message: A class instance used to store incoming ReceptionMessage payloads. Pre-initializing
-            this class instance allows optimizing data reception speed by reusing the same object for all incoming
-            messages.
-        _data_object_index: Stores the index of the data object in the received DataMessage payloads. This is needed
+        _transport_layer: A SerialTransportLayer instance that exposes the low-level methods that handle bidirectional
+            communication with the microcontroller.
+        data_message: A DataMessage instance used to store incoming data payloads.
+        identification_message: An IdentificationMessage instance used to store incoming controlled ID payloads.
+        reception_message: An ReceptionMessage instance used to store incoming message reception code payloads.
+        data_object_index: Stores the index of the data object in the received DataMessage payloads. This is needed
             as data messages are processed in two steps: the first extracts the header structure that stores the ID
             information, and the second is used to specifically read the stored data object. This is similar to how
             the microcontrollers handle Parameters messages.
+        _service_message_prototype: The numpy array prototype used to optimize receiving service (e.g.: Identification)
+            messages.
     """
 
     def __init__(
@@ -354,24 +320,28 @@ class SerialCommunication:
         )
 
         # Pre-initializes structures used for processing received data
-        self._data_message = DataMessage(
+        self.data_message = DataMessage(
             message=np.empty(7, dtype=np.uint8),
             module_type=np.uint8(0),
             module_id=np.uint8(0),
             command=np.uint8(0),
             event=np.uint8(0),
             object_size=np.uint8(0),
-            data_object=np.empty(shape=1, dtype=np.uint8),
         )
-        self._identification_message = IdentificationMessage(
+        self.identification_message = IdentificationMessage(
             message=np.empty(2, dtype=np.uint8),
             controller_id=np.uint8(0),
         )
-        self._reception_message = ReceptionMessage(
+        self.reception_message = ReceptionMessage(
             message=np.empty(2, dtype=np.uint8),
             reception_code=np.uint8(0),
         )
-        self._data_object_index = 6
+        self.data_object_index = 6
+
+        # Unlike DataMessages, all service messages (Identification and Reception) have the same fixed size of 2 bytes.
+        # Therefore, it is possible to only initialize the prototype for reading these messages once, during class
+        # initialization.
+        self._service_message_prototype = np.empty(2, np.uint8)
 
     @staticmethod
     def list_available_ports() -> tuple[dict[str, int | str], ...]:
@@ -388,11 +358,12 @@ class SerialCommunication:
         return SerialTransportLayer.list_available_ports()
 
     def send_message(self, message: CommandMessage | ParametersMessage) -> None:
-        """Packages the input Command or Parameters data into a payload and sends it to the connected microcontroller.
+        """Packages the input Command or Parameters message data into a payload and sends it to the connected
+        microcontroller.
 
-        This method can be used any outgoing message format to the microcontroller. To do so, it relies on every message
-        structure exposing a packed_data attribute, that contains the serialized payload data to be sent. Overall, this
-        method is a wrapper around the SerialTransportLayer's write_data() and send_data() methods.
+        This method transmits any outgoing message format to the microcontroller. To do so, it relies on every valid
+        message structure exposing a packed_data attribute, that contains the serialized payload data to be sent.
+        Overall, this method is a wrapper around the SerialTransportLayer's write_data() and send_data() methods.
 
         Args:
             message: The Command or Parameters message to send to the microcontroller.
@@ -403,16 +374,19 @@ class SerialCommunication:
         # Constructs and sends the data message to the connected system.
         self._transport_layer.send_data()
 
-    def receive_message(self) -> tuple[bool, DataMessage | IdentificationMessage | ReceptionMessage | int]:
-        """Receives and processes the message from the connected microcontroller.
+    def receive_message(self) -> Optional[DataMessage | IdentificationMessage | ReceptionMessage]:
+        """Receives the incoming message from the connected microcontroller and parses it into one of the pre-allocated
+        class message attributes.
 
-        This method determines the type of the received message and extracts message data into the appropriate
-        structure.
+        This method receives all valid incoming message structures. To do so, it uses the protocol code, assumed to be
+        stored in the first variable of each payload, to determine how to parse the data.
 
         Notes:
-            The Data messages also require extract_data_object() method to be called to extract the data object. This
-            method will only extract the data message header structure necessary to identify the sender and the type
-            of the transmitted data object.
+            This method does not fully parse incoming DataMessages, which requires knowing the prototype for the
+            included data object. For data that only needs to be logged, it is more efficient to not extract the
+            specific data object during online processing (the data is logged as serialized bytes payloads). For data
+            messages whose' objects are used during runtime, call the extract_data_object() method as necessary to parse
+            the data object value(s).
 
         Returns:
             An instance of DataMessage, IdentificationMessage, or ReceptionMessage structures that contain the extracted
@@ -422,28 +396,33 @@ class SerialCommunication:
             ValueError: If the received protocol code is not recognized.
 
         """
-        # Attempts to receive the data message. If there is no data to receive, returns None
+        # Attempts to receive the data message. If there is no data to receive, returns None. This is a non-error,
+        # no-message return case.
         if not self._transport_layer.receive_data():
-            return False, 0
+            return None
 
-        # If the data was received, first reads the protocol code, that is expected to be the first value of every
-        # message payload
-        protocol = np.uint8(0)
-        protocol, next_index = self._transport_layer.read_data(protocol, start_index=0)
+        # If the data was received, first reads the protocol code, expected to be found as the first value of every
+        # incoming payload. The protocol is a byte-value, so uses np.uint8 prototype.
+        protocol, next_index = self._transport_layer.read_data(np.uint8(0), start_index=0)
 
-        data: np.uint8 | NDArray[np.uint8]
+        # Since received data is logged as serialized payloads, precreates the array necessary to extract the entire
+        # received payload. Since TransportLayer known how many payload bytes it received, this property is used to
+        # determine the prototype array size. For data messages, the array has to be initialized de-novo for each
+        # method runtime due to the varying size of the data object.
+        message_prototype = np.empty(self._transport_layer.bytes_in_reception_buffer, dtype=np.uint8)
 
-        # Uses the protocol to determine the type of the received message and read the data
+        # Uses the extracted protocol value to determine the type of the received message and process the received data.
         if protocol == SerialProtocols.DATA.value:
-            # Note, for Data messages, this is not the entire Data message. To process the data object,
+            # Note, for Data messages, this is not the entire Data message. If data object,
             # extract_data_object() method needs to be called next
-            # data = self._transport_layer.read_data(np.uint8(0), start_index=0)  # TODO
+            message_data = self._transport_layer.read_data(message_prototype, start_index=0)
             return False, 0
         elif protocol == SerialProtocols.RECEPTION.value:
-            self._reception_message.reception_code, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
+            self.reception_message
+            self.reception_message.reception_code, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
             return True, protocol
         elif protocol == SerialProtocols.IDENTIFICATION.value:
-            self._identification_message.controller_id, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
+            self.identification_message.controller_id, _ = self._transport_layer.read_data(np.uint8(0), start_index=0)
             return True, protocol
         else:
             message = (
@@ -451,3 +430,46 @@ class SerialCommunication:
                 f"available through the Protocols enumeration are supported."
             )
             console.error(message, error=ValueError)
+
+
+# def extract_data_object(
+#         self,
+#         prototype_object: np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool |
+#                           NDArray[Any],
+# ) -> np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool | NDArray[Any]:
+#     """Reconstructs the data object from the serialized data bytes using the provided prototype.
+#
+#     This step completed data message reception by processing the additional message data. This has to be carried
+#     out separately, as data object structure is not known until the exact object prototype is determined based on
+#     the module-command-event ID information extracted from the message.
+#
+#     Args:
+#         prototype_object: The prototype object that will be used to format the extracted data. The appropriate
+#             prototype for data extraction depends on the data format used by the sender module and has to be
+#             determined individually for each received data message. Currently, only numpy scalar or array prototypes
+#             are supported.
+#
+#     Raises:
+#         ValueError: If the size of the extracted data does not match the object size declared in the data message.
+#     """
+
+# # If the provided prototype's byte-size does not match the object size, raises an error.
+# if self.object_size != prototype_object.nbytes:
+#     message = (
+#         "Unable to extract the requested data object from the received message payload. The size of the object "
+#         f"declared by the incoming data message {self.object_size} does not match the size of the provided "
+#         f"prototype {prototype_object.size} (in bytes). This may indicate that the data was corrupted in "
+#         f"transmission."
+#     )
+#     console.error(message, error=ValueError)
+#
+# # Reconstructs the prototype object using the serialized data
+# target_dtype = prototype_object.dtype
+# data_object = np.frombuffer(self.data_object, dtype=target_dtype)
+#
+# # If the object is a one-element array, casts it to a scalar numpy type
+# if data_object.size == 1:
+#     return data_object[0].copy()
+#
+# # Otherwise, returns the object as a numpy array.
+# return data_object.copy()
