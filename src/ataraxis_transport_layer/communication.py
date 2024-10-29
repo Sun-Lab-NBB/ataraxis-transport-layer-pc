@@ -1,3 +1,11 @@
+"""This module provides the SerialCommunication class and message structures used to bidirectionally communicate with
+microcontroller systems running Ataraxis firmware.
+
+The SerialCommunication class builds on top of the SerialTransportLayer class and encapsulates most of the parameters
+and functions necessary to communicate with the controller running default version of the microcontroller Communication
+class.
+"""
+
 from .transport_layer import SerialTransportLayer
 from dataclasses import dataclass
 import numpy as np

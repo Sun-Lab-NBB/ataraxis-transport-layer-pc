@@ -39,22 +39,69 @@ class MicroController:
             daemon=True,
         )
 
+        self._core_module_status_codes = {
+            "kStandBy": 0,  # The code used to initialize the module_status variable.
+            "kDataSendingError": 1,  # An error has occurred when sending Data to the connected Ataraxis system.
+            "kCommandAlreadyRunning": 2,  # The module cannot activate new commands as one is already running.
+            "kNewCommandActivated": 3,  # The module has successfully activated a new command.
+            "kRecurrentCommandActivated": 4,  # The module has successfully activated a recurrent command.
+            "kNoQueuedCommands": 5,  # The module does not have any new or recurrent commands to activate.
+            "kRecurrentTimerNotExpired": 6,  # The module's recurrent activation timeout has not expired yet
+            "kNotImplemented": 7,  # Derived class has not implemented the called virtual method
+            "kParametersSet": 8,  # The custom parameters of the module were overwritten with PC-sent data.
+            "kSetupComplete": 9,  # Module hardware was successfully configured.
+            "kModuleAssetsReset": 10,  # All custom assets of the module ahs been reset.
+        }
+
+        self._kernel_status_codes = {
+            "kStandby": 0,  # Standby code used during class initialization.
+            "kSetupComplete": 1,  # Setup() method runtime succeeded.
+            "kModuleSetupError": 2,  # Setup() method runtime failed due to a module setup error.
+            "kNoDataToReceive": 3,  # ReceiveData() method succeeded without receiving any data.
+            "kDataReceptionError": 4,  # ReceiveData() method failed due to a data reception error.
+            "kDataSendingError": 5,  # SendData() method failed due to a data sending error.
+            "kInvalidDataProtocol": 6,  # Received message uses an unsupported (unknown) protocol.
+            "kKernelParametersSet": 7,  # Received and applied the parameters addressed to the Kernel class.
+            "kKernelParametersError": 8,  # Unable to apply the received Kernel parameters.
+            "kModuleParametersSet": 9,  # Received and applied the parameters addressed to a managed Module class.
+            "kModuleParametersError": 10,  # Unable to apply the received Module parameters.
+            "kParametersTargetNotFound": 11,  # The addressee of the parameters' message could not be found.
+            "kControllerReset": 12,  # The Kernel has reset the controller's software and hardware states.
+            "kKernelCommandUnknown": 13,  # The Kernel has received an unknown command.
+            "kModuleCommandQueued": 14,  # The received command was queued to be executed by the Module.
+            "kCommandTargetNotFound": 15,  # The addressee of the command message could not be found.
+            "kServiceSendingError": 16,  # Error sending a service message to the connected system.
+            "kModuleResetError": 17,  # Unable to reset the custom assets of a module.
+            "kControllerIDSent": 18,  # The requested controller ID was sent ot to the connected system.
+            "kModuleCommandError": 19,  # Error executing an active module command.
+            "kModuleCommandsCompleted": 20,  # All active module commands have been executed.
+            "kModuleAssetResetError": 21,  # Resetting custom assets of a module failed.
+            "kModuleCommandsReset": 22,  # Module command structure has been reset. Queued commands cleared.
+        }
+
+        self._kernel_commands = {
+            "kStandby": 0,  # Standby code used during class initialization. Not externally addressable.
+            "kSetup": 1,  # Module setup command. Not externally addressable.
+            "kReceiveData": 2,  # Receive data command. Not externally addressable.
+            "kResetController": 3,  # Resets the software and hardware state of all modules. Externally addressable.
+            "kIdentifyController": 4,  # Transmits the ID of the controller back to caller. Externally addressable.
+            "kRunModuleCommands": 5,  # Executes active module commands. Not externally addressable.
+        }
+
     def runtime_cycle(self, command_queue: MPQueue, terminator_array: SharedMemoryArray) -> None:
         pass
 
 
-@dataclass(frozen=True)
 class Module:
-    module_type: np.uint8
-    module_id: np.uint8
-    data_prototypes: NestedDictionary
-    commands: NestedDictionary
 
-    def get_prototype(self, message: DataMessage) -> Optional[Any]:
-        if not message.module_type == self.module_type or not message.module_id == self.module_id:
-            return None
+    def __init__(self, module_type: np.uint8, module_id: np.uint8, custom_command_map: dict):
 
-        return self.data_prototypes.read_nested_value(variable_path=(message.command.item(), message.event.item()))
+        self._module_type: np.uint8 = module_type
+        self._module_id: np.uint8 = module_id
+        self._commands: dict = {}
+        self._status_codes: dict = {}
+        self._prototypes: dict = {}
+        self._unity_channels_map: dict = {}
 
     def make_command(
         self,
@@ -70,4 +117,7 @@ class Module:
         self,
         return_code: np.uint8 = 0,
     ) -> None:
-        pass
+        pass  # TODO Virtual (not implemented error)
+
+    def process_data(self, message: DataMessage):
+        pass  # TODO Virtual (not implemented error)
