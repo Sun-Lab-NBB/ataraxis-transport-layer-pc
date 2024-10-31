@@ -399,7 +399,7 @@ class MicroController:
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "kernel.status_codes.kResetQueueCommandTargetNotFound"
+        section = "kernel.status_codes.kResetModuleQueueTargetNotFound"
         description = (
             "Unable to find the addressee of the module (command) queue reset command sent from the PC. The "
             "module_type and module_id fields of the message did not match any of the custom Modules. Usually, this "
