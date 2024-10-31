@@ -386,11 +386,28 @@ class MicroController:
         description = (
             "This is a special status invoked by the Kernel when it receives a module-addressed command code 0. "
             "Instead of triggering the usual command queue runtime, code 0 is interpreted as command reset state and "
-            "the Kernel then forcibly clears the currently active and queued commands for that Module."
+            "the Kernel then clears all queued command(s) for that Module. The active Module command is allowed to "
+            "complete gracefully, but there will be no further command execution until new commands are queued."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=21)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
+
+        section = "kernel.status_codes.kStateSendingError"
+        description = "The Kernel failed to send a StateMessage to the PC."
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=22)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
+
+        section = "kernel.status_codes.kResetQueueCommandTargetNotFound"
+        description = (
+            "Unable to find the addressee of the module (command) queue reset command sent from the PC. The "
+            "module_type and module_id fields of the message did not match any of the custom Modules. Usually, this "
+            "indicates a malformed message (user-error)."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=23)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
 
@@ -574,6 +591,25 @@ class MicroController:
         section = "module.status_codes.kModuleAssetsReset"
         description = "Custom assets of the Module have been (re)set to hardcoded defaults."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=10)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
+
+        section = "module.status_codes.kStateSendingError"
+        description = (
+            "The Module failed to send a StateMessage to the PC. State messages work similar to Data messages, but "
+            "they are used in cases where data objects do not need to be included with event-codes to optimize "
+            "transmission."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=11)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
+
+        section = "module.status_codes.kCommandCompleted"
+        description = (
+            "Indicates that the active command of the module has been completed. This status is reported whenever a "
+            "command is replaced by a new command or terminates with no further queued or recurring commands."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=12)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -1070,6 +1106,17 @@ class MicroController:
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=161)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
+
+        section = "communication.status_codes.kCommunicationParameterExtractionInvalidMessage"
+        description = (
+            "Unable to extract Module-addressed parameters, as the class currently holds a different message type in "
+            "its reception buffer. Currently, only Module-addressed parameters need to be extracted by a separate "
+            "method call. Calling the method for Kernel-addressed parameters (or any other message) will produce this "
+            "error."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=162)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
 
