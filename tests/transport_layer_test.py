@@ -136,21 +136,21 @@ class TestSerialTransportLayerInitialization:
 
 def test_repr_with_mocked_port():
     """Test __repr__ when the _port is mocked using SerialMock."""
-    protocol = SerialTransportLayer(
-        port="COM7",
-        baudrate=115200,
-        start_byte=129,
-        delimiter_byte=0,
-        timeout=10000,
-        test_mode=True,
-    )
-    expected_repr = (
-        "SerialTransportLayer(port & baudrate=MOCKED, "
-        "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
-        "timeout=10000 us, maximum_tx_payload_size = 254, "
-        "maximum_rx_payload_size=254)"
-    )
-    assert repr(protocol) == expected_repr
+    with patch("ataraxis_transport_layer.transport_layer.SerialMock") as mock_serial:
+        mock_serial_instance = MagicMock()
+        mock_serial_instance.name = "MOCKED"
+        mock_serial_instance.baudrate = 115200
+        mock_serial.return_value = mock_serial_instance
+
+        protocol = SerialTransportLayer(port="COM3", baudrate=115200, test_mode=True)
+
+        expected_repr = (
+            "SerialTransportLayer(port & baudrate=MOCKED, "
+            "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+            "timeout=10000 us, maximum_tx_payload_size=254, "
+            "maximum_rx_payload_size=254)"
+        )
+        assert repr(protocol) == expected_repr
 
 
 def test_read_data_unsupported_input_type():
@@ -317,27 +317,23 @@ def test_full_data_flow():
 
 
 @patch("ataraxis_transport_layer.transport_layer.serial.Serial")
-def test_repr_with_real_serial_port(mock_serial):
+def test_repr_with_real_serial_port():
     """Test __repr__ when the _port is a real Serial object."""
-    # Set up the mock serial port
-    mock_serial_instance = MagicMock()
-    mock_serial_instance.name = "COM7"
-    mock_serial_instance.baudrate = 115200
-    mock_serial.return_value = mock_serial_instance
+    with patch("ataraxis_transport_layer.transport_layer.Serial") as mock_serial:
+        mock_serial_instance = MagicMock()
+        mock_serial_instance.name = "COM3"
+        mock_serial_instance.baudrate = 115200
+        mock_serial.return_value = mock_serial_instance
 
-    # Initialize the protocol with test_mode=False, which should use the real Serial class
-    protocol = SerialTransportLayer(
-        port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=False
-    )
+        protocol = SerialTransportLayer(port="COM3", baudrate=115200, test_mode=False)
 
-    # The __repr__ method should now use the 'if isinstance(self._port, Serial):' branch
-    repr_str = repr(protocol)
-    expected_repr = (
-        f"SerialTransportLayer(port='COM7', baudrate=115200, polynomial=0x{protocol._crc_processor.polynomial:04X}, "
-        f"start_byte=129, delimiter_byte=0, timeout=10000 us, maximum_tx_payload_size={protocol._max_tx_payload_size}, "
-        f"maximum_rx_payload_size={protocol._max_rx_payload_size})"
-    )
-    assert repr_str == expected_repr
+        # The __repr__ method should now use the 'Serial' branch
+        expected_repr = (
+            "SerialTransportLayer(port='COM3', baudrate=115200, polynomial=0x1021, "
+            "start_byte=129, delimiter_byte=0, timeout=10000 us, maximum_tx_payload_size=254, "
+            "maximum_rx_payload_size=254)"
+        )
+        assert repr(protocol) == expected_repr
 
 
 def test_real_serial_initialization():
@@ -1712,34 +1708,42 @@ def test_buffer_tracker_update():
 def test_send_receive_maximum_payload():
     """Test sending and receiving data with maximum allowed payload size."""
     protocol = SerialTransportLayer(
-        port="COM7",
+        port="COM3",
         baudrate=115200,
         maximum_transmitted_payload_size=254,  # Maximum allowed by the protocol
         test_mode=True,
     )
 
-    # Create a test payload with maximum allowed size
     max_payload_size = protocol.maximum_transmitted_payload_size
     test_data = np.arange(max_payload_size, dtype=np.uint8)
 
-    # Write data to transmission buffer
     protocol.write_data(test_data)
-
-    # Send data
     send_status = protocol.send_data()
     assert send_status
     assert protocol.bytes_in_transmission_buffer == 0  # Buffer should be cleared after send
 
-    # Simulate receiving the same data
-    protocol._port.rx_buffer = protocol._port.tx_buffer  # Loopback
-
-    # Receive data
+    protocol._port.rx_buffer = protocol._port.tx_buffer  # Simulate loopback
     receive_status = protocol.receive_data()
     assert receive_status
     assert protocol.bytes_in_reception_buffer == max_payload_size
 
-    # Read back the data
     received_data, _ = protocol.read_data(np.zeros(max_payload_size, dtype=np.uint8))
+    assert np.array_equal(received_data, test_data)
+
+
+def test_receive_minimum_payload_size():
+    """Test receiving a packet with the minimum allowed payload size."""
+    protocol = SerialTransportLayer(port="COM3", baudrate=115200, test_mode=True)
+
+    # Simulate receiving the minimum payload size (e.g., 1 byte payload)
+    test_data = np.array([1], dtype=np.uint8)
+    protocol._port.rx_buffer = protocol._port.tx_buffer = test_data
+
+    receive_status = protocol.receive_data()
+    assert receive_status
+    assert protocol.bytes_in_reception_buffer == 1
+
+    received_data, _ = protocol.read_data(np.zeros(1, dtype=np.uint8))
     assert np.array_equal(received_data, test_data)
 
 
@@ -2261,10 +2265,57 @@ def test_serial_transport_layer_repr_mocked_port():
         assert repr(protocol) == expected_repr
 
 
+# def test_repr_with_mocked_serial():
+#     """Test that the __repr__ method works with a mocked Serial port or mocked SerialMock."""
+#     # Mock the Serial port
+#     with patch("ataraxis_transport_layer.transport_layer.SerialMock") as mock_serial:
+#         mock_serial_instance = MagicMock()
+#         mock_serial_instance.name = "MOCKED"
+#         mock_serial_instance.baudrate = 115200
+#         mock_serial.return_value = mock_serial_instance
+#
+#         # Initialize the class with test_mode=True (which should use SerialMock)
+#         protocol = SerialTransportLayer(
+#             port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+#         )
+#
+#         # Expected representation for mocked serial with SerialMock
+#         expected_repr = (
+#             "SerialTransportLayer(port & baudrate=MOCKED, "
+#             "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
+#             "timeout=10000 us, maximum_tx_payload_size = 254, "
+#             "maximum_rx_payload_size=254)"
+#         )
+#
+#         assert repr(protocol) == expected_repr
+#
+#     # Mock the Serial class itself
+#     with patch("ataraxis_transport_layer.transport_layer.Serial") as mock_serial:
+#         mock_serial_instance = MagicMock()
+#         mock_serial_instance.name = "COM3"
+#         mock_serial_instance.baudrate = 115200
+#         mock_serial.return_value = mock_serial_instance
+#
+#         # Initialize the class with test_mode=False (which should use Serial)
+#         protocol = SerialTransportLayer(
+#             port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=False
+#         )
+#
+#         # Expected representation for real serial
+#         expected_repr = (
+#             "SerialTransportLayer(port='COM3', baudrate=115200, polynomial=0x1021, start_byte=129, "
+#             "delimiter_byte=0, timeout=10000 us, maximum_tx_payload_size = 254, "
+#             "maximum_rx_payload_size=254)"
+#         )
+#
+#         assert repr(protocol) == expected_repr
+
+
 def test_repr_with_mocked_serial():
-    """Test that the __repr__ method works with a mocked Serial port or mocked SerialMock."""
-    # Mock the Serial port
-    with patch("ataraxis_transport_layer.transport_layer.SerialMock") as mock_serial:
+    """Test that the __repr__ method works with a mocked Serial port."""
+
+    # Mock the Serial class itself (replace 'Serial' with 'SerialMock')
+    with patch("ataraxis_transport_layer.transport_layer.Serial") as mock_serial:
         mock_serial_instance = MagicMock()
         mock_serial_instance.name = "MOCKED"
         mock_serial_instance.baudrate = 115200
@@ -2272,38 +2323,16 @@ def test_repr_with_mocked_serial():
 
         # Initialize the class with test_mode=True (which should use SerialMock)
         protocol = SerialTransportLayer(
-            port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
+            port="COM7", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=True
         )
 
-        # Expected representation for mocked serial with SerialMock
+        # Expected representation for mocked serial
         expected_repr = (
-            "SerialTransportLayer(port & baudrate=MOCKED, "
-            "polynomial=0x1021, start_byte=129, delimiter_byte=0, "
-            "timeout=10000 us, maximum_tx_payload_size = 254, "
-            "maximum_rx_payload_size=254)"
+            "SerialTransportLayer(port='MOCKED', baudrate=115200, polynomial=0x1021, start_byte=129, "
+            "delimiter_byte=0, timeout=10000 us, maximum_tx_payload_size=254, maximum_rx_payload_size=254)"
         )
 
-        assert repr(protocol) == expected_repr
-
-    # Mock the Serial class itself
-    with patch("ataraxis_transport_layer.transport_layer.Serial") as mock_serial:
-        mock_serial_instance = MagicMock()
-        mock_serial_instance.name = "COM3"
-        mock_serial_instance.baudrate = 115200
-        mock_serial.return_value = mock_serial_instance
-
-        # Initialize the class with test_mode=False (which should use Serial)
-        protocol = SerialTransportLayer(
-            port="COM3", baudrate=115200, start_byte=129, delimiter_byte=0, timeout=10000, test_mode=False
-        )
-
-        # Expected representation for real serial
-        expected_repr = (
-            "SerialTransportLayer(port='COM3', baudrate=115200, polynomial=0x1021, start_byte=129, "
-            "delimiter_byte=0, timeout=10000 us, maximum_tx_payload_size = 254, "
-            "maximum_rx_payload_size=254)"
-        )
-
+        # Ensure the repr output matches the expected format
         assert repr(protocol) == expected_repr
 
 
@@ -2535,98 +2564,60 @@ def test_receive_data_status_2_timeout():
 
 
 def test_receive_data_status_103():
-    """Test that receive_data handles status == 103 by logging error and raising RuntimeError."""
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+    protocol._parse_packet = lambda *args: (103, 3, 0, np.array([3, 255], dtype=np.uint8))
 
-    # Simulate parsing with status == 103
-    parsed_bytes = np.array([1, 2], dtype=np.uint8)
-    parsed_bytes_count = 0
+    with patch("logging.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
 
-    # Mock _parse_packet to return status == 103
-    with patch.object(protocol, "_parse_packet", return_value=(103, parsed_bytes_count, b"", parsed_bytes)):
-        # Mock console.error to capture the log
-        with patch("ataraxis_base_utilities.console.error") as mock_error:
-            # Expect a RuntimeError due to invalid packet size
-            with pytest.raises(RuntimeError) as exc_info:
-                protocol.receive_data()
-
-            payload_size = parsed_bytes.size - int(protocol._postamble_size)
-            message = (
-                f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
-                f"({payload_size}), is outside the expected boundaries "
-                f"({protocol._min_rx_payload_size} to {protocol._max_rx_payload_size}). This likely indicates a "
-                f"mismatch in the transmission parameters between this system and the Microcontroller."
-            )
-
-            # Ensure the correct message is logged
-            mock_error.assert_called_once_with(message=message, error=RuntimeError)
-
-            # Check the raised exception message
-            assert str(exc_info.value) == message
+        message = (
+            f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
+            f"({len(protocol._parse_packet()[3]) - int(protocol._postamble_size)}), is outside the expected boundaries "
+            f"({protocol._min_rx_payload_size} to {protocol._max_rx_payload_size}). This likely indicates a "
+            f"mismatch in the transmission parameters between this system and the Microcontroller."
+        )
+        mock_error.assert_called_once_with(message=message)
+        assert str(exc_info.value) == message
 
 
 def test_receive_data_status_104():
-    """Test that receive_data handles status == 104 by logging error and raising RuntimeError."""
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+    protocol._parse_packet = lambda *args: (104, 3, 1, np.array([3, 0], dtype=np.uint8))
 
-    # Simulate parsing with status == 104
-    parsed_bytes = np.array([1, 2, 3, 4], dtype=np.uint8)
-    parsed_bytes_count = 2
+    with patch("logging.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
 
-    # Mock _parse_packet to return status == 104
-    with patch.object(protocol, "_parse_packet", return_value=(104, parsed_bytes_count, b"", parsed_bytes)):
-        # Mock console.error to capture the log
-        with patch("ataraxis_base_utilities.console.error") as mock_error:
-            # Expect a RuntimeError due to incorrect delimiter byte
-            with pytest.raises(RuntimeError) as exc_info:
-                protocol.receive_data()
-
-            expected_byte_number = parsed_bytes.size - int(protocol._postamble_size)
-            message = (
-                f"Failed to parse the incoming serial packet data. Delimiter byte value "
-                f"({protocol._delimiter_byte}) encountered at byte number {parsed_bytes_count + 1}, instead of the "
-                f"expected byte number {expected_byte_number}. This likely indicates packet corruption or mismatch "
-                f"in the transmission parameters between this system and the Microcontroller."
-            )
-
-            # Ensure the correct message is logged
-            mock_error.assert_called_once_with(message=message, error=RuntimeError)
-
-            # Check the raised exception message
-            assert str(exc_info.value) == message
+        message = (
+            f"Failed to parse the incoming serial packet data. Delimiter byte value "
+            f"({protocol._delimiter_byte}) encountered at byte number {10 + 1}, instead of the "
+            f"expected byte number {len(protocol._parse_packet()[3]) - int(protocol._postamble_size)}. "
+            "This likely indicates packet corruption or mismatch in the transmission parameters "
+            "between this system and the Microcontroller."
+        )
+        mock_error.assert_called_once_with(message=message)
+        assert str(exc_info.value) == message
 
 
 def test_receive_data_status_105():
-    """Test that receive_data handles status == 105 by logging error and raising RuntimeError."""
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
+    protocol._parse_packet = lambda *args: (105, 3, 0, np.array([3, 1], dtype=np.uint8))
 
-    # Simulate parsing with status == 105
-    parsed_bytes = np.array([1, 2, 3, 99], dtype=np.uint8)
-    parsed_bytes_count = 0
+    with patch("logging.error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            protocol.receive_data()
 
-    # Mock _parse_packet to return status == 105
-    with patch.object(protocol, "_parse_packet", return_value=(105, parsed_bytes_count, b"", parsed_bytes)):
-        # Mock console.error to capture the log
-        with patch("ataraxis_base_utilities.console.error") as mock_error:
-            # Expect a RuntimeError due to incorrect last byte
-            with pytest.raises(RuntimeError) as exc_info:
-                protocol.receive_data()
-
-            last_payload_byte_index = parsed_bytes.size - int(protocol._postamble_size)
-            message = (
-                f"Failed to parse the incoming serial packet data. Delimiter byte value "
-                f"({protocol._delimiter_byte}) expected as the last payload byte "
-                f"({last_payload_byte_index}), but instead encountered "
-                f"{parsed_bytes[last_payload_byte_index]}. This likely indicates packet "
-                f"corruption or mismatch in the transmission parameters between this system "
-                f"and the Microcontroller."
-            )
-
-            # Ensure the correct message is logged
-            mock_error.assert_called_once_with(message=message, error=RuntimeError)
-
-            # Check the raised exception message
-            assert str(exc_info.value) == message
+        message = (
+            f"Failed to parse the incoming serial packet data. Delimiter byte value "
+            f"({protocol._delimiter_byte}) expected as the last payload byte "
+            f"({len(protocol._parse_packet()[3]) - int(protocol._postamble_size)}), but instead encountered "
+            f"{protocol._parse_packet()[3][len(protocol._parse_packet()[3]) - int(protocol._postamble_size)]}. "
+            "This likely indicates packet corruption or mismatch in the transmission parameters "
+            "between this system and the Microcontroller."
+        )
+        mock_error.assert_called_once_with(message=message)
+        assert str(exc_info.value) == message
 
 
 def test_receive_data_status_102():
