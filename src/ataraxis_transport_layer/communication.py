@@ -13,36 +13,197 @@ from numpy.typing import NDArray
 from typing import Any, Optional
 from enum import Enum
 from ataraxis_base_utilities import console
+from ataraxis_data_structures import NestedDictionary
 
 
-class SerialProtocols(Enum):
-    """Stores the protocol codes used in data transmission between the PC and the microcontroller over the serial port.
+@dataclass(frozen=True)
+class SerialProtocols:
+    """ Stores the protocol codes used in data transmission between the PC and the microcontroller over the serial port.
 
-    Each transmitted message starts with the specific protocol code from is enumeration that instructs the receiver on
-    how to process the rest of the data payload. The contents of this enumeration have to mach across all used systems.
+    Each sent and received message starts with the specific protocol code from this class that instructs the receiver on
+    how to process the rest of the data payload. The codes available through this class have to match the contents of
+    the kProtocols Enumeration available from the AtaraxisMicroController library (communication_assets namespace).
+
+    Attributes:
+        kUndefined: Not a valid protocol code. This is used to initialize the Communication class of the
+            microcontroller.
+        KRepeatedModuleCommand: Protocol for sending Module-addressed commands that should be repeated
+            (executed recurrently).
+        kOneOffModuleCommand: Protocol for sending Module-addressed commands that should not be repeated
+            (executed only once).
+        kDequeueModuleCommand: Protocol for sending Module-addressed commands that remove all queued commands
+            (including recurrent commands).
+        kKernelCommand: Protocol for sending Kernel-addressed commands. All Kernel commands are always non-repeatable
+            (one-shot).
+        kModuleParameters: Protocol for sending Module-addressed parameters. This relies on transmitting arbitrary
+            sized parameter objects likely to be unique for each module type (family).
+        kKernelParameters: Protocol for sending Kernel-addressed parameters. The parameters transmitted via these
+            messages will be used to overwrite the global parameters shared by the Kernel and all Modules of the
+            microcontroller (global runtime parameters).
+        kModuleData: Protocol for receiving Module-sent data or error messages that include an arbitrary data object in
+            addition to event state-code.
+        kKernelData: Protocol for receiving Kernel-sent data or error messages that include an arbitrary data object in
+            addition to event state-code.
+        kModuleState: Protocol for receiving Module-sent data or error messages that do not include additional data
+            objects.
+        kKernelState: Protocol for receiving Kernel-sent data or error messages that do not include additional data
+            objects.
+        kReceptionCode: Protocol used to ensure that the microcontroller has received a previously sent command or
+            parameter message. Specifically, when an outgoing message includes a reception_code, this code is
+            transmitted back to the PC using this service protocol to acknowledge message reception.
+        kIdentification: Protocol used to identify the controller connected to a particular USB port. This service
+            protocol is used by the controller that receives the 'Identify' Kernel-addressed command.
     """
+    kUndefined: np.uint8 = np.uint8(0)
+    KRepeatedModuleCommand: np.uint8 = np.uint8(1)
+    kOneOffModuleCommand: np.uint8 = np.uint8(2)
+    kDequeueModuleCommand: np.uint8 = np.uint8(3)
+    kKernelCommand: np.uint8 = np.uint8(4)
+    kModuleParameters: np.uint8 = np.uint8(5)
+    kKernelParameters: np.uint8 = np.uint8(6)
+    kModuleData: np.uint8 = np.uint8(7)
+    kKernelData: np.uint8 = np.uint8(8)
+    kModuleState: np.uint8 = np.uint8(9)
+    kKernelState: np.uint8 = np.uint8(10)
+    kReceptionCode: np.uint8 = np.uint8(11)
+    kIdentification: np.uint8 = np.uint8(12)
 
-    COMMAND = np.uint8(1)
-    """The protocol used by messages that communicate commands to be executed by the target microcontroller Kernel or
-    Module. Commands trigger direct manipulation of the connected hardware, such as engaging breaks or spinning motors. 
-    Currently, only the PC can send the commands to the microcontroller."""
-    PARAMETERS = np.uint8(2)
-    """The protocol used by messages that allow changing the runtime-addressable parameters of the target 
-    microcontroller Kernel or Module. For example, this message would be used to adjust the motor speed or the 
-    sensitivity of a lick sensor. Currently, only the PC can send updated parameters data to the microcontroller."""
-    DATA = np.uint8(3)
-    """The protocol used by messages that communicate the microcontroller-originating data. This protocol is used to 
-    both send data and communicate runtime errors. Currently, only the microcontroller can send data messages to the 
-    PC."""
-    RECEPTION = np.uint8(4)
-    """The service protocol used by the microcontroller to optionally acknowledge the reception of a Command or 
-    Parameters message. This is used to ensure the delivery of critical messages to the microcontroller and, currently, 
-    this feature is only supported by Command and Parameters messages."""
-    IDENTIFICATION = np.uint8(5)
-    """The service protocol used by the microcontroller to respond to the identification request sent by the PC. This 
-    is typically used during the initial system architecture setup to map controllers with specific microcode versions 
-    to the USB ports they use for communication with the PC."""
+    def write_protocol_codes(self, code_dictionary: NestedDictionary) -> NestedDictionary:
+        """Fills the 'communication.protocols' section of the core_codes_map dictionary with data.
 
+        The message protocols determine incoming and outgoing message payload structures and allow optimizing certain
+        forms of communication by limiting the payload length. Knowing the meaning (and structure) of each message
+        protocol is essential for being able to deserialize the logged data, which is stored as raw byte-serialized
+        message payloads.
+
+        Make sure this method matches the actual state of the communication:assets namespace from the
+        AtaraxisMicroController library!
+
+        Args:
+            code_dictionary: The dictionary to be filled with kernel command codes.
+
+        Returns:
+            The updated dictionary with communication protocol codes information filled.
+        """
+
+        section = "communication.protocols.kUndefined"
+        description = (
+            "Not a valid protocol code. This is used to initialize the Communication class of the microcontroller."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kUndefined)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=False)
+
+        section = "communication.protocols.KRepeatedModuleCommand"
+        description = (
+            "Protocol for sending Module-addressed commands that should be repeated (executed recurrently)."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.KRepeatedModuleCommand)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=True)
+
+        section = "communication.protocols.kOneOffModuleCommand"
+        description = (
+            "Protocol for sending Module-addressed commands that should not be repeated (executed only once)."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kOneOffModuleCommand)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=True)
+
+        section = "communication.protocols.kDequeueModuleCommand"
+        description = (
+            "Protocol for sending Module-addressed commands that remove all queued commands (including recurrent "
+            "commands)."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kDequeueModuleCommand)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=True)
+
+        section = "communication.protocols.kKernelCommand"
+        description = (
+            "Protocol for sending Kernel-addressed commands. All Kernel commands are always non-repeatable (one-shot)."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kKernelCommand)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=True)
+
+        section = "communication.protocols.kModuleParameters"
+        description = (
+            "Protocol for sending Module-addressed parameters. This relies on transmitting arbitrary sized parameter "
+            "objects likely to be unique for each module type (family)."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kModuleParameters)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=True)
+
+        section = "communication.protocols.kKernelParameters"
+        description = (
+            "Protocol for sending Kernel-addressed parameters. The parameters transmitted via these messages will be "
+            "used to overwrite the global parameters shared by the Kernel and all Modules of the microcontroller "
+            "(global runtime parameters)."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kKernelParameters)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=True)
+
+        section = "communication.protocols.kModuleData"
+        description = (
+            "Protocol for receiving Module-sent data or error messages that include an arbitrary data object in "
+            "addition to event state-code."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kModuleData)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=False)
+
+        section = "communication.protocols.kKernelData"
+        description = (
+            "Protocol for receiving Kernel-sent data or error messages that include an arbitrary data object in "
+            "addition to event state-code."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kKernelData)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=False)
+
+        section = "communication.protocols.kModuleState"
+        description = (
+            "Protocol for receiving Module-sent data or error messages that do not include additional data objects."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kModuleState)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=False)
+
+        section = "communication.protocols.kKernelState"
+        description = (
+            "Protocol for receiving Kernel-sent data or error messages that do not include additional data objects."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kKernelState)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=False)
+
+        section = "communication.protocols.kReceptionCode"
+        description = (
+            "Protocol used to ensure that the microcontroller has received a previously sent command or parameter "
+            "message. Specifically, when an outgoing message includes a reception_code, this code is transmitted back "
+            "to the PC using this service protocol to acknowledge message reception."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kReceptionCode)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=False)
+
+        section = "communication.protocols.kIdentification"
+        description = (
+            "Protocol used to identify the controller connected to a particular USB port. This service protocol is "
+            "used by the controller that receives the 'Identify' Kernel-addressed command"
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=self.kIdentification)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.outgoing", value=False)
+
+        return code_dictionary
+
+@dataclass(frozne=True)
+class SerialPrototypes:
+    pass
 
 @dataclass()
 class CommandMessage:
@@ -167,7 +328,7 @@ class ParametersMessage:
         current_position = 5
         for param_bytes in byte_parameters:
             param_size = param_bytes.size
-            self.packed_data[current_position : current_position + param_size] = param_bytes
+            self.packed_data[current_position: current_position + param_size] = param_bytes
             current_position += param_size
 
     def __repr__(self) -> str:
@@ -325,10 +486,10 @@ class SerialCommunication:
     """
 
     def __init__(
-        self,
-        usb_port: str,
-        baudrate: int = 115200,
-        maximum_transmitted_payload_size: int = 254,
+            self,
+            usb_port: str,
+            baudrate: int = 115200,
+            maximum_transmitted_payload_size: int = 254,
     ) -> None:
         # Specializes the TransportLayer to mostly match a similar specialization carried out by the microcontroller
         # Communication class.
@@ -462,8 +623,9 @@ class SerialCommunication:
             console.error(message, error=ValueError)
 
     def extract_data_object(
-        self,
-        prototype_object: np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool | NDArray[Any],
+            self,
+            prototype_object: np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool | NDArray[
+                Any],
     ) -> np.unsignedinteger[Any] | np.signedinteger[Any] | np.floating[Any] | np.bool | NDArray[Any]:
         """Reconstructs the data object from the serialized data bytes using the provided prototype.
 

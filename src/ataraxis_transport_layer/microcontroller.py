@@ -15,12 +15,11 @@ from multiprocessing import (
     ProcessError,
 )
 from multiprocessing.managers import SyncManager
-
+from ataraxis_base_utilities import console
 
 class Module:
 
     def __init__(self, module_type: np.uint8, module_id: np.uint8, custom_command_map: dict):
-
         self._module_type: np.uint8 = module_type
         self._module_id: np.uint8 = module_id
         self._commands: dict = {}
@@ -29,18 +28,26 @@ class Module:
         self._unity_channels_map: dict = {}
 
     def make_command(
-        self,
-        command_code: np.uint8,
-        return_code: np.uint8 = 0,
-        noblock: np.bool = True,
-        cycle: np.bool = False,
-        cycle_delay: np.uint32 = 0,
+            self,
+            command_code: np.uint8,
+            return_code: np.uint8 = 0,
+            noblock: np.bool = True,
+            cycle: np.bool = False,
+            cycle_delay: np.uint32 = 0,
     ) -> None:
         pass
 
+    @staticmethod
+    def write_status_codes_map():
+        raise NotImplementedError #TODO
+
+    @staticmethod
+    def write_command_codes_map():
+        pass
+
     def make_parameters(
-        self,
-        return_code: np.uint8 = 0,
+            self,
+            return_code: np.uint8 = 0,
     ) -> None:
         pass  # TODO Virtual (not implemented error)
 
@@ -49,19 +56,18 @@ class Module:
 
 
 class MicroController:
-
     _kernel_type = np.uint8(1)
     _kernel_id = np.uint8(0)
     _identify_command_code = np.uint8(4)
 
     def __init__(
-        self,
-        name: str,
-        usb_port: str,
-        baud_rate: int,
-        reception_buffer_size: int,
-        id_code: int,
-        modules: tuple[Module, ...],
+            self,
+            name: str,
+            usb_port: str,
+            baud_rate: int,
+            reception_buffer_size: int,
+            id_code: int,
+            modules: tuple[Module, ...],
     ):
 
         self._name: str = name
@@ -171,7 +177,10 @@ class MicroController:
         """Fills the kernel.status_codes section of the core_codes_map dictionary with data.
 
         The Kernel class manages the microcontroller runtime and encapsulates access to custom Module classes that
-        directly control the connected hardware.
+        directly control the connected hardware. Since Kernel acts as the mediator between the Modules and the PC,
+        its status codes are used to convey the current runtime state and any broad runtime-related errors. This is
+        in contrast to Modules, whose' status codes mostly reflect the current state of the hardware managed by the
+        given Module.
 
         Make sure this method matches the actual state of the Kernel class from the AtaraxisMicroController library!
         If there is a mismatch, you may be unable to interpret logged data during offline parsing or interpret it
@@ -416,7 +425,9 @@ class MicroController:
         """Fills the kernel.commands section of the core_codes_map dictionary with data.
 
         The Kernel class manages the microcontroller runtime and encapsulates access to custom Module classes that
-        directly control the connected hardware.
+        directly control the connected hardware. The Kernel broadly has 2 types of commands: addressable and
+        non-addressable. Addressable commands are triggered by sending a CommandMessage from the PC, non-addressable
+        commands are hardcoded to execute during appropriate phases of microcontroller firmware runtime.
 
         Make sure this method matches the actual state of the Kernel class from the AtaraxisMicroController library!
 
@@ -852,13 +863,13 @@ class MicroController:
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "transport_layer.status_codes.kPacketConstructed"
-        description = "The serialized data packet was successfully constructed."
+        description = "The serialized data packet to be sent to the PC was successfully constructed."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=102)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "transport_layer.status_codes.kPacketSent"
-        description = "The serialized data packet was successfully transmitted."
+        description = "The serialized data packet was successfully sent to the PC."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=103)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
@@ -1041,6 +1052,21 @@ class MicroController:
 
     @staticmethod
     def _write_communication_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+        """Fills the transport_layer.status_codes section of the core_codes_map dictionary with data.
+
+        Transport Layer class carries out the necessary low-level transformations to send and receive data over the
+        serial interface. This class is wrapped and used by the Communication class to carry out the PC-microcontroller
+        communication.
+
+        Make sure this method matches the actual state of the TransportLayer class from the AtaraxisMicroController
+        library!
+
+        Args:
+            code_dictionary: The dictionary to be filled with Transport Layer status codes.
+
+        Returns:
+            The updated dictionary with Transport Layer status codes information filled.
+        """
         section = "communication.status_codes.kCommunicationStandby"
         description = "Standby placeholder used to initialize the Communication class status tracker."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=151)
