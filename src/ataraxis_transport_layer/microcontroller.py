@@ -1,21 +1,17 @@
-import numpy as np
-from src.ataraxis_transport_layer.communication import (
-    SerialCommunication,
-    CommandMessage,
-    IdentificationMessage,
-    DataMessage,
-)
-from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
-from dataclasses import dataclass
-from typing import Any, Optional
 import multiprocessing
 from multiprocessing import (
     Queue as MPQueue,
     Process,
-    ProcessError,
 )
 from multiprocessing.managers import SyncManager
-from ataraxis_base_utilities import console
+
+import numpy as np
+from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
+
+from .communication import (
+    SerialCommunication,
+)
+
 
 class Module:
 
@@ -39,7 +35,7 @@ class Module:
 
     @staticmethod
     def write_status_codes_map():
-        raise NotImplementedError #TODO
+        raise NotImplementedError  # TODO
 
     @staticmethod
     def write_command_codes_map():
@@ -92,13 +88,11 @@ class MicroController:
             message = self._communication.receive_message()
             if message is None:
                 continue
-            elif isinstance(message, IdentificationMessage):
+            if isinstance(message, IdentificationMessage):
                 if message.controller_id == id_code:
                     break
-                else:
-                    raise ValueError("Invalid controller ID!")
-            else:
-                raise ValueError("Received unexpected message type")
+                raise ValueError("Invalid controller ID!")
+            raise ValueError("Received unexpected message type")
 
         # Sets up the multiprocessing Queue, which is used to buffer and pipe images from the producer (camera) to
         # one or more consumers (savers). Uses Manager() instantiation as it has a working qsize() method for all
@@ -139,7 +133,7 @@ class MicroController:
         # Kernel: module type
         # Since this is a very small section, does not wrap the code into a function.
         code_dictionary.write_nested_value(variable_path="kernel.module_type.code", value=1)
-        message = f"The byte-code that identifies messages sent by or to the Kernel module of the MicroController."
+        message = "The byte-code that identifies messages sent by or to the Kernel module of the MicroController."
         code_dictionary.write_nested_value(variable_path="kernel.module_type.description", value=message)
 
         # Kernel: status codes
@@ -192,7 +186,6 @@ class MicroController:
         Returns:
             The updated dictionary with kernel status codes information filled.
         """
-
         section = "kernel.status_codes.kStandBy"
         description = "The value used to initialize internal Kernel status tracker."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=0)
@@ -437,7 +430,6 @@ class MicroController:
         Returns:
             The updated dictionary with kernel command codes information filled.
         """
-
         section = "kernel.commands.kStandby"
         description = "Standby code used during class initialization."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=0)
@@ -855,7 +847,6 @@ class MicroController:
         Returns:
             The updated dictionary with Transport Layer status codes information filled.
         """
-
         section = "transport_layer.status_codes.kStandby"
         description = "The value used to initialize the class status tracker."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=101)
@@ -1148,6 +1139,3 @@ class MicroController:
 
     def runtime_cycle(self, command_queue: MPQueue, terminator_array: SharedMemoryArray) -> None:
         pass
-
-
-print(MicroController.build_core_code_map())
