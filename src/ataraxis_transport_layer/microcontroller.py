@@ -4,17 +4,37 @@ from multiprocessing import (
     Queue as MPQueue,
     Process,
 )
+from queue import Empty
 from multiprocessing.managers import SyncManager
 import numpy as np
 from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
 from ataraxis_base_utilities import console
-from .communication import ModuleData, ModuleState, KernelCommand, SerialCommunication, _prototypes
+from ataraxis_time.precision_timer.timer_class import PrecisionTimer
+from numba import uint8
+
+from .communication import (
+    Identification,
+    ReceptionCode,
+    RepeatedModuleCommand,
+    OneOffModuleCommand,
+    DequeueModuleCommand,
+    KernelCommand,
+    KernelData,
+    KernelState,
+    ModuleData,
+    ModuleState,
+    KernelParameters,
+    ModuleParameters,
+    SerialCommunication,
+    prototypes,
+    protocols,
+)
 
 
 class ModuleInterface:
     """The base class from which all custom ModuleInterface classes should inherit.
 
-    Interface classes encapsulates module-specific parameters and data handling methods which are used by the
+    Interface classes encapsulate module-specific parameters and data handling methods which are used by the
     MicrocontrollerInterface class to communicate with individual hardware modules. Overall, this arrangement is similar
     to how custom modules inherit from the (base) Module class in the AtaraxisMicroController library.
 
@@ -35,16 +55,21 @@ class ModuleInterface:
         properly interact with your ModuleInterface!
 
     Args:
-        type_name: The name of the type (family) of Modules managed by this interface, 'e.g.: Rotary_Encoder'.
+        type_name: The name of the Module type (family) managed by this interface, 'e.g.: Rotary_Encoder'.
         module_type: The byte id-code of the type (family) of Modules managed by this interface. This has to match the
             code used by the module implementation in AXMC. Note, valid byte-codes range from 1 to 255.
         module_id: The instance byte-code ID of the module. This is used to identify unique instances of the same
             module type, such as different rotary encoders if more than one is used concurrently. Note, valid
             byte-codes range from 1 to 255.
         module_notes: Additional notes or description of the module. This can be used to provide further information
-            about the interface module, such as the composition of its hardware or the location within broader
+            about the interface module, such as the composition of its hardware or the location within the broader
             experimental system. These notes will be instance-specific (unique given the module_type x module_id
             combination)!
+        process_data: A boolean flag that determines whether this module has additional logic to process
+            incoming data other than logging it (which is done for all received and sent data automatically). Use this
+            flag to optimize runtime performance by disabling unnecessary checks and runtimes for modules that do not
+            contain custom data processing logic. Note, regardless of this flag's value, you still need to implement the
+            process_data() abstract method, but it may not be called at all during runtime.
 
     Attributes:
         _module_type: Store the type (family) of the interfaced module.
@@ -52,224 +77,158 @@ class ModuleInterface:
         _type_name: Stores a string-name of the module_type code. This is used to make the controller identifiable to
             humans, the code will only use the module_type code during runtime.
         _module_notes: Stores additional notes about the module.
-        _custom_codes_map: A NestedDictionary that maps all custom status codes, command codes and data object layouts
-            to meaningful names and additional descriptions. This dictionary is merged into the main map dictionary that
-            aggregates the data for all microcontrollers used during runtime.
-        _status_section: The dictionary path for the module-type-specific custom status codes section. This path is used
-            when filling the custom_codes_map dictionary of the Module.
-        _command_section: Same as _status_section, but stores command code mappings.
-
     """
 
-    def __init__(self, type_name: str, module_type: np.uint8, module_id: np.uint8, module_notes: str | None = None):
-        # Packages module type and id arguments into class attributes. They will also be added to the map dictionary
-        # below, but keeping them as fields is helpful or faster value access (streamlines Controller-Module
-        # interactions during communication cycling).
+    def __init__(
+        self,
+        type_name: str,
+        module_type: np.uint8,
+        module_id: np.uint8,
+        module_notes: str | None = None,
+        *,
+        process_data: bool = False,
+    ) -> None:
+        # Transfers arguments to class attributes.
         self._module_type: np.uint8 = module_type
         self._module_id: np.uint8 = module_id
         self._type_name: str = type_name
-        self._module_notes: str = '' if module_notes is None else module_notes
-
-        # Precreates the custom_codes_map dictionary. This dictionary is filled by 'write' methods inherited from this
-        # class. This class is used to process logged data after data acquisition runtime ends.
-        self._custom_codes_map = NestedDictionary()
-
-        # Adds and seeds the status_codes section to reserve code 0.
-        self._status_section: str = f"{type_name}_module.status_codes"
-        section = f"{self._status_section}.kUndefined"
-        description = "This value is currently not used, but it statically reserves 0 as a non-valid status code."
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=0)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        # Adds and seeds the commands section to reserve code 0.
-        self._command_section: str = f"{type_name}_module.commands"
-        section = f"{self._command_section}.kUndefined"
-        description = "This value is currently not used, but it statically reserves 0 as a non-valid command code."
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=0)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.addressable", value=False)
-
-        self._data_object_section: str = f"{type_name}_module.data_objects"
-
-    def write_status_code(self, code_name: str, code: int, description: str, error: bool):
-        """Writes the provided status code information to the class code_map dictionary.
-
-        This method allows interactively filling the code_map dictionary of the class. When MicroControllerInterface
-        class initializes, it builds a dictionary that maps byte-codes used during communication to human-friendly
-        names and additional descriptive data. This step is crucial, as all incoming and outgoing data is logged as
-        serialized byte arrays for maximum throughput and parsed into more human-friendly formats offline. If the map
-        dictionary is not created properly, it may be challenging or even impossible to parse the logged data.
-
-        This method verifies that the input information is valid and, if so, creates and writes it as a new entry to the
-        appropriate section of the local code_map dictionary. When this class is passed to the MicroControllerInterface
-        class, it will extract and fuse the module-specific dictionary into the main runtime dictionary.
-
-        Args:
-            code_name: The meaningful name for the status represented by the code. It is advised to use the same names
-                as used in the Microcontroller library code, e.g.: 'kValveOpen'.
-            code: A value from 51 to 255 that represents the status in serial communication.
-            description: The string that stores the description of the status. Use this field to provide information
-                that may be relevant for future processing of the deserialized status data.
-            error: A boolean flag that determines whether this is an error or a non-error code. This is used to optimize
-                certain runtime aspects, such as 'online' error handling.
-        """
-        # If the input status code is not a valid byte-value, raises a ValueError
-        if 255 < code < 51:
-            message = (
-                f"Unsupported byte-code value {code} encountered when adding a new {code_name} status_code entry to "
-                f"the code map dictionary of {self._type_name} module. Valid custom status codes range from 51 to 255. "
-                f"Codes 0 through 50 are reserved for system use."
-            )
-            console.error(message=message, error=ValueError)
-
-        # Otherwise, writes the input
-        section = f"{self._status_section}.{code_name}"
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=code)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.error", value=error)
-
-    def write_command_code(self, code_name: str, code: int, description: str, addressable: bool):
-        """Writes the provided command code information to the class code_map dictionary.
-
-        Overall, this method serves a similar purpose as write_status_code() method, but is designed to create and
-        write command code data as a new entry to the appropriate section of the local code_map dictionary. Command
-        codes are used both when the controller sends data to the PC and when the PC requests the controller to do
-        something (execute a command).
-
-        Args:
-            code_name: The meaningful name for the command represented by the code. It is advised to use the same names
-                as used in the Microcontroller library code, e.g.: 'kSendPulse'.
-            code: A value from 1 to 255 that represents the command in serial communication.
-            description: The string that stores the description of the command. Use this field to provide information
-                that may be relevant for future processing of the deserialized command data.
-            addressable: A boolean flag that determines whether this command can be addressed (executed) from the PC
-                or not. Notably, some commands can only be executed by the microcontroller itself or as part of larger
-                command. This is most commonly seen for the AXMC Kernel class, where certain runtime-critical
-                commands are not addressable by design.
-        """
-        # If the input code is outside the 1 to 255 range, raises a ValueError
-        if 255 < code < 1:
-            message = (
-                f"Unsupported byte-code value {code} encountered when adding a new {code_name} command entry to "
-                f"the class map dictionary of {self._type_name} module. Valid custom command codes range from 1 to "
-                f"255. Code 0 is reserved for system use."
-            )
-            console.error(message=message, error=ValueError)
-
-        # Otherwise, writes the input
-        section = f"{self._status_section}.{code_name}"
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=code)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
-        self._custom_codes_map.write_nested_value(variable_path=f"{section}.addressable", value=addressable)
-
-    def write_data_map(self, command_code: int, event_code: int, prototype_code: int,
-                       prototype_field_names: tuple[int, ...], prototype_descriptions: tuple[str, ...]):
-
-        # Extracts the matching prototype object
-        prototype = _prototypes.get_prototype(code=prototype_code)
-
-        # If extraction method returns None, then the input prototype_code is not supported.
-        if prototype is None:
-            message = (
-                f"Invalid message_prototype {prototype_code} code encountered when adding a new data entry for "
-                f"event {event_code} and command {command_code} combination to the code map dictionary of the "
-                f"{self._type_name} module. Use one of the prototype codes available through the SerialPrototypes "
-                f"dataclass."
-            )
-            console.error(message=message, error=ValueError)
-
-        # Verifies that the length of prototype field names and descriptions tuples matches each other and the size of
-        # the prototype. Since all prototypes are numpy arrays or scalars, their element-size can always be inferred
-        # using the 'size' property.
-        if len(prototype_field_names) != len(prototype_descriptions) != prototype.size:
-            message = (
-                f"The length of the prototype_field_names argument ({len(prototype_field_names)}) has to match the "
-                f"length of the prototype_descriptions argument ({len(prototype_descriptions)}) and the length of the "
-                f"prototype object ({prototype.size}) when adding a new data entry for event {event_code} and "
-                f"command {command_code} combination to the code map dictionary of the {self._type_name} module."
-            )
-            console.error(message=message, error=ValueError)
-
-        # Otherwise, adds additional descriptions for the message data object to the appropriate dictionary section.
-
-        section = f"{self._data_object_section}.{command_code}_{event_code}_{prototype_code}"
-        for name, description in zip(prototype_field_names, prototype_descriptions):
-            self._custom_codes_map.write_nested_value(variable_path=f"{section}.{name}.description", value=description)
+        self._module_notes: str = "" if module_notes is None else module_notes
+        self._process_data: bool = process_data
 
     @abstractmethod
     def process_data(self, message: ModuleData | ModuleState):
-        raise NotImplementedError("process_data must be implemented by subclass")
+        """Contains the additional processing logic for incoming State and Data messages.
 
+        This method allows providing custom data-handling logic for some or all State and Data messages sent by the
+        Module to the PC. Note, this method should NOT contain data logging, as all incoming and outgoing messages are
+        automatically logged. Instead, it should contain specific data-driven actions, e.g.: Sending a command to Unity
+        if the Module transmits a certain state code.
 
-class EncoderModule(ModuleInterface):
-    def __init__(self, module_type: np.uint8, module_id: np.uint8):
-        # Call parent's __init__ first
-        super().__init__(type_name="Encoder", module_type=module_type, module_id=module_id)
+        Notes:
+            This method should contain a sequence of if-else statements that filter and execute the necessary logic
+            depending on the command and codes of the message and, for data messages, specific data object values.
+            See one of the default module interface implementations for details on how to write this method.
+        """
+        # While abstract method should prompt the user to implement this method, the default error-condition is also
+        # included for additional safety.
+        raise NotImplementedError(
+            f"process_data method for {self._type_name} Module must be implemented when subclassing the base "
+            f"ModuleInterface."
+        )
 
-        # Yes.
+    @abstractmethod
+    def write_code_map(self, code_map: NestedDictionary) -> NestedDictionary:
+        """Writes custom module status, command, and object data information to the provided code_map dictionary.
 
-    def process_data(self, message: ModuleData | ModuleState):
-        pass
+        This method is called by the MicroControllerInterface that manages the Module to fill the shared code_map
+        dictionary with module-specific data. This maps number-codes used during serialized communication to represent
+        commands, events, and additional data objects to human-readable names and descriptions. In turn, this
+        information is used to transform logged data, which is stored as serialized byte-strings, into a format more
+        suitable for data analysis and long-term storage.
+
+        Notes:
+            See MicroControllerInterface class for examples on how to write this method (and fill the code_map
+            dictionary). Note, if this method is not implemented properly, it may be challenging to decode the logged
+            data in the future.
+
+            This method should fill all relevant module-type sections: commands, status_codes, and object_data.
+            This method will only be called once for each unique module_type.
+        """
+        raise NotImplementedError(
+            f"write_code_map method for {self._type_name} Module must be implemented when subclassing the base "
+            f"ModuleInterface."
+        )
+
+    @property
+    def module_type(self) -> np.uint8:
+        """Returns the module's type (family) byte-code."""
+        return self._module_type
+
+    @property
+    def type_name(self) -> str:
+        """Returns the module's type (family) human-readable name."""
+        return self._type_name
+
+    @property
+    def module_id(self) -> np.uint8:
+        """Returns the module's ID byte-code (instance-specific identifier code)."""
+        return self._module_id
+
+    @property
+    def module_notes(self) -> str:
+        """Returns additional notes for the specific module instance (unique for each module_id and module_type
+        combination)."""
+        return self._module_notes
 
 
 class MicroControllerInterface:
 
     def __init__(
-            self,
-            name: str,
-            usb_port: str,
-            baudrate: int,
-            maximum_transmitted_payload_size: int,
-            id_code: int,
-            modules: tuple[ModuleInterface, ...],
+        self,
+        name: str,
+        controller_id: int,
+        controller_description: str,
+        usb_port: str,
+        baudrate: int,
+        maximum_transmitted_payload_size: int,
+        logger_queue: MPQueue,
+        logger_source_id: int,
+        modules: tuple[ModuleInterface, ...],
     ):
+        # Saves controller id information to class attributes
         self._name: str = name
+        self._controller_id: int = controller_id
 
+        # Also saves Module tuple into class attribute
         self._modules = modules
+
+        # Also stores the information to connect to the controller via the USB / UART interface
+        self._usb_port: str = usb_port
+        self._baudrate: int = baudrate
+        self._maximum_transmitted_payload_size: int = maximum_transmitted_payload_size
+
+        # Also saves the Logger queue reference and the static source ID code assigned to the microcontroller at
+        # initialization
+        self._logger_queue: MPQueue = logger_queue
+        self._logger_source_id: int = logger_source_id
 
         # Sets up the multiprocessing Queue, which is used to buffer and pipe commands and parameters to be sent to the
         # microcontroller to the communication runtime method running on the isolated core (in a daemon Process).
         self._mp_manager: SyncManager = multiprocessing.Manager()
         self._transmission_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
 
-        # Also creates a Queue that is used to transfer the data to be logged to the Logger class. All logged data
-        # will be queued in the form of byte numpy arrays.
-        self._logger_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
+        # Initializes the PrecisionTimer class which is used to time-stamp logged data.
+        self._timer = PrecisionTimer(precision="us")
 
-        # Instantiates an array that is used to terminate and adjust the communication runtime method. Like the Queue
-        # object from above, this is a shared object that allows sharing data between isolated Processes (cores). Unlike
-        # Queue, this object is a shared-buffer numpy array, which makes it uniquely adapted for communicating
-        # runtime state-flags.
+        # Instantiates the shared array used to bidirectionally communicate with the runtime of the daemon process.
+        # This array acts in parallel with the command / parameters Queue and offers a better way of communicating the
+        # runtime data between the main process that controls the experiment and the daemon process running the
+        # microcontroller interface.
         self._terminator_array: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._name}_terminator_array",  # Uses class name to ensure the array buffer name is unique
-            prototype=np.array([0, 0], dtype=np.uint8),
+            prototype=np.zeros(shape=1, dtype=np.uint8),
         )  # Instantiation automatically connects the main process to the array.
 
-        # Sets up the communication process. This process continuously cycles through the communication loop until
-        # terminated, enabling bidirectional communication with the controller.
-        self._communication_loop: Process = Process(
-            target=self.runtime_cycle,
-            args=(self.transmission_queue, self._terminator_array, id_code, usb_port, baudrate,
-                  maximum_transmitted_payload_size),
-            daemon=True,
+        # Pre-packages Kernel commands into attributes. Since Kernel commands are known and fixed at compilation,
+        # they only need to be defined once.
+        self._reset_command = KernelCommand(
+            command=np.uint8(2),
+            return_code=np.uint8(0),
         )
-
-        # Pre-packages Kernel commands to improve their runtime speed
         self._identify_command = KernelCommand(
             command=np.uint8(3),
             return_code=np.uint8(0),
         )
 
-        self._reset_command = KernelCommand(
-            command=self._identify_command_code,
-            return_code=np.uint8(0),
+        # Sets up the communication process. This process continuously cycles through the communication loop until
+        # terminated, enabling bidirectional communication with the controller.
+        self._communication_process: Process = Process(
+            target=self.runtime_cycle,
+            args=(self,),
+            daemon=True,
         )
 
-        self._communication.send_message(identify_command)
-
-    @staticmethod
-    def build_core_code_map() -> NestedDictionary:
+    def build_core_code_map(self) -> NestedDictionary:
         # Pre-initializes with a seed dictionary that includes the purpose (description) of the dictionary file
         message = (
             "This dictionary maps byte-values used by the Core classes that manage microcontroller runtime to "
@@ -281,44 +240,57 @@ class MicroControllerInterface:
         )
         code_dictionary = NestedDictionary(seed_dictionary={"description": message})
 
-        # Kernel: module type
-        # Since this is a very small section, does not wrap the code into a function.
-        code_dictionary.write_nested_value(variable_path="kernel.module_type.code", value=1)
-        message = "The byte-code that identifies messages sent by or to the Kernel module of the MicroController."
-        code_dictionary.write_nested_value(variable_path="kernel.module_type.description", value=message)
-
         # Kernel: status codes
-        # Uses a function for better code readability. This is done for most other sections.
-        code_dictionary = MicroController._write_kernel_status_codes(code_dictionary)
+        code_dictionary = self._write_kernel_status_codes(code_dictionary)
 
         # Kernel: command codes
-        code_dictionary = MicroController._write_kernel_command_codes(code_dictionary)
+        code_dictionary = self._write_kernel_command_codes(code_dictionary)
 
         # Module: core status codes.
         # Note, primarily, modules use custom status and command codes for each module family. These are available from
         # custom_codes_map dictionary. This section specifically tracks the 'core' codes inherited from the base Module
         # class.
-        code_dictionary = MicroController._write_base_module_status_codes(code_dictionary)
+        code_dictionary = self._write_base_module_status_codes(code_dictionary)
 
         # Communication: status codes
-        code_dictionary = MicroController._write_communication_status_codes(code_dictionary)
+        code_dictionary = self._write_communication_status_codes(code_dictionary)
 
         # TransportLayer: status codes
         # This and the following sections track codes from classes wrapped by the Communication class. Due to the
         # importance of the communication library, we track all status codes that are (theoretically) relevant for
         # communication.
-        code_dictionary = MicroController._write_transport_layer_status_codes(code_dictionary)
+        code_dictionary = self._write_transport_layer_status_codes(code_dictionary)
 
         # COBS: (Consistent Over Byte Stuffing) status codes
-        code_dictionary = MicroController._write_cobs_status_codes(code_dictionary)
+        code_dictionary = self._write_cobs_status_codes(code_dictionary)
 
         # CRC: (Cyclic Redundancy Check) status codes
-        code_dictionary = MicroController._write_crc_status_codes(code_dictionary)
+        code_dictionary = self._write_crc_status_codes(code_dictionary)
+
+        # Generates and appends custom module information to the dictionary
+        added_modules = set()  # This is used to ensure custom information is added once per type
+        for module in self._modules:
+            if module.module_type in added_modules:
+                code_dictionary.write_nested_value(
+                    variable_path=f"{module.type_name}_module.id.{module.module_id}", value=module.module_notes
+                )
+                continue
+
+            added_modules.add(module.module_type)
+
+            code_dictionary.write_nested_value(variable_path=f"{module.type_name}_module", value=module.code_map)
+
+            code_dictionary.write_nested_value(
+                variable_path=f"{module.type_name}_module.code.id", value=module.module_type
+            )
+            code_dictionary.write_nested_value(
+                variable_path=f"{module.type_name}_module.id.{module.module_id}", value=module.module_notes
+            )
 
         return code_dictionary
 
-    @staticmethod
-    def _write_kernel_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    @classmethod
+    def _write_kernel_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the kernel.status_codes section of the core_codes_map dictionary with data.
 
         The Kernel class manages the microcontroller runtime and encapsulates access to custom Module classes that
@@ -337,7 +309,7 @@ class MicroControllerInterface:
         """
         section = "kernel.status_codes.kStandBy"
         description = "This value is currently not used, but it statically reserves 0 as a non-valid status code."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=0)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(0))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -346,7 +318,7 @@ class MicroControllerInterface:
             "The microcontroller hardware (e.g.: pin modes) and software (e.g.: custom parameter structures) was "
             "successfully (re)set to hardcoded defaults."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=1)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(1))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -355,7 +327,7 @@ class MicroControllerInterface:
             "The microcontroller was not able to (re)set its hardware and software due to one of the managed custom "
             "modules failing its' setup method runtime."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(2))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -364,7 +336,7 @@ class MicroControllerInterface:
             "The Kernel failed to parse the data sent from the PC. This can be due to a number of errors, including "
             "corruption of data in transmission and unsupported incoming message format."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(3))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -373,7 +345,7 @@ class MicroControllerInterface:
             "The Kernel failed to send a DataMessage to the PC due to an underlying Communication or TransportLayer "
             "class failure."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=4)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(4))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -382,7 +354,7 @@ class MicroControllerInterface:
             "The Kernel failed to send a StateMessage to the PC due to an underlying Communication or "
             "TransportLayer class failure."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=5)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(5))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -391,7 +363,7 @@ class MicroControllerInterface:
             "The Kernel failed to send a Service message to the PC due to an underlying Communication or "
             "TransportLayer class failure."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=6)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(6))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -402,7 +374,7 @@ class MicroControllerInterface:
             "parse the rest of the payload. This error typically indicates a mismatch between the PC and "
             "Microcontroller codebase versions or data corruption errors."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=7)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(7))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -411,7 +383,7 @@ class MicroControllerInterface:
             "New parameter-values addressed to the Kernel (controller-wide DynamicRuntimeParameters) were received and "
             "applied successfully."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=8)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(8))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -420,7 +392,7 @@ class MicroControllerInterface:
             "New parameter-values addressed to the custom (user-defined) Module class instance were received and "
             "applied successfully."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=9)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(9))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -430,7 +402,7 @@ class MicroControllerInterface:
             "that interferes with parameter data extraction, but can also be due to a different, module-class-specific "
             "error."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=10)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(10))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -439,7 +411,7 @@ class MicroControllerInterface:
             "The Kernel has received an unknown command code from the PC. Usually, this indicates data corruption or a "
             "mismatch between the PC and Microcontroller codebase versions."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=11)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(11))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -449,14 +421,14 @@ class MicroControllerInterface:
             "and module_id fields of the message did not match any of the custom Modules. Usually, this indicates a "
             "malformed message (user-error)."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=12)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(12))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
 
-    @staticmethod
-    def _write_kernel_command_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    @classmethod
+    def _write_kernel_command_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the kernel.commands section of the core_codes_map dictionary with data.
 
         The Kernel class manages the microcontroller runtime and encapsulates access to custom Module classes that
@@ -474,7 +446,7 @@ class MicroControllerInterface:
         """
         section = "kernel.commands.kStandby"
         description = "Standby code used during class initialization."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=0)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(0))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=False)
 
@@ -484,7 +456,7 @@ class MicroControllerInterface:
             "automatically triggered at the beginning of each controller runtime cycle. Note, this command "
             "is always triggered before running any queued or newly received module commands."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=1)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(1))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=False)
 
@@ -496,7 +468,7 @@ class MicroControllerInterface:
             "flashes the LED indicator. The controller firmware has to be reset to escape that mode (this is an "
             "intentional safety-promoting design choice)."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(2))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=True)
 
@@ -505,14 +477,80 @@ class MicroControllerInterface:
             "Transmits the unique ID of the controller that was hardcoded in the microcode firmware version running on "
             "the microcontroller. This command is used to verify the identity of the connected controller from the PC."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(3))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=True)
 
         return code_dictionary
 
-    @staticmethod
-    def _write_base_module_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    @classmethod
+    def _write_kernel_object_data(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
+        """Fills the kernel.object_data section of the core_codes_map dictionary with data.
+
+        This section is used to provide additional information about the values of the data objects used by KernelData
+        messages. These objects usually have a different interpretation depending on the event-code of the message they
+        are sent with.
+
+        Args:
+            code_dictionary: The dictionary to be filled with kernel object data.
+
+        Returns:
+            The updated dictionary with kernel object data information filled.
+        """
+
+        section = "kernel.data_objects.kModuleSetupErrorObject"
+        description_1 = "The type-code of the module that failed its setup sequence."
+        description_2 = "The id-code of the module that failed its setup sequence."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(2))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.names", value=("module_type", "module_id"))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
+        section = "kernel.data_objects.kInvalidMessageProtocolObject"
+        description_1 = "The invalid protocol byte-code value that was received by the Kernel."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(7))
+        code_dictionary.write_nested_value(variable_path=f"{section}.prototype_code", value=prototypes.kOneUnsignedByte)
+        code_dictionary.write_nested_value(variable_path=f"{section}.names", value=("protocol_code",))
+        code_dictionary.write_nested_value(variable_path=f"{section}.descriptions", value=(description_1,))
+
+        section = "kernel.data_objects.kModuleParametersErrorObject"
+        description_1 = (
+            "The type-code of the module that failed to extract and apply its parameter data from received message."
+        )
+        description_2 = (
+            "The id-code of the module that failed to extract and apply its parameter data from received message."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(10))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.names", value=("module_type", "module_id"))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
+        section = "kernel.data_objects.kTargetModuleNotFoundObject"
+        description_1 = (
+            "The type-code of the addressed module transmitted by the message whose addressee was not found."
+        )
+        description_2 = "The id-code of the addressed module transmitted by the message whose addressee was not found."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(12))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.names", value=("target_type", "target_id"))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
+        return code_dictionary
+
+    @classmethod
+    def _write_base_module_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the module.status_codes section of the core_codes_map dictionary with data.
 
         Module classes directly control the hardware connected to the microcontroller. Their status and command codes
@@ -532,7 +570,7 @@ class MicroControllerInterface:
         """
         section = "module.status_codes.kStandBy"
         description = "The value used to initialize the class status tracker."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=0)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(0))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -541,7 +579,7 @@ class MicroControllerInterface:
             "The Module failed to send a DataMessage to the PC. Usually, this indicates that the chosen data payload "
             "format is not valid."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=1)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(1))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -551,7 +589,7 @@ class MicroControllerInterface:
             "they are used in cases where data objects do not need to be included with event-codes. State messages "
             "allow optimizing data transmission by avoiding costly data-object-related logic and buffering."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(2))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -560,7 +598,7 @@ class MicroControllerInterface:
             "Indicates that the active command of the module has been completed. This status is reported whenever a "
             "command is replaced by a new command or is terminated with no further queued or recurring commands."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(3))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -569,14 +607,14 @@ class MicroControllerInterface:
             "This error-code indicates that a queued command was not recognized by the RunActiveCommand() method "
             "of the target module and, consequently, was not executed."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=4)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(4))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
 
-    @staticmethod
-    def _write_cobs_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    @classmethod
+    def _write_cobs_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the cobs.status_codes section of the core_codes_map dictionary with data.
 
         COBS (Consistent Overhead Byte Stuffing) is used during data transmission and reception to encode payloads into
@@ -595,7 +633,7 @@ class MicroControllerInterface:
         """
         section = "cobs.status_codes.kStandby"
         description = "The value used to initialize the class status tracker."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=11)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(11))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -604,7 +642,7 @@ class MicroControllerInterface:
             "Failed to encode payload because payload size is too small. Valid payloads have to include at least 1 "
             "data byte."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=12)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(12))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -613,7 +651,7 @@ class MicroControllerInterface:
             "Failed to encode payload because payload size is too large. Valid payloads can be at most 254 bytes in "
             "length to comply with COBS protocol limitations."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=13)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(13))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -622,7 +660,7 @@ class MicroControllerInterface:
             "Failed to pack the encoded payload packet into the storage buffer, as the buffer does not have enough "
             "space to accommodate the encoded payload."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=14)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(14))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -631,13 +669,13 @@ class MicroControllerInterface:
             "Failed to encode the payload, as it appears to be already encoded. This is inferred from the overhead "
             "byte placeholder in the buffer array being set to a non-0 value."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=15)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(15))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "cobs.status_codes.kPayloadEncoded"
         description = "Payload was successfully encoded into a transmittable packet using COBS protocol."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=16)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(16))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -646,7 +684,7 @@ class MicroControllerInterface:
             "Failed to decode the payload out of a COBS-encoded packet, because packet size is too small. The valid "
             "minimal packet size is 3 bytes (Overhead, 1 data byte, delimiter byte)."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=17)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(17))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -656,7 +694,7 @@ class MicroControllerInterface:
             "supported packet size is 256 bytes (Overhead, 254 payload bytes, delimiter byte). This limitation is due "
             "to the COBS protocol's limitation on the maximum encoded payload size."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=18)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(18))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -668,7 +706,7 @@ class MicroControllerInterface:
             "a case where the buffer size is not allocated properly, leading to the microcontroller running out of "
             "space when decoding a large COBS-encoded packet."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=19)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(19))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -678,7 +716,7 @@ class MicroControllerInterface:
             "unencoded delimiter value. If this expectation is violated, this likely indicates that the data was "
             "corrupted during transmission (and the CRC check failed to detect that)."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=20)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(20))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -689,7 +727,7 @@ class MicroControllerInterface:
             "this likely indicates that the data was corrupted during transmission or the two communicating systems "
             "are using different delimiter byte values."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=21)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(21))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -699,20 +737,20 @@ class MicroControllerInterface:
             "byte placeholder in the buffer array being set to a 0 value. An overhead byte for the valid packet has to "
             "be a value between 1 and 255."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=22)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(22))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "cobs.status_codes.kPayloadDecoded"
         description = "Payload was successfully decoded from the received COBS-encoded packet."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=23)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(23))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         return code_dictionary
 
-    @staticmethod
-    def _write_crc_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    @classmethod
+    def _write_crc_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the crc.status_codes section of the core_codes_map dictionary with data.
 
         CRC (Cyclic Redundancy Check) is used during data transmission and reception to verify the integrity of the
@@ -732,7 +770,7 @@ class MicroControllerInterface:
         """
         section = "crc.status_codes.kStandby"
         description = "The value used to initialize the class status tracker."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=51)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(51))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -742,13 +780,13 @@ class MicroControllerInterface:
             "Specifically, the buffer used for CRC calculation has to be at least 3 bytes in size, consistent with the "
             "valid minimum size of the COBS-encoded packet."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=52)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(52))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "crc.status_codes.kCRCChecksumCalculated"
         description = "CRC checksum for the COBS-encoded packet was successfully calculated."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=53)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(53))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -758,13 +796,13 @@ class MicroControllerInterface:
             "uses the same static buffer for all data transmission operations, it is possible that the buffer was not "
             "allocated properly, leading to the microcontroller running out of space when appending the checksum."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=54)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(54))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "crc.status_codes.kCRCChecksumAddedToBuffer"
         description = "Calculated CRC checksum was successfully added to the packet buffer."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=55)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(55))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -775,20 +813,20 @@ class MicroControllerInterface:
             "32-bit CRC, while the microcontroller uses a 16-bit CRC, this error could occur due to static "
             "microcontroller buffer size allocation."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=56)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(56))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "crc.status_codes.kCRCChecksumReadFromBuffer"
         description = "CRC checksum transmitted with the packet was successfully read from the shared buffer."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=57)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(57))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         return code_dictionary
 
-    @staticmethod
-    def _write_transport_layer_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    @classmethod
+    def _write_transport_layer_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the transport_layer.status_codes section of the core_codes_map dictionary with data.
 
         Transport Layer class carries out the necessary low-level transformations to send and receive data over the
@@ -806,19 +844,19 @@ class MicroControllerInterface:
         """
         section = "transport_layer.status_codes.kStandby"
         description = "The value used to initialize the class status tracker."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=101)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(101))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "transport_layer.status_codes.kPacketConstructed"
         description = "The serialized data packet to be sent to the PC was successfully constructed."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=102)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(102))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "transport_layer.status_codes.kPacketSent"
         description = "The serialized data packet was successfully sent to the PC."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=103)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(103))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -827,7 +865,7 @@ class MicroControllerInterface:
             "Found the start byte of the incoming packet when parsing received serialized data. This "
             "indicates that the processed serial stream contains a valid data packet to be parsed."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=104)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(104))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -838,7 +876,7 @@ class MicroControllerInterface:
             "found. If this value is not found, this indicates that either no data was received, or that a "
             "communication error has occurred."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=105)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(105))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -847,7 +885,7 @@ class MicroControllerInterface:
             "Found the payload size byte of the incoming packet when parsing received serialized data. This byte "
             "is used to determine the size of the incoming packet, which is needed dot correctly parse the packet."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=106)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(106))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -857,7 +895,7 @@ class MicroControllerInterface:
             "this information is needed to correctly parse the packet (it is used to verify packet integrity), without "
             "this information, the packet parsing cannot be completed."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=107)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(107))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -867,7 +905,7 @@ class MicroControllerInterface:
             "upper limit is due to COBS specifications). Encountering a payload size value of 255 or 0 would, "
             "therefore, trigger this error."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=108)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(108))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -878,7 +916,7 @@ class MicroControllerInterface:
             "time to receive the missing bytes. If these bytes do not arrive in time, this error is triggered. This "
             "error specifically applies to parsing the payload of the packet."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=109)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(109))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -888,13 +926,13 @@ class MicroControllerInterface:
             "contain packet data (were noise-generated). This is a non-error status used to communicate that there "
             "was no packet data to process."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=110)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(110))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "transport_layer.status_codes.kPacketParsed"
         description = "Packet was successfully parsed from the received serial bytes stream."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=111)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(111))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -904,7 +942,7 @@ class MicroControllerInterface:
             "transmission. Alternatively, this can suggest that the PC and microcontroller use non-matching CRC "
             "parameters."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=112)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(112))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -913,7 +951,7 @@ class MicroControllerInterface:
             "The parsed packet's integrity was validated by passing a CRC check. The packet was not corrupted during "
             "transmission."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=113)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(113))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -922,7 +960,7 @@ class MicroControllerInterface:
             "The packet sent from the PC was successfully received, parsed and validated and is ready for payload "
             "decoding."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=114)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(114))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -932,7 +970,7 @@ class MicroControllerInterface:
             "objects (data) to be sent to the PC into a shared bytes buffer. If the provided object is too large to "
             "fit into the available buffer space, this error is triggered."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=115)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(115))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -941,7 +979,7 @@ class MicroControllerInterface:
             "The object (data) to be sent to the PC has been successfully serialized (written) into the message "
             "payload buffer."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=116)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(116))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -952,7 +990,7 @@ class MicroControllerInterface:
             "provided 'prototypes' or 'containers' to infer the data format. If the container requests more data than "
             "available from the parsed message buffer, this error is triggered."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=117)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(117))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -961,7 +999,7 @@ class MicroControllerInterface:
             "The object (data) received from the PC has been successfully deserialized (read) from the parsed message "
             "payload buffer."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=118)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(118))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -972,7 +1010,7 @@ class MicroControllerInterface:
             "that the packet endswith a delimiter. If this expectation is violated, this error is triggered to "
             "indicate potential data corruption."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=119)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(119))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -981,7 +1019,7 @@ class MicroControllerInterface:
             "The delimiter byte value that is expected to be found at the end of the incoming packet is found before "
             "reaching teh end of the packet. This indicates data corruption."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=120)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(120))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -992,14 +1030,14 @@ class MicroControllerInterface:
             "time to receive the missing bytes. If these bytes do not arrive in time, this error is triggered. This "
             "error specifically applies to parsing the CRC postamble of the packet."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=121)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(121))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
 
-    @staticmethod
-    def _write_communication_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    @classmethod
+    def _write_communication_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the communication.status_codes section of the core_codes_map dictionary with data.
 
         Communication class wraps TransportLayer and provides a high-level API interface for communicating between
@@ -1018,19 +1056,19 @@ class MicroControllerInterface:
         """
         section = "communication.status_codes.kStandby"
         description = "Standby placeholder used to initialize the Communication class status tracker."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=151)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(151))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "communication.status_codes.kReceptionError"
         description = "Communication class ran into an error when attempting to receive a message from the PC."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=152)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(152))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "communication.status_codes.kParsingError"
         description = "Communication class ran into an error when parsing (decoding) a message received from the PC."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=153)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(153))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -1039,25 +1077,25 @@ class MicroControllerInterface:
             "Communication class ran into an error when writing (serializing) the message data into the transmission "
             "payload buffer."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=154)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(154))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "communication.status_codes.kTransmissionError"
         description = "Communication class ran into an error when transmitting (sending) a message to the PC."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=155)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(155))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "communication.status_codes.kMessageSent"
         description = "Communication class successfully transmitted a message to the PC."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=156)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(156))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "communication.status_codes.kMessageReceived"
         description = "Communication class successfully received a message from the PC."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=157)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(157))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -1071,7 +1109,7 @@ class MicroControllerInterface:
             "service messages. Sending State and Data messages is also possible, but those structures are hardcoded to "
             "always be correct on the microcontroller's side."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=158)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(158))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -1081,7 +1119,7 @@ class MicroControllerInterface:
             "higher-end microcontrollers will spend a sizeable chunk of their runtime with no communication data to "
             "process."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=159)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(159))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -1097,7 +1135,7 @@ class MicroControllerInterface:
             "sent in the message were not intended for the allegedly targeted module (due to inferred parameter "
             "structure mismatch)."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=160)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(160))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -1105,7 +1143,7 @@ class MicroControllerInterface:
         description = (
             "Module parameter data has been successfully extracted and written into the module's parameter structure."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=161)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(161))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
@@ -1118,27 +1156,71 @@ class MicroControllerInterface:
             "parameters have to be extracted by the addressed module before the Communication is instructed to receive "
             "a new message. Otherwise, the unprocessed parameter data will be lost."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=162)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(162))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
 
     @staticmethod
-    def runtime_cycle(command_queue: MPQueue, terminator_array: SharedMemoryArray, controller_id: int,
-                      usb_port: name, baudrate: int, maximum_transmitted_payload_size: int) -> None:
+    def runtime_cycle(
+        interface: "MicroControllerInterface",
+    ) -> None:
         # Initializes the communication class. It is critical that this is done inside the method running in an
         # isolated process.
-        communication = SerialCommunication(usb_port=usb_port, baudrate=baudrate,
-                                            maximum_transmitted_payload_size=maximum_transmitted_payload_size)
-        terminator_array.connect()
+        communication = SerialCommunication(
+            usb_port=interface._usb_port,
+            baudrate=interface._baudrate,
+            maximum_transmitted_payload_size=interface._maximum_transmitted_payload_size,
+        )
+        interface._terminator_array.connect()
 
         while True:
-            out_data = command_queue.get()
-            communication.send_message(out_data)
 
-            if terminator_array.read_data(index=0, convert_output=True):
-                break  # Terminates the loop
+            try:
+                while True:
+                    out_data: (
+                        RepeatedModuleCommand
+                        | OneOffModuleCommand
+                        | DequeueModuleCommand
+                        | KernelCommand
+                        | ModuleParameters
+                        | KernelParameters
+                    ) = interface._transmission_queue.get_nowait()
+
+                    # TODO send packed data to the logger
+
+                    communication.send_message(out_data)
+
+            except Empty:
+                pass
+
+            # Attempts to receive the data from the microcontroller
+            in_data = communication.receive_message()
+            while in_data is not None:
+
+                # TODO Send the input data payload to logger
+
+                # Resolve additional processing steps associated with incoming data
+                if isinstance(in_data, KernelState):
+                    pass
+                elif isinstance(in_data, KernelData):
+                    pass
+                elif isinstance(in_data, ModuleState):
+                    pass
+                elif isinstance(in_data, ModuleData):
+                    pass
+                elif isinstance(in_data, ReceptionCode):
+                    pass
+                elif isinstance(in_data, Identification):
+                    pass
+
+            # If the first element of the terminator array is true (>0), ends the communication loop.
+            if interface._terminator_array.read_data(index=0, convert_output=True):
+                break  # Terminates the loop if instructed to do so
 
     def identify_controller(self):
-        self.transmission_queue.put(self._identify_command)
+        self._transmission_queue.put(self._identify_command)
+
+    def reset_controller(self):
+        self._transmission_queue.put(self._reset_command)
