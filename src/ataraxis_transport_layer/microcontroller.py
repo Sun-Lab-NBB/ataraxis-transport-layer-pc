@@ -1,124 +1,275 @@
+from abc import abstractmethod
 import multiprocessing
 from multiprocessing import (
     Queue as MPQueue,
     Process,
 )
 from multiprocessing.managers import SyncManager
-
 import numpy as np
 from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
-
-from .communication import (
-    SerialCommunication,
-)
+from ataraxis_base_utilities import console
+from .communication import ModuleData, ModuleState, KernelCommand, SerialCommunication, _prototypes
 
 
-class Module:
+class ModuleInterface:
+    """The base class from which all custom ModuleInterface classes should inherit.
 
-    def __init__(self, module_type: np.uint8, module_id: np.uint8, custom_command_map: dict):
+    Interface classes encapsulates module-specific parameters and data handling methods which are used by the
+    MicrocontrollerInterface class to communicate with individual hardware modules. Overall, this arrangement is similar
+    to how custom modules inherit from the (base) Module class in the AtaraxisMicroController library.
+
+    Interface classes loosely follow the structure of the AtaraxisMicroController (AXMC) library and allow the PC to
+    receive and process data from the microcontrollers. Due to a high degree of custom module variability, it is
+    currently not possible to provide a 'one-fits-all' Module interface that is also highly efficient for real time
+    communication. Therefore, similar to AXMC library, the interface for each custom module has to be implemented
+    separately on a need-base method. The (base) class exposes the static API that MicroControllerInterface class can
+    use to integrate each custom interface implementation with the general communication runtime cycle.
+
+    To make this integration possible, this class declares a number of abstract (pure virtual) methods that developers
+    have to implement for their interfaces. Follow the implementation guidelines in the docstrings and check the
+    default modules included with the library distribution for guidance.
+
+    Notes:
+        When inheriting from this class, remember to call the parent's init method in the child class init method by
+        using 'super().__init__()'! if this is not done, the MicrocontrollerInterface class will likely not be able to
+        properly interact with your ModuleInterface!
+
+    Args:
+        type_name: The name of the type (family) of Modules managed by this interface, 'e.g.: Rotary_Encoder'.
+        module_type: The byte id-code of the type (family) of Modules managed by this interface. This has to match the
+            code used by the module implementation in AXMC. Note, valid byte-codes range from 1 to 255.
+        module_id: The instance byte-code ID of the module. This is used to identify unique instances of the same
+            module type, such as different rotary encoders if more than one is used concurrently. Note, valid
+            byte-codes range from 1 to 255.
+        module_notes: Additional notes or description of the module. This can be used to provide further information
+            about the interface module, such as the composition of its hardware or the location within broader
+            experimental system. These notes will be instance-specific (unique given the module_type x module_id
+            combination)!
+
+    Attributes:
+        _module_type: Store the type (family) of the interfaced module.
+        _module_id: Stores specific id of the interfaced module within the broader type (family).
+        _type_name: Stores a string-name of the module_type code. This is used to make the controller identifiable to
+            humans, the code will only use the module_type code during runtime.
+        _module_notes: Stores additional notes about the module.
+        _custom_codes_map: A NestedDictionary that maps all custom status codes, command codes and data object layouts
+            to meaningful names and additional descriptions. This dictionary is merged into the main map dictionary that
+            aggregates the data for all microcontrollers used during runtime.
+        _status_section: The dictionary path for the module-type-specific custom status codes section. This path is used
+            when filling the custom_codes_map dictionary of the Module.
+        _command_section: Same as _status_section, but stores command code mappings.
+
+    """
+
+    def __init__(self, type_name: str, module_type: np.uint8, module_id: np.uint8, module_notes: str | None = None):
+        # Packages module type and id arguments into class attributes. They will also be added to the map dictionary
+        # below, but keeping them as fields is helpful or faster value access (streamlines Controller-Module
+        # interactions during communication cycling).
         self._module_type: np.uint8 = module_type
         self._module_id: np.uint8 = module_id
-        self._commands: dict = {}
-        self._status_codes: dict = {}
-        self._prototypes: dict = {}
-        self._unity_channels_map: dict = {}
+        self._type_name: str = type_name
+        self._module_notes: str = '' if module_notes is None else module_notes
 
-    def make_command(
-            self,
-            command_code: np.uint8,
-            return_code: np.uint8 = 0,
-            noblock: np.bool = True,
-            cycle: np.bool = False,
-            cycle_delay: np.uint32 = 0,
-    ) -> None:
+        # Precreates the custom_codes_map dictionary. This dictionary is filled by 'write' methods inherited from this
+        # class. This class is used to process logged data after data acquisition runtime ends.
+        self._custom_codes_map = NestedDictionary()
+
+        # Adds and seeds the status_codes section to reserve code 0.
+        self._status_section: str = f"{type_name}_module.status_codes"
+        section = f"{self._status_section}.kUndefined"
+        description = "This value is currently not used, but it statically reserves 0 as a non-valid status code."
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=0)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.error", value=False)
+
+        # Adds and seeds the commands section to reserve code 0.
+        self._command_section: str = f"{type_name}_module.commands"
+        section = f"{self._command_section}.kUndefined"
+        description = "This value is currently not used, but it statically reserves 0 as a non-valid command code."
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=0)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.addressable", value=False)
+
+        self._data_object_section: str = f"{type_name}_module.data_objects"
+
+    def write_status_code(self, code_name: str, code: int, description: str, error: bool):
+        """Writes the provided status code information to the class code_map dictionary.
+
+        This method allows interactively filling the code_map dictionary of the class. When MicroControllerInterface
+        class initializes, it builds a dictionary that maps byte-codes used during communication to human-friendly
+        names and additional descriptive data. This step is crucial, as all incoming and outgoing data is logged as
+        serialized byte arrays for maximum throughput and parsed into more human-friendly formats offline. If the map
+        dictionary is not created properly, it may be challenging or even impossible to parse the logged data.
+
+        This method verifies that the input information is valid and, if so, creates and writes it as a new entry to the
+        appropriate section of the local code_map dictionary. When this class is passed to the MicroControllerInterface
+        class, it will extract and fuse the module-specific dictionary into the main runtime dictionary.
+
+        Args:
+            code_name: The meaningful name for the status represented by the code. It is advised to use the same names
+                as used in the Microcontroller library code, e.g.: 'kValveOpen'.
+            code: A value from 51 to 255 that represents the status in serial communication.
+            description: The string that stores the description of the status. Use this field to provide information
+                that may be relevant for future processing of the deserialized status data.
+            error: A boolean flag that determines whether this is an error or a non-error code. This is used to optimize
+                certain runtime aspects, such as 'online' error handling.
+        """
+        # If the input status code is not a valid byte-value, raises a ValueError
+        if 255 < code < 51:
+            message = (
+                f"Unsupported byte-code value {code} encountered when adding a new {code_name} status_code entry to "
+                f"the code map dictionary of {self._type_name} module. Valid custom status codes range from 51 to 255. "
+                f"Codes 0 through 50 are reserved for system use."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Otherwise, writes the input
+        section = f"{self._status_section}.{code_name}"
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=code)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.error", value=error)
+
+    def write_command_code(self, code_name: str, code: int, description: str, addressable: bool):
+        """Writes the provided command code information to the class code_map dictionary.
+
+        Overall, this method serves a similar purpose as write_status_code() method, but is designed to create and
+        write command code data as a new entry to the appropriate section of the local code_map dictionary. Command
+        codes are used both when the controller sends data to the PC and when the PC requests the controller to do
+        something (execute a command).
+
+        Args:
+            code_name: The meaningful name for the command represented by the code. It is advised to use the same names
+                as used in the Microcontroller library code, e.g.: 'kSendPulse'.
+            code: A value from 1 to 255 that represents the command in serial communication.
+            description: The string that stores the description of the command. Use this field to provide information
+                that may be relevant for future processing of the deserialized command data.
+            addressable: A boolean flag that determines whether this command can be addressed (executed) from the PC
+                or not. Notably, some commands can only be executed by the microcontroller itself or as part of larger
+                command. This is most commonly seen for the AXMC Kernel class, where certain runtime-critical
+                commands are not addressable by design.
+        """
+        # If the input code is outside the 1 to 255 range, raises a ValueError
+        if 255 < code < 1:
+            message = (
+                f"Unsupported byte-code value {code} encountered when adding a new {code_name} command entry to "
+                f"the class map dictionary of {self._type_name} module. Valid custom command codes range from 1 to "
+                f"255. Code 0 is reserved for system use."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Otherwise, writes the input
+        section = f"{self._status_section}.{code_name}"
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.code", value=code)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.description", value=description)
+        self._custom_codes_map.write_nested_value(variable_path=f"{section}.addressable", value=addressable)
+
+    def write_data_map(self, command_code: int, event_code: int, prototype_code: int,
+                       prototype_field_names: tuple[int, ...], prototype_descriptions: tuple[str, ...]):
+
+        # Extracts the matching prototype object
+        prototype = _prototypes.get_prototype(code=prototype_code)
+
+        # If extraction method returns None, then the input prototype_code is not supported.
+        if prototype is None:
+            message = (
+                f"Invalid message_prototype {prototype_code} code encountered when adding a new data entry for "
+                f"event {event_code} and command {command_code} combination to the code map dictionary of the "
+                f"{self._type_name} module. Use one of the prototype codes available through the SerialPrototypes "
+                f"dataclass."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Verifies that the length of prototype field names and descriptions tuples matches each other and the size of
+        # the prototype. Since all prototypes are numpy arrays or scalars, their element-size can always be inferred
+        # using the 'size' property.
+        if len(prototype_field_names) != len(prototype_descriptions) != prototype.size:
+            message = (
+                f"The length of the prototype_field_names argument ({len(prototype_field_names)}) has to match the "
+                f"length of the prototype_descriptions argument ({len(prototype_descriptions)}) and the length of the "
+                f"prototype object ({prototype.size}) when adding a new data entry for event {event_code} and "
+                f"command {command_code} combination to the code map dictionary of the {self._type_name} module."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Otherwise, adds additional descriptions for the message data object to the appropriate dictionary section.
+
+        section = f"{self._data_object_section}.{command_code}_{event_code}_{prototype_code}"
+        for name, description in zip(prototype_field_names, prototype_descriptions):
+            self._custom_codes_map.write_nested_value(variable_path=f"{section}.{name}.description", value=description)
+
+    @abstractmethod
+    def process_data(self, message: ModuleData | ModuleState):
+        raise NotImplementedError("process_data must be implemented by subclass")
+
+
+class EncoderModule(ModuleInterface):
+    def __init__(self, module_type: np.uint8, module_id: np.uint8):
+        # Call parent's __init__ first
+        super().__init__(type_name="Encoder", module_type=module_type, module_id=module_id)
+
+        # Yes.
+
+    def process_data(self, message: ModuleData | ModuleState):
         pass
 
-    @staticmethod
-    def write_status_codes_map():
-        raise NotImplementedError  # TODO
 
-    @staticmethod
-    def write_command_codes_map():
-        pass
-
-    def make_parameters(
-            self,
-            return_code: np.uint8 = 0,
-    ) -> None:
-        pass  # TODO Virtual (not implemented error)
-
-    def process_data(self, message: DataMessage):
-        pass  # TODO Virtual (not implemented error)
-
-
-class MicroController:
-    _kernel_type = np.uint8(1)
-    _kernel_id = np.uint8(0)
-    _identify_command_code = np.uint8(4)
+class MicroControllerInterface:
 
     def __init__(
             self,
             name: str,
             usb_port: str,
-            baud_rate: int,
-            reception_buffer_size: int,
+            baudrate: int,
+            maximum_transmitted_payload_size: int,
             id_code: int,
-            modules: tuple[Module, ...],
+            modules: tuple[ModuleInterface, ...],
     ):
-
         self._name: str = name
-
-        self._communication = SerialCommunication(usb_port, baud_rate, reception_buffer_size)
 
         self._modules = modules
 
-        identify_command = CommandMessage(
-            module_type=self._kernel_type,
-            module_id=self._kernel_id,
+        # Sets up the multiprocessing Queue, which is used to buffer and pipe commands and parameters to be sent to the
+        # microcontroller to the communication runtime method running on the isolated core (in a daemon Process).
+        self._mp_manager: SyncManager = multiprocessing.Manager()
+        self._transmission_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
+
+        # Also creates a Queue that is used to transfer the data to be logged to the Logger class. All logged data
+        # will be queued in the form of byte numpy arrays.
+        self._logger_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
+
+        # Instantiates an array that is used to terminate and adjust the communication runtime method. Like the Queue
+        # object from above, this is a shared object that allows sharing data between isolated Processes (cores). Unlike
+        # Queue, this object is a shared-buffer numpy array, which makes it uniquely adapted for communicating
+        # runtime state-flags.
+        self._terminator_array: SharedMemoryArray = SharedMemoryArray.create_array(
+            name=f"{self._name}_terminator_array",  # Uses class name to ensure the array buffer name is unique
+            prototype=np.array([0, 0], dtype=np.uint8),
+        )  # Instantiation automatically connects the main process to the array.
+
+        # Sets up the communication process. This process continuously cycles through the communication loop until
+        # terminated, enabling bidirectional communication with the controller.
+        self._communication_loop: Process = Process(
+            target=self.runtime_cycle,
+            args=(self.transmission_queue, self._terminator_array, id_code, usb_port, baudrate,
+                  maximum_transmitted_payload_size),
+            daemon=True,
+        )
+
+        # Pre-packages Kernel commands to improve their runtime speed
+        self._identify_command = KernelCommand(
+            command=np.uint8(3),
+            return_code=np.uint8(0),
+        )
+
+        self._reset_command = KernelCommand(
             command=self._identify_command_code,
             return_code=np.uint8(0),
-            noblock=False,
-            cycle=False,
-            cycle_delay=np.uint32(0),
         )
 
         self._communication.send_message(identify_command)
 
-        while True:
-            message = self._communication.receive_message()
-            if message is None:
-                continue
-            if isinstance(message, IdentificationMessage):
-                if message.controller_id == id_code:
-                    break
-                raise ValueError("Invalid controller ID!")
-            raise ValueError("Received unexpected message type")
-
-        # Sets up the multiprocessing Queue, which is used to buffer and pipe images from the producer (camera) to
-        # one or more consumers (savers). Uses Manager() instantiation as it has a working qsize() method for all
-        # supported platforms.
-        self._mp_manager: SyncManager = multiprocessing.Manager()
-        self._image_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
-
-        # Instantiates an array shared between all processes. This array is used to control all child processes.
-        # Index 0 (element 1) is used to issue global process termination command, index 1 (element 2) is used to
-        # flexibly enable or disable saving camera frames.
-        self._terminator_array: SharedMemoryArray = SharedMemoryArray.create_array(
-            name=f"{self._name}_terminator_array",  # Uses class name with an additional specifier
-            prototype=np.array([0, 0], dtype=np.int32),
-        )  # Instantiation automatically connects the main process to the array.
-
-        # Sets up the image producer Process. This process continuously executes a loop that conditionally grabs frames
-        # from camera, optionally displays them to the user, and queues them up to be saved by the consumers.
-        self._producer_process: Process = Process(
-            target=self.runtime_cycle,
-            args=(self._image_queue, self._terminator_array),
-            daemon=True,
-        )
-
     @staticmethod
     def build_core_code_map() -> NestedDictionary:
-
         # Pre-initializes with a seed dictionary that includes the purpose (description) of the dictionary file
         message = (
             "This dictionary maps byte-values used by the Core classes that manage microcontroller runtime to "
@@ -147,7 +298,7 @@ class MicroController:
         # Note, primarily, modules use custom status and command codes for each module family. These are available from
         # custom_codes_map dictionary. This section specifically tracks the 'core' codes inherited from the base Module
         # class.
-        code_dictionary = MicroController._write_module_status_codes(code_dictionary)
+        code_dictionary = MicroController._write_base_module_status_codes(code_dictionary)
 
         # Communication: status codes
         code_dictionary = MicroController._write_communication_status_codes(code_dictionary)
@@ -177,8 +328,6 @@ class MicroController:
         given Module.
 
         Make sure this method matches the actual state of the Kernel class from the AtaraxisMicroController library!
-        If there is a mismatch, you may be unable to interpret logged data during offline parsing or interpret it
-        incorrectly.
 
         Args:
             code_dictionary: The dictionary to be filled with kernel status codes.
@@ -187,14 +336,14 @@ class MicroController:
             The updated dictionary with kernel status codes information filled.
         """
         section = "kernel.status_codes.kStandBy"
-        description = "The value used to initialize internal Kernel status tracker."
+        description = "This value is currently not used, but it statically reserves 0 as a non-valid status code."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=0)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "kernel.status_codes.kSetupComplete"
         description = (
-            "The microcontroller hardware (e.g.: pin modes) and software (e.g.: command queue) parameters were "
+            "The microcontroller hardware (e.g.: pin modes) and software (e.g.: custom parameter structures) was "
             "successfully (re)set to hardcoded defaults."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=1)
@@ -203,73 +352,72 @@ class MicroController:
 
         section = "kernel.status_codes.kModuleSetupError"
         description = (
-            "The microcontroller was not able to (re)set its hardware and software parameters due to one of the "
-            "managed custom modules failing its' setup method runtime."
+            "The microcontroller was not able to (re)set its hardware and software due to one of the managed custom "
+            "modules failing its' setup method runtime."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "kernel.status_codes.kNoDataToReceive"
-        description = (
-            "The Kernel did not receive any data to parse during the current execution loop cycle. This is not an "
-            "error, this is one of the common default states of the Kernel!"
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
         section = "kernel.status_codes.kDataReceptionError"
         description = (
             "The Kernel failed to parse the data sent from the PC. This can be due to a number of errors, including "
-            "corruption in transmission and invalid data format."
+            "corruption of data in transmission and unsupported incoming message format."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=4)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "kernel.status_codes.kDataSendingError"
         description = (
-            "The Kernel failed to send a DataMessage to the PC. Usually, this indicates that the chosen data payload "
-            "format is not valid."
+            "The Kernel failed to send a DataMessage to the PC due to an underlying Communication or TransportLayer "
+            "class failure."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=4)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
+
+        section = "kernel.status_codes.kStateSendingError"
+        description = (
+            "The Kernel failed to send a StateMessage to the PC due to an underlying Communication or "
+            "TransportLayer class failure."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=5)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "kernel.status_codes.kInvalidDataProtocol"
+        section = "kernel.status_codes.kServiceSendingError"
+        description = (
+            "The Kernel failed to send a Service message to the PC due to an underlying Communication or "
+            "TransportLayer class failure."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=6)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
+
+        section = "kernel.status_codes.kInvalidMessageProtocol"
         description = (
             "The Kernel has received a message from the PC that does not use a valid (supported) message protocol. "
             "The message protocol is communicated by the first variable of each message payload and determines how to "
             "parse the rest of the payload. This error typically indicates a mismatch between the PC and "
             "Microcontroller codebase versions or data corruption errors."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=6)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=7)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "kernel.status_codes.kKernelParametersSet"
         description = (
-            "New parameter-values addressed to the Kernel (controller-wide parameters) were received and "
+            "New parameter-values addressed to the Kernel (controller-wide DynamicRuntimeParameters) were received and "
             "applied successfully."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=7)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "kernel.status_codes.kKernelParametersError"
-        description = (
-            "The Kernel-addressed parameter-values do not match the format of the structure used to store Kernel "
-            "parameters. In turn, this makes it impossible for the Kernel to decode parameter-values from the "
-            "serialized message payload."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=8)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
         section = "kernel.status_codes.kModuleParametersSet"
         description = (
-            "New parameter-values addressed to a custom (user-defined) Module class instance were received and "
+            "New parameter-values addressed to the custom (user-defined) Module class instance were received and "
             "applied successfully."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=9)
@@ -286,128 +434,22 @@ class MicroController:
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "kernel.status_codes.kParametersTargetNotFound"
+        section = "kernel.status_codes.kCommandNotRecognized"
         description = (
-            "Unable to find the addressee of the new parameter-values sent from the PC. The module_type and module_id "
-            "fields of the message did not match the Kernel class or any of the custom Modules. Usually, this "
-            "indicates a malformed message (user-error)."
+            "The Kernel has received an unknown command code from the PC. Usually, this indicates data corruption or a "
+            "mismatch between the PC and Microcontroller codebase versions."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=11)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "kernel.status_codes.kControllerReset"
+        section = "kernel.status_codes.kTargetModuleNotFound"
         description = (
-            "The Kernel has successfully (re)set the hardware (e.g.: pin mode) and software (e.g.: command queue) "
-            "parameters of the managed microcontroller back to default hardcoded values. This procedure is identical "
-            "to the original controller setup, but is triggered in response to an explicit PC-sent command."
+            "Unable to find the Module addressed by a Command or Parameters message sent from the PC. The module_type "
+            "and module_id fields of the message did not match any of the custom Modules. Usually, this indicates a "
+            "malformed message (user-error)."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=12)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "kernel.status_codes.kKernelCommandUnknown"
-        description = (
-            "The Kernel has received an unknown Kernel command code from the PC. Usually, this indicates data "
-            "corruption or a mismatch between the PC and Microcontroller codebase versions."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=13)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
-
-        section = "kernel.status_codes.kModuleCommandQueued"
-        description = (
-            "The Kernel has received a command code addressed to one of the custom Modules and successfully queued it "
-            "to be evaluated and executed when the module finishes any currently active commands. Note, command code 0 "
-            "would trigger kModuleCommandsReset status (22)."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=14)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "kernel.status_codes.kCommandTargetNotFound"
-        description = (
-            "Unable to find the addressee of the command-code sent from the PC. The module_type and module_id "
-            "fields of the message did not match the Kernel class or any of the custom Modules. Usually, this "
-            "indicates a malformed message (user-error)."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=15)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
-
-        section = "kernel.status_codes.kServiceSendingError"
-        description = (
-            "The Kernel failed to send a service message (e.g.: identificationMessage) to the PC. Usually, this "
-            "indicates that the chosen message payload format is not valid."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=16)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
-
-        section = "kernel.status_codes.kControllerIDSent"
-        description = (
-            "The Kernel has successfully sent the hardcoded controller ID byte-code to the PC, following the "
-            "identification request (command)."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=17)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "kernel.status_codes.kModuleCommandError"
-        description = (
-            "A custom Module has failed to execute a command. Currently, the only way to produce this error is for the "
-            "custom module to not recognize the command code. In turn, this usually indicates a user-error or a "
-            "mismatch between the PC and Microcontroller codebase versions."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=18)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
-
-        section = "kernel.status_codes.kModuleCommandsCompleted"
-        description = (
-            "All managed custom Modules have successfully resolved (determined which command to run) and completed the"
-            "necessary stage(s) of their active commands during this runtime cycle."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=19)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "kernel.status_codes.kModuleAssetResetError"
-        description = (
-            "Failed to reset the custom assets of a module. Custom assets are any assets not exposed through the "
-            "default API inherited by custom Modules from the base Module class. These assets are usually unique for "
-            "each type of modules and track hardware-specific parameters (for example, whether a valve is "
-            "normally-open or closed). The ability of the Kernel to work with these assets entirely depends on the "
-            "user writing the custom module code to provide the necessary API."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=20)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
-
-        section = "kernel.status_codes.kModuleCommandsReset"
-        description = (
-            "This is a special status invoked by the Kernel when it receives a module-addressed command code 0. "
-            "Instead of triggering the usual command queue runtime, code 0 is interpreted as command reset state and "
-            "the Kernel then clears all queued command(s) for that Module. The active Module command is allowed to "
-            "complete gracefully, but there will be no further command execution until new commands are queued."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=21)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "kernel.status_codes.kStateSendingError"
-        description = "The Kernel failed to send a StateMessage to the PC."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=22)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
-
-        section = "kernel.status_codes.kResetModuleQueueTargetNotFound"
-        description = (
-            "Unable to find the addressee of the module (command) queue reset command sent from the PC. The "
-            "module_type and module_id fields of the message did not match any of the custom Modules. Usually, this "
-            "indicates a malformed message (user-error)."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=23)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
@@ -436,31 +478,25 @@ class MicroController:
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=False)
 
-        section = "kernel.commands.kSetup"
+        section = "kernel.commands.kReceiveData"
         description = (
-            "Carries out the necessary hardware and software parameter initialization. This command is executed "
-            "automatically when the setup() method of main.cpp / .ino is executed."
+            "Attempts to receive and parse the command and parameters data sent from the PC. This command is "
+            "automatically triggered at the beginning of each controller runtime cycle. Note, this command "
+            "is always triggered before running any queued or newly received module commands."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=1)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=False)
 
-        section = "kernel.commands.kReceiveData"
-        description = (
-            "Attempts to receive and parse the command and parameters data from the PC. This command is automatically "
-            "triggered during controller runtime cycling, together with RunModuleCommands command. Note, this command "
-            "is always triggered before RunModuleCommands."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=False)
-
         section = "kernel.commands.kResetController"
         description = (
-            "Resets the hardware and software parameters of the Kernel and all managed modules. This command works "
-            "similarly to kSetup (the logic is the same), but it is externally addressable (by the PC)."
+            "(Re)sets the hardware and software parameters of the Kernel and all managed modules. This command code is "
+            "used both during the initial setup of the controller and when the Kernel is instructed to reset the "
+            "controller. Note, if the Setup runtime fails for any reason, the controller deadlocks in a mode that "
+            "flashes the LED indicator. The controller firmware has to be reset to escape that mode (this is an "
+            "intentional safety-promoting design choice)."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=True)
 
@@ -469,30 +505,20 @@ class MicroController:
             "Transmits the unique ID of the controller that was hardcoded in the microcode firmware version running on "
             "the microcontroller. This command is used to verify the identity of the connected controller from the PC."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=4)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=True)
-
-        section = "kernel.commands.kRunModuleCommands"
-        description = (
-            "Attempts to resolve (determine what to run) and execute a command for each of the managed custom modules. "
-            "This command is automatically triggered during controller runtime cycling, together with ReceiveData "
-            "command. Note, this command is always triggered after ReceiveData."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=5)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.addressable", value=False)
 
         return code_dictionary
 
     @staticmethod
-    def _write_module_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
+    def _write_base_module_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the module.status_codes section of the core_codes_map dictionary with data.
 
-        Module classes directly control the hardware connected to the microcontroller. Their information is primarily
-        mapped by custom_codes_map dictionary, which aggregates the codes that are unique for each custom Module type
-        (family). However, since all custom Modules inherit from the same (base) Module class, some status codes used
-        by custom modules come from the shared parent class. These shared status codes are added by this method, as
+        Module classes directly control the hardware connected to the microcontroller. Their status and command codes
+        are primarily mapped by custom dictionary writer functions expected to be available through (python) Module
+        class instances. However, since all custom Modules inherit from the same (base) Module class, some status codes
+        used by custom modules come from the shared parent class. These shared status codes are added by this method, as
         they are the same across all modules.
 
         Make sure this method matches the actual state of the (base) Module class from the AtaraxisMicroController
@@ -519,102 +545,33 @@ class MicroController:
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "module.status_codes.kCommandAlreadyRunning"
-        description = (
-            "The Module already has an active command and does not need to activate a new command. This is an "
-            "internal status intended for testing purposes."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "module.status_codes.kNewCommandActivated"
-        description = (
-            "The Module already has successfully activated a newly queued command. This is an internal status intended "
-            "for testing purposes."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "module.status_codes.kRecurrentCommandActivated"
-        description = (
-            "The Module already has successfully (re)activated a recently completed command. This is an internal "
-            "status intended for testing purposes."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=4)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "module.status_codes.kNoQueuedCommands"
-        description = (
-            "The Module is currently not running any command and does not have any queued commands to activate. "
-            "This is an internal status intended for testing purposes."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=5)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "module.status_codes.kRecurrentTimerNotExpired"
-        description = (
-            "The Module's recurrent command activation timeout has not expired and there are no newly queued commands. "
-            "Recently completed command (re)activation is disabled until the timeout expires. This is an internal "
-            "status intended for testing purposes."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=6)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "module.status_codes.kNotImplemented"
-        description = (
-            "Critical! A custom Module class inheriting from the (base) Module class has not implemented (overloaded) "
-            "one of the virtual API methods. These API methods are used by the Kernel to interface with custom modules "
-            "and all API methods have to be overloaded (implemented) separately by each custom module class. This "
-            "error indicates that the microcontroller firmware is not valid."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=7)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
-
-        section = "module.status_codes.kParametersSet"
-        description = (
-            "New parameter-values addressed to the Module (custom module parameters) were received and applied "
-            "successfully."
-        )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=8)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "module.status_codes.kSetupComplete"
-        description = "Hardware and Software parameters of the Module have been successfully (re)set."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=9)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
-        section = "module.status_codes.kModuleAssetsReset"
-        description = "Custom assets of the Module have been (re)set to hardcoded defaults."
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=10)
-        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
-        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
-
         section = "module.status_codes.kStateSendingError"
         description = (
             "The Module failed to send a StateMessage to the PC. State messages work similar to Data messages, but "
-            "they are used in cases where data objects do not need to be included with event-codes to optimize "
-            "transmission."
+            "they are used in cases where data objects do not need to be included with event-codes. State messages "
+            "allow optimizing data transmission by avoiding costly data-object-related logic and buffering."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=11)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=2)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         section = "module.status_codes.kCommandCompleted"
         description = (
             "Indicates that the active command of the module has been completed. This status is reported whenever a "
-            "command is replaced by a new command or terminates with no further queued or recurring commands."
+            "command is replaced by a new command or is terminated with no further queued or recurring commands."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=12)
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=3)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
+
+        section = "module.status_codes.kCommandNotRecognized"
+        description = (
+            "This error-code indicates that a queued command was not recognized by the RunActiveCommand() method "
+            "of the target module and, consequently, was not executed."
+        )
+        code_dictionary.write_nested_value(variable_path=f"{section}.code", value=4)
+        code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
 
@@ -644,7 +601,7 @@ class MicroController:
 
         section = "cobs.status_codes.kEncoderTooSmallPayloadSize"
         description = (
-            "Failed to encode payload because payload size is too small. Valid payloads have to include at least one "
+            "Failed to encode payload because payload size is too small. Valid payloads have to include at least 1 "
             "data byte."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=12)
@@ -781,7 +738,7 @@ class MicroController:
 
         section = "crc.status_codes.kCalculateCRCChecksumBufferTooSmall"
         description = (
-            "Failed to calculate the CRC checksum, because the size of the buffer that holds the packet is  too small."
+            "Failed to calculate the CRC checksum, because the size of the buffer that holds the packet is  too small. "
             "Specifically, the buffer used for CRC calculation has to be at least 3 bytes in size, consistent with the "
             "valid minimum size of the COBS-encoded packet."
         )
@@ -874,7 +831,7 @@ class MicroController:
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
-        section = "transport_layer.status_codes.kPacketStartByteNotFoundError"
+        section = "transport_layer.status_codes.kPacketStartByteNotFound"
         description = (
             "Unable to find the start byte of the incoming packet in the incoming serial data stream. Since serial "
             "communication interface can 'receive' noise-bytes, packet reception only starts when start byte value is "
@@ -907,8 +864,8 @@ class MicroController:
         section = "transport_layer.status_codes.kInvalidPayloadSize"
         description = (
             "The found payload size is not valid. Specifically, valid payloads can have a size between 1 and 254 (the "
-            "upper limit is due to COBS specifications). Encountering a payload size set to 255 or 0 would, therefore, "
-            "trigger this error."
+            "upper limit is due to COBS specifications). Encountering a payload size value of 255 or 0 would, "
+            "therefore, trigger this error."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=108)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
@@ -1043,93 +1000,123 @@ class MicroController:
 
     @staticmethod
     def _write_communication_status_codes(code_dictionary: NestedDictionary) -> NestedDictionary:
-        """Fills the transport_layer.status_codes section of the core_codes_map dictionary with data.
+        """Fills the communication.status_codes section of the core_codes_map dictionary with data.
 
-        Transport Layer class carries out the necessary low-level transformations to send and receive data over the
-        serial interface. This class is wrapped and used by the Communication class to carry out the PC-microcontroller
-        communication.
+        Communication class wraps TransportLayer and provides a high-level API interface for communicating between
+        PC and microcontrollers running Ataraxis software. Together with Kernel and (base) Module, the Communication
+        class forms the 'core' triad of classes that jointly manage the runtime of every Ataraxis-compatible
+        microcontroller.
 
-        Make sure this method matches the actual state of the TransportLayer class from the AtaraxisMicroController
+        Make sure this method matches the actual state of the Communication class from the AtaraxisMicroController
         library!
 
         Args:
-            code_dictionary: The dictionary to be filled with Transport Layer status codes.
+            code_dictionary: The dictionary to be filled with Communication status codes.
 
         Returns:
-            The updated dictionary with Transport Layer status codes information filled.
+            The updated dictionary with Communication status codes information filled.
         """
-        section = "communication.status_codes.kCommunicationStandby"
+        section = "communication.status_codes.kStandby"
         description = "Standby placeholder used to initialize the Communication class status tracker."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=151)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
-        section = "communication.status_codes.kCommunicationReceptionError"
-        description = "Communication class ran into an error when receiving a message."
+        section = "communication.status_codes.kReceptionError"
+        description = "Communication class ran into an error when attempting to receive a message from the PC."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=152)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "communication.status_codes.kCommunicationParsingError"
-        description = "Communication class ran into an error when parsing (reading) a message."
+        section = "communication.status_codes.kParsingError"
+        description = "Communication class ran into an error when parsing (decoding) a message received from the PC."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=153)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "communication.status_codes.kCommunicationPackingError"
-        description = "Communication class ran into an error when writing a message to payload."
+        section = "communication.status_codes.kPackingError"
+        description = (
+            "Communication class ran into an error when writing (serializing) the message data into the transmission "
+            "payload buffer."
+        )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=154)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "communication.status_codes.kCommunicationTransmissionError"
-        description = "Communication class ran into an error when transmitting a message."
+        section = "communication.status_codes.kTransmissionError"
+        description = "Communication class ran into an error when transmitting (sending) a message to the PC."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=155)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "communication.status_codes.kCommunicationTransmitted"
-        description = "Communication class successfully transmitted a message."
+        section = "communication.status_codes.kMessageSent"
+        description = "Communication class successfully transmitted a message to the PC."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=156)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
-        section = "communication.status_codes.kCommunicationReceived"
-        description = "Communication class successfully received a message."
+        section = "communication.status_codes.kMessageReceived"
+        description = "Communication class successfully received a message from the PC."
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=157)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
-        section = "communication.status_codes.kCommunicationInvalidProtocolError"
-        description = "The received or transmitted protocol code is not valid for that type of operation."
+        section = "communication.status_codes.kInvalidProtocol"
+        description = (
+            "The received or transmitted protocol code is not valid for that type of operation. This error is raised "
+            "whenever the encountered message protocol code is not one of the expected codes for the given operation. "
+            "With the way the microcontroller library is written, this applies in two cases: when sending Service "
+            "messages and when receiving the data from the PC. Currently, the controller only expects Command and "
+            "Parameters messages to be received from the PC and only expects to send ReceptionCode and Identification "
+            "service messages. Sending State and Data messages is also possible, but those structures are hardcoded to "
+            "always be correct on the microcontroller's side."
+        )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=158)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "communication.status_codes.kCommunicationNoBytesToReceive"
-        description = "Communication class did not receive enough bytes to process the message. This is NOT an error."
+        section = "communication.status_codes.kNoBytesToReceive"
+        description = (
+            "Communication class did not receive enough bytes to process the message. This is not an error, most "
+            "higher-end microcontrollers will spend a sizeable chunk of their runtime with no communication data to "
+            "process."
+        )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=159)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
-        section = "communication.status_codes.kCommunicationParameterSizeMismatchError"
-        description = "The number of extracted parameter bytes does not match the size of the input structure."
+        section = "communication.status_codes.kParameterMismatch"
+        description = (
+            "The number of extracted parameter bytes does not match the size of the input structure. Currently, this "
+            "only applies to Module-addressed parameter structures. Since the exact size and format of the "
+            "Module-addressed parameters structure is not known at compile time, the class receives such messages in "
+            "two steps. First, it uses the message header to identify the target module and then instructs the module "
+            "to parse the parameters object that follows the message header. If the number of bytes necessary to fill "
+            "the module's parameter object with data does not exactly match the size of the data contained in the "
+            "message parameters payload section, this error is raised. Seeing this error suggests that the parameters "
+            "sent in the message were not intended for the allegedly targeted module (due to inferred parameter "
+            "structure mismatch)."
+        )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=160)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
-        section = "communication.status_codes.kCommunicationParametersExtracted"
-        description = "Parameter data has been successfully extracted."
+        section = "communication.status_codes.kParametersExtracted"
+        description = (
+            "Module parameter data has been successfully extracted and written into the module's parameter structure."
+        )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=161)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=False)
 
-        section = "communication.status_codes.kCommunicationParameterExtractionInvalidMessage"
+        section = "communication.status_codes.kExtractionForbidden"
         description = (
-            "Unable to extract Module-addressed parameters, as the class currently holds a different message type in "
+            "Unable to extract Module-addressed parameters, as the class currently holds a different message in "
             "its reception buffer. Currently, only Module-addressed parameters need to be extracted by a separate "
             "method call. Calling the method for Kernel-addressed parameters (or any other message) will produce this "
-            "error."
+            "error. Since TransportLayer only holds one message in its reception buffer at a time, the module "
+            "parameters have to be extracted by the addressed module before the Communication is instructed to receive "
+            "a new message. Otherwise, the unprocessed parameter data will be lost."
         )
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=162)
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
@@ -1137,5 +1124,21 @@ class MicroController:
 
         return code_dictionary
 
-    def runtime_cycle(self, command_queue: MPQueue, terminator_array: SharedMemoryArray) -> None:
-        pass
+    @staticmethod
+    def runtime_cycle(command_queue: MPQueue, terminator_array: SharedMemoryArray, controller_id: int,
+                      usb_port: name, baudrate: int, maximum_transmitted_payload_size: int) -> None:
+        # Initializes the communication class. It is critical that this is done inside the method running in an
+        # isolated process.
+        communication = SerialCommunication(usb_port=usb_port, baudrate=baudrate,
+                                            maximum_transmitted_payload_size=maximum_transmitted_payload_size)
+        terminator_array.connect()
+
+        while True:
+            out_data = command_queue.get()
+            communication.send_message(out_data)
+
+            if terminator_array.read_data(index=0, convert_output=True):
+                break  # Terminates the loop
+
+    def identify_controller(self):
+        self.transmission_queue.put(self._identify_command)
