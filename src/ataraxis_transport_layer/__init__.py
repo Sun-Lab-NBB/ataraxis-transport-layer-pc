@@ -7,5 +7,7 @@ Author: Ivan Kondratyev (Inkaros)
 
 from .helper_modules import CRCProcessor, COBSProcessor
 from .transport_layer import SerialTransportLayer
+from .microcontroller import MicroControllerInterface
+from custom_modules import TTLModule
 
 __all__ = ["SerialTransportLayer", "CRCProcessor", "COBSProcessor"]

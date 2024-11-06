@@ -80,13 +80,13 @@ class ModuleInterface:
     """
 
     def __init__(
-        self,
-        type_name: str,
-        module_type: np.uint8,
-        module_id: np.uint8,
-        module_notes: str | None = None,
-        *,
-        process_data: bool = False,
+            self,
+            type_name: str,
+            module_type: np.uint8,
+            module_id: np.uint8,
+            module_notes: str | None = None,
+            *,
+            process_data: bool = False,
     ) -> None:
         # Transfers arguments to class attributes.
         self._module_type: np.uint8 = module_type
@@ -96,7 +96,7 @@ class ModuleInterface:
         self._process_data: bool = process_data
 
     @abstractmethod
-    def process_data(self, message: ModuleData | ModuleState):
+    def process_data(self, message: ModuleData | ModuleState) -> None:
         """Contains the additional processing logic for incoming State and Data messages.
 
         This method allows providing custom data-handling logic for some or all State and Data messages sent by the
@@ -164,46 +164,37 @@ class ModuleInterface:
 class MicroControllerInterface:
 
     def __init__(
-        self,
-        name: str,
-        controller_id: int,
-        controller_description: str,
-        usb_port: str,
-        baudrate: int,
-        maximum_transmitted_payload_size: int,
-        logger_queue: MPQueue,
-        logger_source_id: int,
-        modules: tuple[ModuleInterface, ...],
+            self,
+            name: str,
+            controller_id: np.uint8,
+            controller_description: str,
+            usb_port: str,
+            baudrate: int,
+            maximum_transmitted_payload_size: int,
+            logger_queue: MPQueue,
+            logger_source_id: np.uint8,
+            modules: tuple[ModuleInterface, ...],
     ):
-        # Saves controller id information to class attributes
+        # Saves input arguments to class attributes. Mostly, this information will be used when thd class starts the
+        # communication cycle on a separate core
         self._name: str = name
-        self._controller_id: int = controller_id
-
-        # Also saves Module tuple into class attribute
+        self._controller_id: np.uint8 = controller_id
         self._modules = modules
-
-        # Also stores the information to connect to the controller via the USB / UART interface
         self._usb_port: str = usb_port
         self._baudrate: int = baudrate
         self._maximum_transmitted_payload_size: int = maximum_transmitted_payload_size
-
-        # Also saves the Logger queue reference and the static source ID code assigned to the microcontroller at
-        # initialization
         self._logger_queue: MPQueue = logger_queue
-        self._logger_source_id: int = logger_source_id
+        self._logger_source_id: np.uint8 = logger_source_id
 
-        # Sets up the multiprocessing Queue, which is used to buffer and pipe commands and parameters to be sent to the
-        # microcontroller to the communication runtime method running on the isolated core (in a daemon Process).
+        # Initializes the PrecisionTimer class which is used to time-stamp logged data
+        self._timestamp_timer = PrecisionTimer(precision="us")
+
+        # Sets up the multiprocessing Queue, which is used to transfer the data to be sent to the Microcontroller
+        # between the central Process and the Process running the communication cycle.
         self._mp_manager: SyncManager = multiprocessing.Manager()
         self._transmission_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
 
-        # Initializes the PrecisionTimer class which is used to time-stamp logged data.
-        self._timer = PrecisionTimer(precision="us")
-
-        # Instantiates the shared array used to bidirectionally communicate with the runtime of the daemon process.
-        # This array acts in parallel with the command / parameters Queue and offers a better way of communicating the
-        # runtime data between the main process that controls the experiment and the daemon process running the
-        # microcontroller interface.
+        # Instantiates the array used to control the runtime of the communication Process.
         self._terminator_array: SharedMemoryArray = SharedMemoryArray.create_array(
             name=f"{self._name}_terminator_array",  # Uses class name to ensure the array buffer name is unique
             prototype=np.zeros(shape=1, dtype=np.uint8),
@@ -227,6 +218,103 @@ class MicroControllerInterface:
             args=(self,),
             daemon=True,
         )
+
+        self._communication: SerialCommunication | None = None
+
+    @staticmethod
+    def runtime_cycle(
+            interface: "MicroControllerInterface",
+    ) -> None:
+        # Initializes the communication class and saves it to class attribute
+        interface._communication = SerialCommunication(
+            usb_port=interface._usb_port,
+            baudrate=interface._baudrate,
+            maximum_transmitted_payload_size=interface._maximum_transmitted_payload_size,
+        )
+
+        # Connects to the terminator array
+        interface._terminator_array.connect()
+
+        # Main loop
+        while interface.check_loop_conditions:
+
+            # Sends queued data
+            while interface.send_data():
+                continue
+
+            # Receives data from microcontroller
+            interface.receive_data()
+
+        # Shutdown
+        interface._transmission_queue.close()
+        interface._terminator_array.disconnect()
+
+    def check_loop_conditions(self) -> bool:
+        """Checks whether the communication loop should continue cycling or terminate.
+
+        This depends on the current value fo the terminator variable being False and the transmission queue being
+        empty.
+        """
+
+        # Terminates the runtime if instructed to do so via terminator array and there is no more data to send to the
+        # controller
+        if self._terminator_array.read_data(index=0, convert_output=True) and self._transmission_queue.empty():
+            return False
+
+        return True
+
+    def send_data(self) -> bool:
+        try:
+            out_data: (
+                    RepeatedModuleCommand
+                    | OneOffModuleCommand
+                    | DequeueModuleCommand
+                    | KernelCommand
+                    | ModuleParameters
+                    | KernelParameters
+            ) = self._transmission_queue.get_nowait()
+
+            # TODO send packed data to the logger
+
+            print(f"Data out: {out_data.packed_data}")
+
+            self._communication.send_message(out_data)
+
+            return True
+        except Empty:
+            return False
+
+    def receive_data(self) -> None:
+        in_data = self._communication.receive_message()
+
+        if in_data is None:
+            return
+
+        # TODO Send the input data payload to logger
+
+        print(f"Data in: {in_data.message}")
+
+        # Resolve additional processing steps associated with incoming data
+        if isinstance(in_data, KernelState):
+            pass
+        elif isinstance(in_data, KernelData):
+            pass
+        elif isinstance(in_data, ModuleState):
+            pass
+        elif isinstance(in_data, ModuleData):
+            pass
+        elif isinstance(in_data, ReceptionCode):
+            pass
+        elif isinstance(in_data, Identification):
+            pass
+
+    def identify_controller(self) -> None:
+        """Sends the Identification command to the connected Microcontroller's kernel class."""
+        self._transmission_queue.put(self._identify_command)
+
+    def reset_controller(self) -> None:
+        """Sends the reset command to the connected Microcontroller's kernel class."""
+        self._transmission_queue.put(self._reset_command)
 
     def build_core_code_map(self) -> NestedDictionary:
         # Pre-initializes with a seed dictionary that includes the purpose (description) of the dictionary file
@@ -513,7 +601,8 @@ class MicroControllerInterface:
         section = "kernel.data_objects.kInvalidMessageProtocolObject"
         description_1 = "The invalid protocol byte-code value that was received by the Kernel."
         code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(7))
-        code_dictionary.write_nested_value(variable_path=f"{section}.prototype_code", value=prototypes.kOneUnsignedByte)
+        code_dictionary.write_nested_value(variable_path=f"{section}.prototype_code",
+                                           value=prototypes.kOneUnsignedByte)
         code_dictionary.write_nested_value(variable_path=f"{section}.names", value=("protocol_code",))
         code_dictionary.write_nested_value(variable_path=f"{section}.descriptions", value=(description_1,))
 
@@ -1161,66 +1250,3 @@ class MicroControllerInterface:
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
 
         return code_dictionary
-
-    @staticmethod
-    def runtime_cycle(
-        interface: "MicroControllerInterface",
-    ) -> None:
-        # Initializes the communication class. It is critical that this is done inside the method running in an
-        # isolated process.
-        communication = SerialCommunication(
-            usb_port=interface._usb_port,
-            baudrate=interface._baudrate,
-            maximum_transmitted_payload_size=interface._maximum_transmitted_payload_size,
-        )
-        interface._terminator_array.connect()
-
-        while True:
-
-            try:
-                while True:
-                    out_data: (
-                        RepeatedModuleCommand
-                        | OneOffModuleCommand
-                        | DequeueModuleCommand
-                        | KernelCommand
-                        | ModuleParameters
-                        | KernelParameters
-                    ) = interface._transmission_queue.get_nowait()
-
-                    # TODO send packed data to the logger
-
-                    communication.send_message(out_data)
-
-            except Empty:
-                pass
-
-            # Attempts to receive the data from the microcontroller
-            in_data = communication.receive_message()
-            while in_data is not None:
-
-                # TODO Send the input data payload to logger
-
-                # Resolve additional processing steps associated with incoming data
-                if isinstance(in_data, KernelState):
-                    pass
-                elif isinstance(in_data, KernelData):
-                    pass
-                elif isinstance(in_data, ModuleState):
-                    pass
-                elif isinstance(in_data, ModuleData):
-                    pass
-                elif isinstance(in_data, ReceptionCode):
-                    pass
-                elif isinstance(in_data, Identification):
-                    pass
-
-            # If the first element of the terminator array is true (>0), ends the communication loop.
-            if interface._terminator_array.read_data(index=0, convert_output=True):
-                break  # Terminates the loop if instructed to do so
-
-    def identify_controller(self):
-        self._transmission_queue.put(self._identify_command)
-
-    def reset_controller(self):
-        self._transmission_queue.put(self._reset_command)

@@ -1,25 +1,18 @@
-from .microcontroller import ModuleInterface
 import numpy as np
+from ataraxis_data_structures import NestedDictionary
+
 from .communication import (
-    Identification,
-    ReceptionCode,
-    RepeatedModuleCommand,
-    OneOffModuleCommand,
-    DequeueModuleCommand,
-    KernelCommand,
-    KernelData,
-    KernelState,
     ModuleData,
     ModuleState,
-    KernelParameters,
     ModuleParameters,
-    SerialCommunication,
-    prototypes,
-    protocols,
+    OneOffModuleCommand,
+    DequeueModuleCommand,
+    RepeatedModuleCommand,
 )
+from .microcontroller import ModuleInterface
 
 
-class EncoderModule(ModuleInterface):
+class TTLModule(ModuleInterface):
     def __init__(self, module_type: np.uint8, module_id: np.uint8):
         # Call parent's __init__ first
         super().__init__(type_name="Encoder", module_type=module_type, module_id=module_id)
@@ -27,6 +20,9 @@ class EncoderModule(ModuleInterface):
         # Yes.
 
     def process_data(self, message: ModuleData | ModuleState):
+        pass
+
+    def write_code_map(self, code_map: NestedDictionary) -> NestedDictionary:
         pass
 
     def make_command_message(
@@ -61,15 +57,14 @@ class EncoderModule(ModuleInterface):
                 noblock=noblock,
                 return_code=return_code,
             )
-        else:
-            return RepeatedModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                command=command_code,
-                noblock=noblock,
-                return_code=return_code,
-                cycle_delay=recurrent_delay,
-            )
+        return RepeatedModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            command=command_code,
+            noblock=noblock,
+            return_code=return_code,
+            cycle_delay=recurrent_delay,
+        )
 
     def make_deque_message(self, return_code: np.uint8 = np.uint8(0)) -> DequeueModuleCommand:
         return DequeueModuleCommand(module_type=self._module_type, module_id=self._module_id, return_code=return_code)
