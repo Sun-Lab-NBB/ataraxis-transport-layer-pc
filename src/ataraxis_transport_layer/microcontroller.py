@@ -11,7 +11,7 @@ from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
 from ataraxis_base_utilities import console
 from ataraxis_time.precision_timer.timer_class import PrecisionTimer
 from numba import uint8
-
+from multiprocessing.shared_memory import SharedMemory
 from .communication import (
     Identification,
     ReceptionCode,
@@ -29,6 +29,8 @@ from .communication import (
     prototypes,
     protocols,
 )
+
+import sys
 
 
 class ModuleInterface:
@@ -167,32 +169,41 @@ class MicroControllerInterface:
             self,
             name: str,
             controller_id: np.uint8,
-            controller_description: str,
             usb_port: str,
             baudrate: int,
             maximum_transmitted_payload_size: int,
-            logger_queue: MPQueue,
-            logger_source_id: np.uint8,
-            modules: tuple[ModuleInterface, ...],
     ):
         # Saves input arguments to class attributes. Mostly, this information will be used when thd class starts the
         # communication cycle on a separate core
         self._name: str = name
         self._controller_id: np.uint8 = controller_id
-        self._modules = modules
+        # self._modules = modules
+        # modules: tuple[ModuleInterface, ...],
         self._usb_port: str = usb_port
         self._baudrate: int = baudrate
         self._maximum_transmitted_payload_size: int = maximum_transmitted_payload_size
-        self._logger_queue: MPQueue = logger_queue
-        self._logger_source_id: np.uint8 = logger_source_id
-
-        # Initializes the PrecisionTimer class which is used to time-stamp logged data
-        self._timestamp_timer = PrecisionTimer(precision="us")
+        # self._logger_queue: MPQueue = logger_queue
+        # self._logger_source_id: np.uint8 = logger_source_id
+        # controller_description: str,
 
         # Sets up the multiprocessing Queue, which is used to transfer the data to be sent to the Microcontroller
         # between the central Process and the Process running the communication cycle.
         self._mp_manager: SyncManager = multiprocessing.Manager()
         self._transmission_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
+
+        # Instantiates the array used to control the runtime of the communication Process.
+        try:
+            self._terminator_array = SharedMemoryArray(
+                name=f"{self._name}_terminator_array",
+                shape=np.zeros(shape=1, dtype=np.uint8).shape,
+                datatype=np.zeros(shape=1, dtype=np.uint8).dtype,
+                buffer=SharedMemory(name=f"{self._name}_terminator_array")
+            )
+            self._terminator_array.connect()
+            self._terminator_array.disconnect()
+            self._terminator_array.destroy()
+        except Exception:
+            pass
 
         # Instantiates the array used to control the runtime of the communication Process.
         self._terminator_array: SharedMemoryArray = SharedMemoryArray.create_array(
@@ -211,102 +222,90 @@ class MicroControllerInterface:
             return_code=np.uint8(0),
         )
 
+        self._communication: SerialCommunication | None = None
+
         # Sets up the communication process. This process continuously cycles through the communication loop until
         # terminated, enabling bidirectional communication with the controller.
         self._communication_process: Process = Process(
             target=self.runtime_cycle,
-            args=(self,),
+            args=(self._transmission_queue, self._usb_port, self._baudrate, self._maximum_transmitted_payload_size,
+                  self._terminator_array),
             daemon=True,
         )
-
-        self._communication: SerialCommunication | None = None
+        self._communication_process.start()
 
     @staticmethod
-    def runtime_cycle(
-            interface: "MicroControllerInterface",
-    ) -> None:
+    def runtime_cycle(transmission_queue: MPQueue, usb_port: str, baudrate: int, payload: int,
+                      terminator_array: SharedMemoryArray) -> None:
+
         # Initializes the communication class and saves it to class attribute
-        interface._communication = SerialCommunication(
-            usb_port=interface._usb_port,
-            baudrate=interface._baudrate,
-            maximum_transmitted_payload_size=interface._maximum_transmitted_payload_size,
+        communication = SerialCommunication(
+            usb_port=usb_port,
+            baudrate=baudrate,
+            maximum_transmitted_payload_size=payload,
         )
 
         # Connects to the terminator array
-        interface._terminator_array.connect()
+        terminator_array.connect()
+
+        counter = 0  # TODO REMOVE
+
+        # Initializes the PrecisionTimer class which is used to time-stamp logged data
+        timestamp_timer = PrecisionTimer(precision="s")
 
         # Main loop
-        while interface.check_loop_conditions:
+        timestamp_timer.reset()
+        while True:
+            if terminator_array.read_data(index=0, convert_output=True) and transmission_queue.empty():
+                break
 
             # Sends queued data
-            while interface.send_data():
-                continue
+            while True:
+                try:
+                    out_data: (
+                            RepeatedModuleCommand
+                            | OneOffModuleCommand
+                            | DequeueModuleCommand
+                            | KernelCommand
+                            | ModuleParameters
+                            | KernelParameters
+                    ) = transmission_queue.get_nowait()
+
+                    # TODO send packed data to the logger
+                    counter += 1
+                    print(f"{counter}. Time: {timestamp_timer.elapsed}, Data out: {out_data.packed_data}")
+                    sys.stdout.flush()
+
+                    communication.send_message(out_data)
+                except Empty:
+                    break
 
             # Receives data from microcontroller
-            interface.receive_data()
+            in_data = communication.receive_message()
+
+            if in_data is not None:
+
+                # TODO Send the input data payload to logger
+                counter += 1
+                print(f"{counter}. Time: {timestamp_timer.elapsed},  Data in: {in_data.message}")
+                sys.stdout.flush()
+
+                # Resolve additional processing steps associated with incoming data
+                if isinstance(in_data, KernelState):
+                    pass
+                elif isinstance(in_data, KernelData):
+                    pass
+                elif isinstance(in_data, ModuleState):
+                    pass
+                elif isinstance(in_data, ModuleData):
+                    pass
+                elif isinstance(in_data, ReceptionCode):
+                    pass
+                elif isinstance(in_data, Identification):
+                    pass
 
         # Shutdown
-        interface._transmission_queue.close()
-        interface._terminator_array.disconnect()
-
-    def check_loop_conditions(self) -> bool:
-        """Checks whether the communication loop should continue cycling or terminate.
-
-        This depends on the current value fo the terminator variable being False and the transmission queue being
-        empty.
-        """
-
-        # Terminates the runtime if instructed to do so via terminator array and there is no more data to send to the
-        # controller
-        if self._terminator_array.read_data(index=0, convert_output=True) and self._transmission_queue.empty():
-            return False
-
-        return True
-
-    def send_data(self) -> bool:
-        try:
-            out_data: (
-                    RepeatedModuleCommand
-                    | OneOffModuleCommand
-                    | DequeueModuleCommand
-                    | KernelCommand
-                    | ModuleParameters
-                    | KernelParameters
-            ) = self._transmission_queue.get_nowait()
-
-            # TODO send packed data to the logger
-
-            print(f"Data out: {out_data.packed_data}")
-
-            self._communication.send_message(out_data)
-
-            return True
-        except Empty:
-            return False
-
-    def receive_data(self) -> None:
-        in_data = self._communication.receive_message()
-
-        if in_data is None:
-            return
-
-        # TODO Send the input data payload to logger
-
-        print(f"Data in: {in_data.message}")
-
-        # Resolve additional processing steps associated with incoming data
-        if isinstance(in_data, KernelState):
-            pass
-        elif isinstance(in_data, KernelData):
-            pass
-        elif isinstance(in_data, ModuleState):
-            pass
-        elif isinstance(in_data, ModuleData):
-            pass
-        elif isinstance(in_data, ReceptionCode):
-            pass
-        elif isinstance(in_data, Identification):
-            pass
+        terminator_array.disconnect()
 
     def identify_controller(self) -> None:
         """Sends the Identification command to the connected Microcontroller's kernel class."""
