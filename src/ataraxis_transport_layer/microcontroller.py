@@ -1,36 +1,34 @@
 from abc import abstractmethod
-import multiprocessing
+from queue import Empty
 from multiprocessing import (
     Queue as MPQueue,
+    Manager,
     Process,
 )
-from queue import Empty
 from multiprocessing.managers import SyncManager
+
 import numpy as np
-from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
 from ataraxis_base_utilities import console
+from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
 from ataraxis_time.precision_timer.timer_class import PrecisionTimer
-from numba import uint8
 from multiprocessing.shared_memory import SharedMemory
 from .communication import (
-    Identification,
-    ReceptionCode,
-    RepeatedModuleCommand,
-    OneOffModuleCommand,
-    DequeueModuleCommand,
-    KernelCommand,
     KernelData,
-    KernelState,
     ModuleData,
+    KernelState,
     ModuleState,
+    KernelCommand,
+    ReceptionCode,
+    Identification,
     KernelParameters,
     ModuleParameters,
+    OneOffModuleCommand,
     SerialCommunication,
+    DequeueModuleCommand,
+    RepeatedModuleCommand,
     prototypes,
-    protocols,
+    UnityCommunication
 )
-
-import sys
 
 
 class ModuleInterface:
@@ -53,7 +51,7 @@ class ModuleInterface:
 
     Notes:
         When inheriting from this class, remember to call the parent's init method in the child class init method by
-        using 'super().__init__()'! if this is not done, the MicrocontrollerInterface class will likely not be able to
+        using 'super().__init__()'! If this is not done, the MicrocontrollerInterface class will likely not be able to
         properly interact with your ModuleInterface!
 
     Args:
@@ -65,31 +63,47 @@ class ModuleInterface:
             byte-codes range from 1 to 255.
         module_notes: Additional notes or description of the module. This can be used to provide further information
             about the interface module, such as the composition of its hardware or the location within the broader
-            experimental system. These notes will be instance-specific (unique given the module_type x module_id
-            combination)!
+            experimental system. These notes will be treated as instance-specific (unique given the module_type x
+            module_id combination)!
         process_data: A boolean flag that determines whether this module has additional logic to process
-            incoming data other than logging it (which is done for all received and sent data automatically). Use this
+            incoming data other than logging, which is done for all received and sent data automatically. Use this
             flag to optimize runtime performance by disabling unnecessary checks and runtimes for modules that do not
             contain custom data processing logic. Note, regardless of this flag's value, you still need to implement the
-            process_data() abstract method, but it may not be called at all during runtime.
+            process_data() abstract method.
 
     Attributes:
-        _module_type: Store the type (family) of the interfaced module.
+        _module_type: Stores the type (family) of the interfaced module.
         _module_id: Stores specific id of the interfaced module within the broader type (family).
-        _type_name: Stores a string-name of the module_type code. This is used to make the controller identifiable to
-            humans, the code will only use the module_type code during runtime.
+        _type_name: Stores a string-name of the module_type code. This is used to make the Module type identifiable to
+            humans.
         _module_notes: Stores additional notes about the module.
+        _process_data: Determines whether this interface exposes additional data processing logic.
     """
 
     def __init__(
-            self,
-            type_name: str,
-            module_type: np.uint8,
-            module_id: np.uint8,
-            module_notes: str | None = None,
-            *,
-            process_data: bool = False,
+        self,
+        type_name: str,
+        module_type: np.uint8,
+        module_id: np.uint8,
+        module_notes: str | None = None,
+        *,
+        process_data: bool = False,
     ) -> None:
+
+        # Verifies input byte-codes for validity.
+        if module_type < 1:
+            message = (
+                f"Invalid 'module_type' argument value {module_type} encountered when initializing the ModuleInterface "
+                f"class for {type_name} Modules. Valid type-codes range from 1 to 255."
+            )
+            console.error(message=message, error=ValueError)
+        if module_id < 1:
+            message = (
+                f"Invalid 'module_id' argument value {module_id} encountered when initializing the ModuleInterface "
+                f"class for {type_name} Modules. Valid id-codes range from 1 to 255."
+            )
+            console.error(message=message, error=ValueError)
+
         # Transfers arguments to class attributes.
         self._module_type: np.uint8 = module_type
         self._module_id: np.uint8 = module_id
@@ -98,33 +112,51 @@ class ModuleInterface:
         self._process_data: bool = process_data
 
     @abstractmethod
-    def process_data(self, message: ModuleData | ModuleState) -> None:
-        """Contains the additional processing logic for incoming State and Data messages.
+    def send_to_unity(self, message: ModuleData | ModuleState, unity_communication: UnityCommunication) -> None:
+        """Determines whether incoming State and Data messages should elicit sending data to Unity Game Engine.
 
-        This method allows providing custom data-handling logic for some or all State and Data messages sent by the
-        Module to the PC. Note, this method should NOT contain data logging, as all incoming and outgoing messages are
-        automatically logged. Instead, it should contain specific data-driven actions, e.g.: Sending a command to Unity
-        if the Module transmits a certain state code.
+        Unity is used to dynamically control the Virtual Reality (VR) environment used in scientific experiments that
+        Ataraxis codebase is designed to facilitate. Currently, the communication with Unity is handled via the
+        MQTT protocol and this method can be used to determine what data to send over to Unity and via which topic.
 
         Notes:
             This method should contain a sequence of if-else statements that filter and execute the necessary logic
             depending on the command and codes of the message and, for data messages, specific data object values.
             See one of the default module interface implementations for details on how to write this method.
+
+        Args:
+            message: The ModuleState or ModuleData object that stores the parsed message data.
+
+        Returns:
+            A tuple containing two elements. The first element is the string specifying the MQTT topic to which the data
+            should be sent. The second element is the data to be sent to the specified MQTT topic. Note, the data has
+            to be formatted exactly as necessary for it to be passed to the MQTT sender method without further
+            processing. For example, if the topic is designed to transmit byte-serialized data, the data should be a
+            Python 'bytes' object.
         """
+
         # While abstract method should prompt the user to implement this method, the default error-condition is also
         # included for additional safety.
         raise NotImplementedError(
-            f"process_data method for {self._type_name} Module must be implemented when subclassing the base "
+            f"send_to_unity method for {self._type_name} Module must be implemented when subclassing the base "
             f"ModuleInterface."
         )
 
     @abstractmethod
-    def write_code_map(self, code_map: NestedDictionary) -> NestedDictionary:
-        """Writes custom module status, command, and object data information to the provided code_map dictionary.
+    def get_from_unity(self, unity_communication: UnityCommunication) -> ModuleData | ModuleState:
+        pass
 
-        This method is called by the MicroControllerInterface that manages the Module to fill the shared code_map
-        dictionary with module-specific data. This maps number-codes used during serialized communication to represent
-        commands, events, and additional data objects to human-readable names and descriptions. In turn, this
+    @abstractmethod
+    def send_to_central_process(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
+        pass
+
+    @abstractmethod
+    def write_code_map(self, code_map: NestedDictionary) -> NestedDictionary:
+        """Writes custom module status, command, and object data information to the input code_map dictionary.
+
+        This method is called by the MicroControllerInterface that manages the ModuleInterface to fill the shared
+        code_map dictionary with module-specific data. This maps number-codes used in serialized communication to
+        map commands, events, and additional data objects to human-readable names and descriptions. In turn, this
         information is used to transform logged data, which is stored as serialized byte-strings, into a format more
         suitable for data analysis and long-term storage.
 
@@ -143,52 +175,96 @@ class ModuleInterface:
 
     @property
     def module_type(self) -> np.uint8:
-        """Returns the module's type (family) byte-code."""
+        """Returns the interfaced module's type (family) byte-code."""
         return self._module_type
 
     @property
     def type_name(self) -> str:
-        """Returns the module's type (family) human-readable name."""
+        """Returns the interfaced module's type (family) human-readable name."""
         return self._type_name
 
     @property
     def module_id(self) -> np.uint8:
-        """Returns the module's ID byte-code (instance-specific identifier code)."""
+        """Returns the interfaced module's ID byte-code (instance-specific identifier code)."""
         return self._module_id
 
     @property
     def module_notes(self) -> str:
-        """Returns additional notes for the specific module instance (unique for each module_id and module_type
-        combination)."""
+        """Returns additional notes for the specific interfaced module instance, which are unique for each module_id
+        and module_type combination."""
         return self._module_notes
 
 
 class MicroControllerInterface:
+    """Exposes methods for continuously communicating with the connected Ataraxis MicroController.
+
+    This class contains the logic that sets up a remote daemon process with SerialCommunication, UnityCommunication,
+    and DataLogger bindings to facilitate bidirectional communication between Unity, Python, and the Microcontroller.
+    Additionally, it exposes methods for submitting parameters and command to be sent to the Kernel and specific
+    Modules of the target Microcontroller.
+
+    Notes:
+        An instance of this class has to be instantiated for each concurrently operated Microcontroller. Moreover, since
+        the communication process runs on a separate core, the start() and shutdown() methods of the class have to be
+        used to enable or disable communication after class initialization.
+
+        This class uses SharedMemoryArray to control the runtime of the remote process, which makes it impossible to
+        have more than one instance of this class with the same controller_name at a time. Make sure the class instance
+        is deleted (to free SharedMemory buffer) before attempting to initialize a new class instance.
+
+        This class also exposes methods used to build the shared code_map_dictionary. These methods are designed to be
+        used together with similar methods from other Ataraxis libraries (notably: video-system) to build a map used for
+        deserializing and interpreting logged data. It is imperative that the generated dictionary is accurate for your
+        specific runtime, otherwise interpreting logged data may be challenging or impossible. It is highly advised to
+        use the CodeMapDictionary class from this library to build the shared dictionary to ensure its correctness.
+
+    Args:
+        controller_name: The name of the managed Microcontroller. This name has to be unique for all concurrently active
+            microcontrollers.
+        controller_id: The unique identifier code of the microcontroller. This code is hardcoded via the firmware
+            running on the microcontroller and should match the value provided to this class to avoid errors. Note!
+            This code is also used as the source_id for the data sent from this class to the DataLogger. Therefore, it
+            is important for this code to be unique across ALL concurrently active Ataraxis data producers
+            (microcontrollers, video systems, etc.).
+        usb_port: The serial port to which the Microcontroller is connected. You can use list_available_ports() global
+            function to discover addressable usb ports.
+        logger_queue: The multiprocessing Queue object exposed by the DataLogger class (via 'input_queue' property).
+            This queue is used to buffer and pipe data to be logged to the logger cores.
+        modules: A tuple of classes that inherit from the (base) ModuleInterface class. These classes will be used by
+            the main runtime cycle to handle the incoming data from the modules running on the microcontroller.
+        controller_notes: Additional description or notes about the connected microcontroller. These notes have
+            to be specific to the controller_id code.
+        baudrate: The baud rate at which the serial communication should be established. Note, this argument is ignored
+            for boards that use the USB communication protocol, such as most Teensy boards.
+        maximum_transmitted_payload_size: Should match the microcontroller serial reception buffer size. This is
+            used to ensure that transmitted messages will fit inside the reception buffer of teh board. If the size is
+            not set right, you may run into communication errors.
+    """
 
     def __init__(
-            self,
-            name: str,
-            controller_id: np.uint8,
-            usb_port: str,
-            baudrate: int,
-            maximum_transmitted_payload_size: int,
+        self,
+        controller_name: str,
+        controller_id: np.uint8,
+        usb_port: str,
+        logger_queue: MPQueue,
+        modules: tuple[ModuleInterface, ...],
+        controller_notes: str | None = None,
+        baudrate: int = 115200,
+        maximum_transmitted_payload_size: int = 254,
     ):
-        # Saves input arguments to class attributes. Mostly, this information will be used when thd class starts the
-        # communication cycle on a separate core
-        self._name: str = name
+        # Saves input arguments to class attributes. Mostly, this information will be used when the class starts the
+        # communication cycle on a separate core.
+        self._name: str = controller_name
         self._controller_id: np.uint8 = controller_id
-        # self._modules = modules
-        # modules: tuple[ModuleInterface, ...],
+        self._modules = modules
         self._usb_port: str = usb_port
         self._baudrate: int = baudrate
         self._maximum_transmitted_payload_size: int = maximum_transmitted_payload_size
-        # self._logger_queue: MPQueue = logger_queue
-        # self._logger_source_id: np.uint8 = logger_source_id
-        # controller_description: str,
+        self._logger_queue: MPQueue = logger_queue
 
         # Sets up the multiprocessing Queue, which is used to transfer the data to be sent to the Microcontroller
         # between the central Process and the Process running the communication cycle.
-        self._mp_manager: SyncManager = multiprocessing.Manager()
+        self._mp_manager: SyncManager = Manager()
         self._transmission_queue: MPQueue = self._mp_manager.Queue()  # type: ignore
 
         # Instantiates the array used to control the runtime of the communication Process.
@@ -197,7 +273,7 @@ class MicroControllerInterface:
                 name=f"{self._name}_terminator_array",
                 shape=np.zeros(shape=1, dtype=np.uint8).shape,
                 datatype=np.zeros(shape=1, dtype=np.uint8).dtype,
-                buffer=SharedMemory(name=f"{self._name}_terminator_array")
+                buffer=SharedMemory(name=f"{self._name}_terminator_array"),
             )
             self._terminator_array.connect()
             self._terminator_array.disconnect()
@@ -228,15 +304,21 @@ class MicroControllerInterface:
         # terminated, enabling bidirectional communication with the controller.
         self._communication_process: Process = Process(
             target=self.runtime_cycle,
-            args=(self._transmission_queue, self._usb_port, self._baudrate, self._maximum_transmitted_payload_size,
-                  self._terminator_array),
+            args=(
+                self._transmission_queue,
+                self._usb_port,
+                self._baudrate,
+                self._maximum_transmitted_payload_size,
+                self._terminator_array,
+            ),
             daemon=True,
         )
         self._communication_process.start()
 
     @staticmethod
-    def runtime_cycle(transmission_queue: MPQueue, usb_port: str, baudrate: int, payload: int,
-                      terminator_array: SharedMemoryArray) -> None:
+    def runtime_cycle(
+        transmission_queue: MPQueue, usb_port: str, baudrate: int, payload: int, terminator_array: SharedMemoryArray
+    ) -> None:
 
         # Initializes the communication class and saves it to class attribute
         communication = SerialCommunication(
@@ -263,18 +345,17 @@ class MicroControllerInterface:
             while True:
                 try:
                     out_data: (
-                            RepeatedModuleCommand
-                            | OneOffModuleCommand
-                            | DequeueModuleCommand
-                            | KernelCommand
-                            | ModuleParameters
-                            | KernelParameters
+                        RepeatedModuleCommand
+                        | OneOffModuleCommand
+                        | DequeueModuleCommand
+                        | KernelCommand
+                        | ModuleParameters
+                        | KernelParameters
                     ) = transmission_queue.get_nowait()
 
                     # TODO send packed data to the logger
                     counter += 1
                     print(f"{counter}. Time: {timestamp_timer.elapsed}, Data out: {out_data.packed_data}")
-                    sys.stdout.flush()
 
                     communication.send_message(out_data)
                 except Empty:
@@ -288,7 +369,6 @@ class MicroControllerInterface:
                 # TODO Send the input data payload to logger
                 counter += 1
                 print(f"{counter}. Time: {timestamp_timer.elapsed},  Data in: {in_data.message}")
-                sys.stdout.flush()
 
                 # Resolve additional processing steps associated with incoming data
                 if isinstance(in_data, KernelState):
@@ -315,66 +395,66 @@ class MicroControllerInterface:
         """Sends the reset command to the connected Microcontroller's kernel class."""
         self._transmission_queue.put(self._reset_command)
 
-    def build_core_code_map(self) -> NestedDictionary:
-        # Pre-initializes with a seed dictionary that includes the purpose (description) of the dictionary file
-        message = (
-            "This dictionary maps byte-values used by the Core classes that manage microcontroller runtime to "
-            "meaningful names and provides a human-friendly description for each byte-code. This information is "
-            "used by parser classes when decoding logged communication data, which is stored as serialized byte "
-            "strings. Without a correct code-map, it will be impossible to accurately decode logged data! Note, this "
-            "map only tracks the status codes of the Core classes, custom user-defined module assets are mapped by"
-            "a different dictionary (custom_assets_code_map)."
-        )
-        code_dictionary = NestedDictionary(seed_dictionary={"description": message})
-
-        # Kernel: status codes
-        code_dictionary = self._write_kernel_status_codes(code_dictionary)
-
-        # Kernel: command codes
-        code_dictionary = self._write_kernel_command_codes(code_dictionary)
-
-        # Module: core status codes.
-        # Note, primarily, modules use custom status and command codes for each module family. These are available from
-        # custom_codes_map dictionary. This section specifically tracks the 'core' codes inherited from the base Module
-        # class.
-        code_dictionary = self._write_base_module_status_codes(code_dictionary)
-
-        # Communication: status codes
-        code_dictionary = self._write_communication_status_codes(code_dictionary)
-
-        # TransportLayer: status codes
-        # This and the following sections track codes from classes wrapped by the Communication class. Due to the
-        # importance of the communication library, we track all status codes that are (theoretically) relevant for
-        # communication.
-        code_dictionary = self._write_transport_layer_status_codes(code_dictionary)
-
-        # COBS: (Consistent Over Byte Stuffing) status codes
-        code_dictionary = self._write_cobs_status_codes(code_dictionary)
-
-        # CRC: (Cyclic Redundancy Check) status codes
-        code_dictionary = self._write_crc_status_codes(code_dictionary)
-
-        # Generates and appends custom module information to the dictionary
-        added_modules = set()  # This is used to ensure custom information is added once per type
-        for module in self._modules:
-            if module.module_type in added_modules:
-                code_dictionary.write_nested_value(
-                    variable_path=f"{module.type_name}_module.id.{module.module_id}", value=module.module_notes
-                )
-                continue
-
-            added_modules.add(module.module_type)
-
-            code_dictionary.write_nested_value(variable_path=f"{module.type_name}_module", value=module.code_map)
-
-            code_dictionary.write_nested_value(
-                variable_path=f"{module.type_name}_module.code.id", value=module.module_type
-            )
-            code_dictionary.write_nested_value(
-                variable_path=f"{module.type_name}_module.id.{module.module_id}", value=module.module_notes
-            )
-
-        return code_dictionary
+    # def build_core_code_map(self) -> NestedDictionary:
+    #     # Pre-initializes with a seed dictionary that includes the purpose (description) of the dictionary file
+    #     message = (
+    #         "This dictionary maps byte-values used by the Core classes that manage microcontroller runtime to "
+    #         "meaningful names and provides a human-friendly description for each byte-code. This information is "
+    #         "used by parser classes when decoding logged communication data, which is stored as serialized byte "
+    #         "strings. Without a correct code-map, it will be impossible to accurately decode logged data! Note, this "
+    #         "map only tracks the status codes of the Core classes, custom user-defined module assets are mapped by"
+    #         "a different dictionary (custom_assets_code_map)."
+    #     )
+    #     code_dictionary = NestedDictionary(seed_dictionary={"description": message})
+    #
+    #     # Kernel: status codes
+    #     code_dictionary = self._write_kernel_status_codes(code_dictionary)
+    #
+    #     # Kernel: command codes
+    #     code_dictionary = self._write_kernel_command_codes(code_dictionary)
+    #
+    #     # Module: core status codes.
+    #     # Note, primarily, modules use custom status and command codes for each module family. These are available from
+    #     # custom_codes_map dictionary. This section specifically tracks the 'core' codes inherited from the base Module
+    #     # class.
+    #     code_dictionary = self._write_base_module_status_codes(code_dictionary)
+    #
+    #     # Communication: status codes
+    #     code_dictionary = self._write_communication_status_codes(code_dictionary)
+    #
+    #     # TransportLayer: status codes
+    #     # This and the following sections track codes from classes wrapped by the Communication class. Due to the
+    #     # importance of the communication library, we track all status codes that are (theoretically) relevant for
+    #     # communication.
+    #     code_dictionary = self._write_transport_layer_status_codes(code_dictionary)
+    #
+    #     # COBS: (Consistent Over Byte Stuffing) status codes
+    #     code_dictionary = self._write_cobs_status_codes(code_dictionary)
+    #
+    #     # CRC: (Cyclic Redundancy Check) status codes
+    #     code_dictionary = self._write_crc_status_codes(code_dictionary)
+    #
+    #     # Generates and appends custom module information to the dictionary
+    #     added_modules = set()  # This is used to ensure custom information is added once per type
+    #     for module in self._modules:
+    #         if module.module_type in added_modules:
+    #             code_dictionary.write_nested_value(
+    #                 variable_path=f"{module.type_name}_module.id.{module.module_id}", value=module.module_notes
+    #             )
+    #             continue
+    #
+    #         added_modules.add(module.module_type)
+    #
+    #         code_dictionary.write_nested_value(variable_path=f"{module.type_name}_module", value=module.code_map)
+    #
+    #         code_dictionary.write_nested_value(
+    #             variable_path=f"{module.type_name}_module.code.id", value=module.module_type
+    #         )
+    #         code_dictionary.write_nested_value(
+    #             variable_path=f"{module.type_name}_module.id.{module.module_id}", value=module.module_notes
+    #         )
+    #
+    #     return code_dictionary
 
     @classmethod
     def _write_kernel_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
@@ -588,7 +668,7 @@ class MicroControllerInterface:
         section = "kernel.data_objects.kModuleSetupErrorObject"
         description_1 = "The type-code of the module that failed its setup sequence."
         description_2 = "The id-code of the module that failed its setup sequence."
-        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(2))
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(2))
         code_dictionary.write_nested_value(
             variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
         )
@@ -597,11 +677,66 @@ class MicroControllerInterface:
             variable_path=f"{section}.descriptions", value=(description_1, description_2)
         )
 
+        section = "kernel.data_objects.kDataReceptionErrorObject"
+        description_1 = "The status-code of the Communication class instance."
+        description_2 = "The status-code of the TransportLayer class instance or a COBS /CRC error code."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(3))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.names", value=("communication_status", "transport_layer_status")
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
+        section = "kernel.data_objects.kDataSendingErrorObject"
+        description_1 = "The status-code of the Communication class instance."
+        description_2 = "The status-code of the TransportLayer class instance or a COBS /CRC error code."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(4))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.names", value=("communication_status", "transport_layer_status")
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
+        section = "kernel.data_objects.kStateSendingErrorObject"
+        description_1 = "The status-code of the Communication class instance."
+        description_2 = "The status-code of the TransportLayer class instance or a COBS /CRC error code."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(5))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.names", value=("communication_status", "transport_layer_status")
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
+        section = "kernel.data_objects.kServiceSendingErrorObject"
+        description_1 = "The status-code of the Communication class instance."
+        description_2 = "The status-code of the TransportLayer class instance or a COBS /CRC error code."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(6))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.names", value=("communication_status", "transport_layer_status")
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
         section = "kernel.data_objects.kInvalidMessageProtocolObject"
         description_1 = "The invalid protocol byte-code value that was received by the Kernel."
-        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(7))
-        code_dictionary.write_nested_value(variable_path=f"{section}.prototype_code",
-                                           value=prototypes.kOneUnsignedByte)
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(7))
+        code_dictionary.write_nested_value(variable_path=f"{section}.prototype_code", value=prototypes.kOneUnsignedByte)
         code_dictionary.write_nested_value(variable_path=f"{section}.names", value=("protocol_code",))
         code_dictionary.write_nested_value(variable_path=f"{section}.descriptions", value=(description_1,))
 
@@ -612,7 +747,7 @@ class MicroControllerInterface:
         description_2 = (
             "The id-code of the module that failed to extract and apply its parameter data from received message."
         )
-        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(10))
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(10))
         code_dictionary.write_nested_value(
             variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
         )
@@ -626,7 +761,7 @@ class MicroControllerInterface:
             "The type-code of the addressed module transmitted by the message whose addressee was not found."
         )
         description_2 = "The id-code of the addressed module transmitted by the message whose addressee was not found."
-        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=uint8(12))
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(12))
         code_dictionary.write_nested_value(
             variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
         )
@@ -698,6 +833,51 @@ class MicroControllerInterface:
         code_dictionary.write_nested_value(variable_path=f"{section}.code", value=np.uint8(4))
         code_dictionary.write_nested_value(variable_path=f"{section}.description", value=description)
         code_dictionary.write_nested_value(variable_path=f"{section}.error", value=True)
+
+        return code_dictionary
+
+    @classmethod
+    def _write_base_module_object_data(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
+        """Fills the module.object_data section of the core_codes_map dictionary with data.
+
+        This section is used to provide additional information about the values of the data objects used by ModuleData
+        messages transmitted by the method inherited from the (base) Module class. These objects usually have a
+        different interpretation depending on the event-code of the message they are sent with.
+
+        Args:
+            code_dictionary: The dictionary to be filled with module object data.
+
+        Returns:
+            The updated dictionary with module object data information filled.
+        """
+
+        section = "module.data_objects.kDataSendingErrorObject"
+        description_1 = "The status-code of the Communication class instance."
+        description_2 = "The status-code of the TransportLayer class instance or a COBS /CRC error code."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(1))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.names", value=("communication_status", "transport_layer_status")
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
+
+        section = "module.data_objects.kStateSendingErrorObject"
+        description_1 = "The status-code of the Communication class instance."
+        description_2 = "The status-code of the TransportLayer class instance or a COBS /CRC error code."
+        code_dictionary.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(2))
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.prototype_code", value=prototypes.kTwoUnsignedBytes
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.names", value=("communication_status", "transport_layer_status")
+        )
+        code_dictionary.write_nested_value(
+            variable_path=f"{section}.descriptions", value=(description_1, description_2)
+        )
 
         return code_dictionary
 

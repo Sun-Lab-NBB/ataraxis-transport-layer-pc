@@ -5,10 +5,9 @@ API documentation: https://ataraxis-transport-layer-api-docs.netlify.app/
 Author: Ivan Kondratyev (Inkaros)
 """
 
-from .helper_modules import CRCProcessor, COBSProcessor
-from .transport_layer import SerialTransportLayer
-from .communication import SerialCommunication, KernelParameters, ModuleParameters, RepeatedModuleCommand
-from .microcontroller import MicroControllerInterface
 from .custom_modules import TTLModule
+from .helper_modules import CRCProcessor, COBSProcessor
+from .microcontroller import MicroControllerInterface
+from .transport_layer import SerialTransportLayer, list_available_ports
 
-__all__ = ["SerialTransportLayer", "CRCProcessor", "COBSProcessor"]
+__all__ = ["SerialTransportLayer", "CRCProcessor", "COBSProcessor", "list_available_ports", "MicroControllerInterface"]

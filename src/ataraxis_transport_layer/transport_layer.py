@@ -36,6 +36,34 @@ from .helper_modules import (
 )
 
 
+def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
+    """Provides the information about each serial port addressable through the pySerial library.
+
+    This function is intended to be used for discovering and selecting the serial port 'names' to use with
+    TransportLayer and Communication classes.
+
+    Returns:
+        A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
+        port.
+
+    """
+    # Gets the list of port objects visible to the pySerial library.
+    available_ports = list_ports.comports()
+
+    # Prints the information about each port using terminal.
+    information_list = [
+        {
+            "Name": port.name,
+            "Device": port.device,
+            "PID": port.pid,
+            "Description": port.description,
+        }
+        for port in available_ports
+    ]
+
+    return tuple(information_list)
+
+
 class SerialTransportLayer:
     """Provides methods to bidirectionally communicate with Microcontrollers running the C++ version of the
     TransportLayer class over the UART or USB Serial interface.
@@ -300,34 +328,6 @@ class SerialTransportLayer:
             )
         return representation_string
 
-    @staticmethod
-    def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
-        """Provides the information about each serial port addressable through the pySerial library.
-
-        This method is intended to be used for discovering and selecting the serial port 'names' to use with this
-        class.
-
-        Returns:
-            A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
-            port.
-
-        """
-        # Gets the list of port objects visible to the pySerial library.
-        available_ports = list_ports.comports()
-
-        # Prints the information about each port using terminal.
-        information_list = [
-            {
-                "Name": port.name,
-                "Device": port.device,
-                "PID": port.pid,
-                "Description": port.description,
-            }
-            for port in available_ports
-        ]
-
-        return tuple(information_list)
-
     @property
     def available(self) -> bool:
         """Returns True if enough bytes are available from the serial port to justify attempting to receive a packet."""
@@ -368,7 +368,7 @@ class SerialTransportLayer:
         """Resets the transmission buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
         efficiency and runtime speed.
         """
         self._bytes_in_transmission_buffer = 0
@@ -377,14 +377,40 @@ class SerialTransportLayer:
         """Resets the reception buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
         efficiency and runtime speed.
         """
         self._bytes_in_reception_buffer = 0
 
     def write_data(
         self,
-        data_object: np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool | NDArray[np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool] | type[Any],
+        data_object: (
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
+            | NDArray[
+                np.uint8
+                | np.uint16
+                | np.uint32
+                | np.uint64
+                | np.int8
+                | np.int16
+                | np.int32
+                | np.int64
+                | np.float32
+                | np.float64
+                | np.bool
+            ]
+            | type[Any]
+        ),
         start_index: int | None = None,
     ) -> int:
         """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
@@ -536,7 +562,19 @@ class SerialTransportLayer:
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_scalar_data(
         target_buffer: NDArray[np.uint8],
-        scalar_object: np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool,
+        scalar_object: (
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
+        ),
         start_index: int,
     ) -> int:
         """Converts the input numpy scalar to a sequence of bytes and writes it to the transmission buffer at the
@@ -581,7 +619,17 @@ class SerialTransportLayer:
     def _write_array_data(
         target_buffer: NDArray[np.uint8],
         array_object: NDArray[
-            np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
         ],
         start_index: int,
     ) -> int:
@@ -628,7 +676,33 @@ class SerialTransportLayer:
 
     def read_data(
         self,
-        data_object: np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool | NDArray[np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool] | type[Any],
+        data_object: (
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
+            | NDArray[
+                np.uint8
+                | np.uint16
+                | np.uint32
+                | np.uint64
+                | np.int8
+                | np.int16
+                | np.int32
+                | np.int64
+                | np.float32
+                | np.float64
+                | np.bool
+            ]
+            | type[Any]
+        ),
         start_index: int = 0,
     ) -> tuple[Any, int]:
         """Recreates the input data_object using the data read from the payload stored inside the class reception
@@ -782,7 +856,17 @@ class SerialTransportLayer:
     def _read_array_data(
         source_buffer: NDArray[np.uint8],
         array_object: NDArray[
-            np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
         ],
         start_index: int,
         payload_size: int,
@@ -1136,7 +1220,6 @@ class SerialTransportLayer:
         # Enters the packet parsing loop. Due to the parsing implementation, the packet can be resolved over at most
         # three iterations of the parsing method. Therefore, this loop is statically capped at 3 iterations.
         for call_count in range(3):
-
             # Converts leftover_bytes (bytes) to a numpy uint8 array for compatibility with _parse_packet
             remaining_bytes = np.frombuffer(self._leftover_bytes, dtype=np.uint8).copy()
 
@@ -1311,7 +1394,6 @@ class SerialTransportLayer:
         previous_additional_bytes = 0  # Tracks how many bytes were available during the previous iteration of the loop
         once = True  # Allows the loop below to run once even if timeout is 0
         while self._timer.elapsed < timeout or once:
-
             # Deactivates the 'once' condition to make future loop iterations correctly depend on timeout
             if once:
                 once = False

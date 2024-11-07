@@ -1519,9 +1519,6 @@ class MockDataClass:
     field2: np.ndarray
 
 
-
-
-
 @dataclass
 class MockDataClass:
     field1: np.uint8
@@ -1615,7 +1612,17 @@ def _write_array_data(
     self,
     target_buffer: NDArray[np.uint8],
     array_object: NDArray[
-        np.uint8 | np.uint16 | np.uint32 | np.uint64 | np.int8 | np.int16 | np.int32 | np.int64 | np.float32 | np.float64 | np.bool_
+        np.uint8
+        | np.uint16
+        | np.uint32
+        | np.uint64
+        | np.int8
+        | np.int16
+        | np.int32
+        | np.int64
+        | np.float32
+        | np.float64
+        | np.bool_
     ],
     start_index: int,
 ) -> int:
