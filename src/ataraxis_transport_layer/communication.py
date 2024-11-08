@@ -1,9 +1,8 @@
-"""This module provides the SerialCommunication class and message structures used to bidirectionally communicate with
-microcontroller systems running Ataraxis firmware.
+"""This module provides the SerialCommunication and UnityCommunication classes, as well as helper message layout
+structures, that enable communication between various project Ataraxis systems.
 
-The SerialCommunication class builds on top of the SerialTransportLayer class and encapsulates most of the parameters
-and functions necessary to communicate with the controller running the default version of the microcontroller
-Communication class.
+Currently, SerialCommunication is used to interface between the PC and the MicroController, while UnityCommunication is
+used to interface between python PC code and Unity game engine running Virtual Environment tasks.
 """
 
 from typing import Any
@@ -12,13 +11,13 @@ from dataclasses import field, dataclass
 import numpy as np
 from numpy.typing import NDArray
 from ataraxis_base_utilities import console
-from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
+from ataraxis_data_structures import NestedDictionary
+import paho.mqtt.client as mqtt
 
 from .transport_layer import SerialTransportLayer, list_available_ports
 
 import json
 
-import paho.mqtt.client as mqtt
 
 @dataclass(frozen=True)
 class SerialProtocols:
@@ -1143,6 +1142,11 @@ class SerialCommunication:
         self._identification = Identification(self._transport_layer)
         self._reception_code = ReceptionCode(self._transport_layer)
 
+    def __repr__(self) -> str:
+        """Returns a string representation of the SerialCommunication object."""
+        # noinspection PyProtectedMember
+        return f"SerialCommunication(usb_port={self._transport_layer._port})"
+
     @staticmethod
     def list_available_ports() -> tuple[dict[str, int | str], ...]:
         """Provides the information about each serial port addressable through the class (via pySerial library).
@@ -1257,100 +1261,202 @@ class SerialCommunication:
 
 
 class UnityCommunication:
-    """Provides methods for communicating to Unity during cylindrical treadmill task.
+    """Internally binds an MQTT client and exposes methods for communicating with Unity game engine running one of the
+    Ataraxis-compatible tasks.
+
+    This class is intended to be used together with SerialCommunication class to transfer data between microcontrollers
+    and Unity game engine using the Gimbl library to manage the Virtual Reality (VR) experimental sessions. Usually,
+    both communication classes will be managed by the same process (core) that handles the necessary transformations to
+    bridge MQTT and Serial communication protocols sued by this library.
+
+    Notes:
+        Unlike most classes of this library, this one is intentionally specialized for the VR environment used in the
+        Sun lab. It is very likely that the class needs to be adjusted to work for other use cases.
+
+        In the future, this class may be phased out in favor of a unified communication protocol that would use
+        Zero-MQ binding instead of MQTT to transmit byte-serialized payloads.
 
     Args:
-        ip: the ip address that Unity is using to create MQTT channels.
-        port: the port that Unity is using to create MQTT channels.
-        shm_name: the name of the reward shared memory array. If multiple UnityComm classes are created synchronously, each should have a unique shm_name.
+        ip: The ip address used by Unity-MQTT binding to create channels.
+        port: The port used by Unity-MQTT binding to create MQTT channels.
+        lick_topic: Determines whether this class instance should connect to and be able to send lick data to Unity.
+        position_topic: Determines whether this class instance should connect to and be able to send treadmill position
+            data to Unity.
+        reward_topic: Determines whether this class instance should connect to and be able to receive reward data
+            from Unity. Note, if this flag is True, the client will initialize a thread to continuously monitor the
+            reward topic for new messages.
 
     Attributes:
-        reward_shm: a Shared Memory Array with a single value. This value starts as 0 and is set to 1 when the Unity system records that the mouse received a reward. The value of the first index of reward_shm is only set to 1 upon a reward if the connect method has been called.
-        _broker: the ip address that Unity is using to create MQTT channels.
-        _port: the port that Unity is using to create MQTT channels.
-        _lick_topic: the name of the MQTT channel unity uses to communicate licks.
-        _move_topic: the name of the MQTT channel unity uses to communicate movement.
-        _reward_topic: the name of the MQTT channel unity uses to communicate rewards.
-        _send_client: MQTT client subscribed to Unity's move and lick channels.
-        _receive_client: MQTT client subscribed to Unity's reward channel. This additional client exclusively subscribes to Unity's reward channel, thus its listener recieves less triggers.
+        _broker: Stores the IP address of the MQTT broker.
+        _port: Stores the port used by the broker's TCP socket.
+        _reward_flag: Tracks whether the reward command has been received from Unity.
+        _connected: Tracks whether the class instance is currently connected to the MQTT broker.
+        _publish_topics: Stores the names of the topics used by the class instance to publish data to Unity.
+        _subscribe_topics: Stores the names of the topics used by the class instance to subscribe to data from Unity.
+        _client: Stores the initialized mqtt Client class instance that carries out the communication.
+
+    Raises:
+        ValueError: If the class is not configured to subscribe or publish to any MQTT topics. Also, if the port or ip
+            arguments are not valid.
     """
 
-    def __init__(self, ip: str = "127.0.0.1", port: int = 1883, shm_name: str = "reward_shm"):
-        prototype = np.array([0], dtype=np.int32)
+    def __init__(
+        self,
+        ip: str = "127.0.0.1",
+        port: int = 1883,
+        *,
+        lick_topic: bool = False,
+        position_topic: bool = False,
+        reward_topic: bool = False,
+    ) -> None:
 
-        self.reward_shm = SharedMemoryArray.create_array(
-            name=shm_name,
-            prototype=prototype,
-        )
+        # Ensures that ip and port formats are valid:
+        if not isinstance(ip, str) or len(ip.split(".")) != 4:
+            message = (
+                f"Unable to initialize a UnityCommunication class instance. A '.'-delimited string in the format "
+                f"'127.0.0.1' is expected as 'ip' argument, but instead encountered {ip} of type "
+                f"{type(ip).__name__}."
+            )
+            console.error(message=message, error=ValueError)
+        if port < 0:
+            message = (
+                f"Unable to initialize a UnityCommunication class instance. A positive integer expected as 'port' "
+                f"argument, but instead encountered {port} of type {type(port).__name__}."
+            )
+            console.error(message=message, error=ValueError)
 
         self._broker: str = ip
         self._port: int = port
+        self._reward_flag = False
+        self._connected = False
+        self._publish_topics: list[str] | tuple[str, ...] = []
+        self._subscribe_topics: list[str] | tuple[str, ...] = []
 
-        self._lick_topic: str = "LickPort/"
-        self._move_topic: str = "LinearTreadmill/Data"
-        self._reward_topic: str = "Gimbl/Reward/"
+        # Depending on the topic flags, initializes the necessary topics.
+        if lick_topic:
+            self._publish_topics.append("LickPort/")
+        if position_topic:
+            self._publish_topics.append("LinearTreadmill/Data")
+        if reward_topic:
+            self._subscribe_topics.append("Gimbl/Reward/")
 
-        self._send_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)  # type: ignore
+        # If no topics are enabled, aborts with an error.
+        if not len(self._subscribe_topics) == 0 and len(self._publish_topics) == 0:
+            message = (
+                f"Unable to initialize a UnityCommunication class instance. At least one MQTT topic flag must be True "
+                f"to allow class initialization."
+            )
+            console.error(message=message, error=ValueError)
 
-        # This additional client exclusively subscribes to Unity's reward channel, thus it only listens to reward signals. This will lead to less triggers to the on_message function.
-        self._receive_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)  # type: ignore
+        # Converts topic lists to tuples.
+        self._publish_topics = tuple(self._publish_topics)
+        self._subscribe_topics = tuple(self._subscribe_topics)
 
-    def connect(self) -> None:
-        """Connects to MQTT channels and the Shared Memory Array. Sets up a listener to modify reward_shm when a reward is recorded in Unity. Should be called before any calls to send_movement, send_lick, or reward_ocurred. Should be called before accessing reward_shm. Should be followed by a call to disconnect()."""
-        self.reward_shm.connect()
+        # Initializes the MQTT client. Note, it needs to be connected before it can send and receive messages!
+        self._client: mqtt.Client = mqtt.Client(protocol=mqtt.MQTTv5, transport="tcp")
 
-        self._send_client.connect(self._broker, self._port)
-        self._receive_client.connect(self._broker, self._port)
+    def __repr__(self) -> str:
+        """Returns a string representation of the UnityCommunication object."""
+        return (
+            f"UnityCommunication(broker_ip={self._broker}, socket_port={self._port}, connected={self._connected}, "
+            f"subscribe_topics={self._subscribe_topics}, publish_topics={self._publish_topics}"
+        )
 
-        self._send_client.subscribe(self._lick_topic)
-        self._send_client.subscribe(self._move_topic)
-        self._receive_client.subscribe(self._reward_topic)
+    def __del__(self):
+        """Ensures proper resource release when the class instance is garbage-collected."""
+        self.disconnect()
 
-        def on_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage) -> None:
-            if message.topic == self._reward_topic:
-                self.reward_shm.write_data(0, 1)
+    def _on_message(self, _client: mqtt.Client, _userdata: Any, message: mqtt.MQTTMessage) -> None:
+        """The callback function used to receive reward data from MQTT.
 
-        self._receive_client.on_message = on_message
-        self._receive_client.loop_start()
-
-    def send_movement(self, movement: float) -> None:
-        """Sends movement to the Unity mouse object.
-
-        Requires the connect method to have been called.
-
+        When passed to the _rx_client, this function will be called each time a new message is received. This function
+        will then modify the _reward_flag to track the received reward status.
 
         Args:
-            movement: the amount, in Unity units, to move the Unity mouse object.
+            _client: The MQTT client that received the message. Currently not used.
+            _userdata: Custom user-defined data. Currently not used.
+            message: The MQTT message received.
+        """
+        # Whenever a reward message is received, sets the reward_flag to True.
+        if message.topic == self._publish_topics[0]:
+            self._reward_flag = True
+
+    def connect(self) -> None:
+        """Connects to the requested MQTT channels and sets up the necessary callback routines.
+
+        This method has to be called to initialize communication. If this method is called, the disconnect() method
+        should be called before garbage-collecting the class to ensure proper resource release.
+
+        Notes:
+            If this class instance subscribes (listens) to any topics, it will start a perpetually active thread
+            with a listener callback to monitor incoming traffic.
+        """
+
+        # Guards against re-connecting an already connected client.
+        if not self._connected:
+            return
+
+        # Initializes the client
+        self._client.connect(self._broker, self._port)
+
+        # If the class is configured to connect to any topics, enables the connection callback and starts the monitoring
+        # thread. Note, this expects the _on_message function to be configured to properly handle all supported
+        # subscription topics.
+        if len(self._subscribe_topics) != 0:
+            # Adds the callback function and starts the monitoring loop.
+            self._client.on_message = self._on_message
+            self._client.loop_start()
+
+        # Subscribes to necessary topics with qos of 0. Note, this assumes that the communication is happening over
+        # a virtual TCP socket and, therefore, does nto need qos.
+        for topic in self._subscribe_topics:
+            self._client.subscribe(topic=topic, qos=0)
+
+    def send_movement(self, displacement: float) -> None:
+        """Sends the linear treadmill displacement relative to the last evaluation period to Unity.
+
+        This data is typically obtained from the microcontroller running the EncoderModule class code.
+
+        Args:
+            displacement: The amount, in Unity units, the treadmill moved over the last evaluation period.
 
         """
-        json_string = json.dumps({"movement": movement})
+        # Converts the displacement into JSON byte-string.
+        json_string = json.dumps({"movement": displacement})
         byte_array = json_string.encode("utf-8")
-        self._send_client.publish(self._move_topic, byte_array)
+        self._client.publish(topic=self._publish_topics[1], payload=byte_array, qos=0)
 
     def send_lick(self) -> None:
-        """Triggers a lick by the Unity mouse object.
+        """Sends a binary lick ON signal to Unity.
 
-        Requires the connect method to have been called.
+        The lick data is obtained from the microcontroller running the LickSensorModule class code. The controller
+        pre-thresholds the data to determine whether the licks have or have not occurred when it sends it to the PC.
         """
-        self._send_client.publish(self._lick_topic)
+        self._client.publish(topic=self._publish_topics[0], qos=0)
 
+    @property
     def reward_occurred(self) -> bool:
-        """Returns True if a reward has occurred since the connect method has been called.
+        """Returns True if Unity has sent a reward-trigger message since the last check.
 
-        Alternatively, the reward_shm array can be accessed directly.
+        It is expected that this data is transferred to the microcontroller running the WaterValveModule code to deliver
+        the water reward.
         """
-        if self.reward_shm.read_data(0) == 1:
+        if self._reward_flag:
+            self._reward_flag = False  # Inactivates the tracker, which ensures the reward is 'consumed'
             return True
-        return False
-
-    def reward_reset(self) -> None:
-        """Resets the shared memory array such that reward_occurred will return False again until a new reward occurs."""
-        self.reward_shm.write_data(0, 0)
+        else:
+            return False
 
     def disconnect(self) -> None:
-        """Disconnects all channels and the Shared Memory Array."""
-        self._receive_client.loop_stop()
-        self._receive_client.disconnect()
-        self._send_client.disconnect()
-        self.reward_reset()
-        self.reward_shm.disconnect()
+        """Disconnects the client from the MQTT broker."""
+
+        # Prevents running the rest of the code if the client was not connected.
+        if not self._connected:
+            return
+
+        # Stops the listener thread if the client was subscribed to receive topic data.
+        if len(self._subscribe_topics) != 0:
+            self._client.loop_stop()
+
+        # Disconnects from the client.
+        self._client.disconnect()

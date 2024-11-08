@@ -108,6 +108,7 @@ noconda = [
     "build>=1,<2",
     # Types:
     "types-pyserial>=3,<4",
+    "types-paho-mqtt>=1,<2",
     # Automation
     "ataraxis-automation>=3,<4",
 ]
