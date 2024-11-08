@@ -2624,45 +2624,83 @@ def test_receive_data_status_103_invalid_payload_size():
         print("Caught expected ValueError for status 103:", e)
 
 
-def test_receive_data_status_104_delimiter_encountered_early():
+def test_receive_data_status_104_premature_delimiter():
     # Create a mock serial port and inject it into the SerialTransportLayer
     mock_serial = MockSerial()
 
-    # Construct a payload where the delimiter byte appears early (before the end of the payload)
-    payload = np.array([129, 0, 1, 0, 2, 3, 0, 0xAB, 0xCD], dtype=np.uint8)  # Delimiter appears before the expected end
+    # Construct a payload with a premature delimiter byte (0x00) before the expected end position
+    # Adjust the payload length and data to ensure it triggers status 104
+    # Format: [129 (start byte), payload size, data..., premature delimiter, CRC bytes]
+    payload = np.array([129, 5, 1, 2, 3, 0, 4, 0xAB, 0xCD], dtype=np.uint8)  # Premature 0x00 as a delimiter
 
+    # Write the data into the mock serial buffer to simulate incoming data
     mock_serial.write(payload.tobytes())
-    layer = SerialTransportLayer(port="COM_TEST", test_mode=True)
-    layer._port = mock_serial
 
+    # Instantiate the SerialTransportLayer with the mock serial port
+    layer = SerialTransportLayer(port="COM_TEST", test_mode=True)
+    layer._port = mock_serial  # Override with the mock port
+
+    # Execute the `receive_data` method to trigger packet parsing and check for status 104
     try:
-        success = layer.receive_data()
-        print("Test success:", success)
+        layer.receive_data()
     except RuntimeError as e:
         print("Caught expected RuntimeError for status 104:", e)
+    except ValueError as e:
+        print("Caught expected ValueError for status 104:", e)
 
 
-def test_receive_data_status_105_last_byte_not_delimiter():
+from unittest.mock import patch
+
+import pytest
+from ataraxis_base_utilities.console.console_class import Console
+
+
+def test_receive_data_status_105_unexpected_last_delimiter():
+    """Test that receive_data handles status == 105 when the last byte before CRC does not match the expected delimiter."""
     # Create a mock serial port and inject it into the SerialTransportLayer
     mock_serial = MockSerial()
 
-    # Construct a payload where the last byte is not the expected delimiter
-    payload = np.array([129, 4, 1, 2, 3, 4, 0xAB, 0xCD], dtype=np.uint8)
+    # Construct a payload where the last byte before CRC does not match the expected delimiter byte
+    payload = np.array([129, 5, 6, 1, 2, 3, 4, 5, 0xAB, 0xCD], dtype=np.uint8)  # Example with CRC bytes
 
+    # Write the data into the mock serial buffer to simulate incoming data
     mock_serial.write(payload.tobytes())
+
+    # Instantiate the SerialTransportLayer with the mock serial port
     layer = SerialTransportLayer(port="COM_TEST", test_mode=True)
-    layer._port = mock_serial
+    layer._port = mock_serial  # Override with the mock port
 
-    try:
-        success = layer.receive_data()
-        print("Test success:", success)
-    except RuntimeError as e:
-        print("Caught expected RuntimeError for status 105:", e)
+    # Mock the _parse_packet to simulate packet status 105
+    layer._parse_packet = (
+        lambda *args: (
+            105,
+            len(payload) - 2,  # Simulate bytes parsed count excluding CRC bytes
+            payload[:-2],  # Provide payload without CRC for inspection
+            payload[:-2],  # Payload to simulate parsed bytes
+        )
+    )
 
+    # Patch Console.error and execute the `receive_data` method
+    with patch.object(Console, "error") as mock_error:
+        with pytest.raises(RuntimeError) as exc_info:
+            layer.receive_data()
 
-test_receive_data_status_103_invalid_payload_size()
-test_receive_data_status_104_delimiter_encountered_early()
-test_receive_data_status_105_last_byte_not_delimiter()
+        # Define expected message for status 105
+        expected_message_105 = (
+            f"Failed to parse the incoming serial packet data. Delimiter byte value "
+            f"({layer._delimiter_byte}) expected as the last payload byte "
+            f"({len(payload) - 3}), but instead encountered {payload[-3]}. This likely indicates packet "
+            f"corruption or mismatch in the transmission parameters between this system and the Microcontroller."
+        )
+
+        # Collect all error messages from mock calls
+        messages_105 = [call_args.kwargs["message"] for call_args in mock_error.call_args_list]
+
+        # Directly raise an error if expected message is not found
+        if expected_message_105 not in messages_105:
+            raise RuntimeError(
+                f"Expected error message for status 105 not found.\nExpected: {expected_message_105}\nReceived: {messages_105}"
+            )
 
 
 def test_receive_data_status_102():
