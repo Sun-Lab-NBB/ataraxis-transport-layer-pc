@@ -1,11 +1,9 @@
-import sys
 
 import numpy as np
-from ataraxis_time.precision_timer.timer_class import PrecisionTimer
-from ataraxis_transport_layer import MicroControllerInterface, SerialCommunication, ModuleParameters, KernelParameters, RepeatedModuleCommand
 from ataraxis_time import PrecisionTimer
+from ataraxis_time.precision_timer.timer_class import PrecisionTimer
 
-from src.ataraxis_transport_layer.communication import KernelCommand
+from ataraxis_transport_layer import KernelParameters, ModuleParameters, RepeatedModuleCommand, MicroControllerInterface
 
 #print(SerialCommunication.list_available_ports())
 
@@ -31,8 +29,8 @@ ttl_pulse = RepeatedModuleCommand(
     cycle_delay=np.uint32(5000000),
 )
 
-timeout = PrecisionTimer(precision='ms')
-if __name__ == '__main__':
+timeout = PrecisionTimer(precision="ms")
+if __name__ == "__main__":
     interface = MicroControllerInterface(
         name="Test",
         controller_id=np.uint8(123),
@@ -49,7 +47,7 @@ if __name__ == '__main__':
 
     timeout.delay_noblock(delay=20000, allow_sleep=True)
 
-    print('Terminating')
+    print("Terminating")
 
     interface._terminator_array.write_data(0, 1)
     timeout.delay_noblock(delay=2000, allow_sleep=True)
