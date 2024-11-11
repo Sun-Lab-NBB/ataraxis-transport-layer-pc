@@ -6,7 +6,6 @@ from multiprocessing import (
 )
 from multiprocessing.managers import SyncManager
 from multiprocessing.shared_memory import SharedMemory
-from sqlite3 import adapt
 
 import numpy as np
 from ataraxis_base_utilities import console
@@ -23,7 +22,9 @@ from .communication import (
     SerialCommunication,
     DequeueModuleCommand,
     RepeatedModuleCommand,
-    prototypes, protocols,
+    prototypes,
+    protocols,
+    Identification,
 )
 
 
@@ -52,7 +53,7 @@ class ModuleInterface:
         All data received from or sent to the microcontroller is automatically logged as byte-serialized numpy arrays.
         Therefore, if you do not need any other processing steps, such as sending to or receiving data from Unity,
         do not enable any custom processing flags. You will, however, have to implement all abstract methods, even if
-        the class instance will not use them due to its flag-configuration.
+        the class instance does not use them due to its flag-configuration.
 
     Args:
         module_type: The byte id-code of the type (family) of Modules managed by this interface. This has to match the
@@ -73,7 +74,7 @@ class ModuleInterface:
             experimental setup.
         unity_input_topics: A list of MQTT topics to which this module should subscribe to receive commands from Unity.
             If the module should not receive commands from Unity, set to None. This list will be used to initialize the
-            UnityCommunication class instance to listen for the requested topics. If the list is provided, it is
+            UnityCommunication class instance to listen to the requested topics. If the list is provided, it is
             expected that get_from_unity() method implements the logic for accessing and handling the incoming commands.
         unity_output: Determines whether to send received data to Unity via the MQTT protocol. If this flag is True, it
             is expected that send_to_unity() method implements the logic for sending the necessary data to Unity.
@@ -88,6 +89,9 @@ class ModuleInterface:
         _module_id: Stores specific id of the interfaced module within the broader type (family).
         _instance_name: Stores the name of the specific module instance.
         _instance_description: Stores the description of the specific module instance.
+        _type_id: Stores the type and id combined into a single uint16 value. This value should be unique for all
+            possible type-id pairs and is used to ensure that each used module instance has a unique ID-type
+            combination.
         _unity_output: Determines whether to send data to Unity.
         _unity_input: Determines whether to receive commands from Unity.
         _queue_output: Determines whether to send data to the output queue.
@@ -98,17 +102,17 @@ class ModuleInterface:
     """
 
     def __init__(
-            self,
-            module_type: np.uint8,
-            type_name: str,
-            type_description: str,
-            module_id: np.uint8,
-            instance_name: str,
-            instance_description: str,
-            unity_input_topics: tuple[str, ...] | None,
-            *,
-            unity_output: bool = False,
-            queue_output: bool = False,
+        self,
+        module_type: np.uint8,
+        type_name: str,
+        type_description: str,
+        module_id: np.uint8,
+        instance_name: str,
+        instance_description: str,
+        unity_input_topics: tuple[str, ...] | None,
+        *,
+        unity_output: bool = False,
+        queue_output: bool = False,
     ) -> None:
 
         # Verifies input byte-codes for validity.
@@ -135,6 +139,11 @@ class ModuleInterface:
         self._instance_name: str = instance_name
         self._instance_description: str = instance_description
 
+        # Combines type and ID into a 16-bit value. This is used to ensure every module instance has a unique
+        # ID + Type combination. This method is position-aware, which avoids the issue of reverse pairs giving the same
+        # resultant value(e.g.: 4-5 != 5-4)
+        self._type_id = (self._module_type.astype(np.uint16) << 8) | self._module_type.astype(np.uint16)
+
         # Additional processing flags. Unity input is set based on whether there are input / output topics
         self._unity_input_topics: tuple[str, ...] = unity_input_topics if unity_input_topics is not None else tuple()
         self._unity_input: bool = True if len(self._unity_input_topics) > 0 else False
@@ -158,6 +167,8 @@ class ModuleInterface:
         Currently, the communication with Unity is handled via the MQTT protocol and this method is used to
         conditionally transfer the data received from the Module running on the microcontroller to Unity.
 
+        To send a message to unity, use the send_data() method of the input UnityCCommunication class instance.
+
         Notes:
             This method should contain a series of if-else statements that determine whether the incoming message
             should be transferred to Unity. If so, this method should call the specific method of the UnityCommunication
@@ -166,7 +177,7 @@ class ModuleInterface:
             The arguments to this method will be provided by the managing MicroControllerInterface class and, therefore,
             the UnityCommunication would be connected and appropriately configured to carry out the communication.
 
-            Remember to enable the 'unity_output' flag when initializing the interface class, if the instance does need
+            Remember to enable the 'unity_output' flag when initializing the interface class if the instance does need
             this functionality. If the instance does not need this functionality, implement the method by calling an
             empty return statement and ensure that the 'unity_output' flag is disabled.
 
@@ -186,34 +197,31 @@ class ModuleInterface:
 
     @abstractmethod
     def get_from_unity(
-            self, unity_communication: UnityCommunication
+        self, topic: str, payload: bytes | bytearray
     ) -> OneOffModuleCommand | RepeatedModuleCommand | None:
-        """Checks whether Unity game engine has sent a microcontroller module command and, if so, extracts and returns
-        the packaged message structure.
+        """Checks the topic and payload of the input message received from Unity game engine and, if necessary, packages
+        and returns a command message to send to the interfaced module.
 
         Unity can issue module commands as it resolves the game logic of the Virtual Reality (VR) task. The initialized
         UnityCommunication class will monitor the MQTT (communication protocol) traffic and process incoming Unity-sent
-        messages in a background thread and set certain class flags as necessary to reflect incoming command data. This
-        class can be used to convert Unity messages to appropriate module-addressed command structures that will be
-        sent to the microcontroller.
+        messages in a background thread. The MicroControllerInterface will then read the data received from Unity and
+        pass it to modules that implement this method. In turn, this method should convert Unity messages to appropriate
+        module-addressed command structures that will be sent to the microcontroller.
 
         Notes:
-            This method should contain a series of if-else statements that evaluate UnityCommunication properties and,
+            This method should contain a series of if-else statements that evaluate the input topic and payload and,
             based on their values, decide whether to send a message to the microcontroller. If a message needs to be
             sent, the method should package the message data into the appropriate structure and return it to caller.
             Otherwise, the method should return None to indicate that no message needs to be sent.
 
-            The arguments to this method will be provided by the managing MicroControllerInterface class and, therefore,
-            the UnityCommunication would be connected and appropriately configured to carry out the communication.
-
             Remember to provide the class with topics to listen to via the 'unity_input_topics' argument when
-            initializing the interface class, if the instance does need this functionality. If the instance does not
+            initializing the interface class if the instance does need this functionality. If the instance does not
             need this functionality, implement the method by calling an empty return statement and ensure that the
             'unity_input_topics' argument is set to None.
 
         Args:
-            unity_communication: An initialized and connected instance of the UnityCommunication class to use for
-                receiving the data from Unity.
+            topic: The MQTT topic to which the processed message was sent.
+            payload: The payload of the received message.
 
         Returns:
             An initialized OneOffModuleCommand or RepeatedModuleCommand class instance that stores the message payload
@@ -240,7 +248,7 @@ class ModuleInterface:
             This method should contain a series of if-else statements that determine whether the incoming message
             should be shared with other processes and, if so, put it into the input queue.
 
-            Remember to enable the 'queue_output' flag when initializing the interface class, if the instance does need
+            Remember to enable the 'queue_output' flag when initializing the interface class if the instance does need
             this functionality. If the instance does not need this functionality, implement the method by calling an
             empty return statement and ensure that the 'queue_output' flag is disabled.
 
@@ -259,7 +267,7 @@ class ModuleInterface:
 
     @abstractmethod
     def write_code_map(self, code_map: NestedDictionary) -> NestedDictionary:
-        """Updates the input code_map dictionary with module-type-specific status_codes, commands and data_objects
+        """Updates the input code_map dictionary with module-type-specific status_codes, commands, and data_objects
         sections.
 
         This method is called by the MicroControllerInterface that manages the ModuleInterface to fill the shared
@@ -275,8 +283,8 @@ class ModuleInterface:
             this, use a '.'-delimited path which starts with section name, e.g.:
             'RotaryEncoder_module.status_codes.kIdle'.
 
-            This method has to be the same for all interface of the same module type (family) and it is used to store
-            information that is expected to be the same for all instances of the same type. Therefore, this method
+            This method has to be the same for all interface of the same module type (family), and it is used to store
+            information expected to be the same for all instances of the same type. Therefore, this method
             should fill all relevant module-type sections: commands, status_codes, and data_objects. This method will
             only be called once for each unique module_type.
 
@@ -338,8 +346,14 @@ class ModuleInterface:
 
     @property
     def unity_input_topics(self) -> tuple[str, ...]:
-        """Returns the list of MQTT topics that should be monitored for incoming Unity commands."""
+        """Returns the tuple of MQTT topics that should be monitored for incoming Unity commands."""
         return self._unity_input_topics
+
+    @property
+    def type_id(self) -> np.uint16:
+        """Returns the unique unsigned integer value that results from combining the type-code and the id-code of the
+        module instance."""
+        return self.type_id
 
 
 class MicroControllerInterface:
@@ -367,11 +381,11 @@ class MicroControllerInterface:
 
     Args:
         controller_id: The unique identifier code of the managed microcontroller. This information is hardcoded via the
-            AtaraxisMicroController (AXMC) firmware running on the microcontroller and this class ensures that the code
+            AtaraxisMicroController (AXMC) firmware running on the microcontroller, and this class ensures that the code
             used by the connected microcontroller matches this argument when the connection is established. Critically,
             this code is also used as the source_id for the data sent from this class to the DataLogger. Therefore, it
             is important for this code to be unique across ALL concurrently active Ataraxis data producers, such as:
-            microcontrollers, video systems and Unity game engine instances.
+            microcontrollers, video systems, and Unity game engine instances.
         controller_name: The human-readable name of the connected microcontroller. This information is used to better
             identify the microcontroller to human operators.
         controller_description: A longer human-readable description of the microcontroller. This provides additional
@@ -383,7 +397,7 @@ class MicroControllerInterface:
             This queue is used to buffer and pipe data to be logged to the logger cores.
         modules: A tuple of classes that inherit from the (base) ModuleInterface class. These classes will be used by
             the main runtime cycle to handle the incoming data from the modules running on the microcontroller. These
-            classes will also be sued to build the dictionary that maps various byte-codes used during serial
+            classes will also be used to build the dictionary that maps various byte-codes used during serial
             communication to human-readable names and descriptions.
         baudrate: The baudrate at which the serial communication should be established. Note, this argument is ignored
             for boards that use the USB communication protocol, such as most Teensy boards. The correct baudrate for
@@ -392,14 +406,16 @@ class MicroControllerInterface:
             communication errors.
         maximum_transmitted_payload_size: The maximum size of the message payload that can be sent to the
             microcontroller as one message. This should match the microcontroller serial reception buffer size, even if
-            the actual transmitted payloads will not reach that size. This is used to ensure that transmitted messages
+            the actual transmitted payloads do not reach that size. This is used to ensure that transmitted messages
             will fit inside the reception buffer of the board. If the size is not set right, you may run into
             communication errors.
         unity_broker_ip: The ip address of the MQTT broker used for Unity communication. Typically, this would be a
-            'virtual' ip-address of the locally-running MQTT broker, but the class can carry out cross-machine
-            communication if necessary.
+            'virtual' ip-address of the locally running MQTT broker, but the class can carry out cross-machine
+            communication if necessary. Unity communication will only be initialized if any of the input modules require
+            this functionality.
         unity_broker_port: The TCP port of the MQTT broker used for Unity communication. THis is used in conjunction
-            with the unity_broker_ip argument to connect to the MQTT broker.
+            with the unity_broker_ip argument to connect to the MQTT broker. Unity communication will only be
+            initialized if any of the input modules require this functionality.
 
         Attributes:
             _controller_id: Stores the id byte-code of the managed microcontroller.
@@ -420,16 +436,16 @@ class MicroControllerInterface:
             _terminator_array: Stores the SharedMemoryArray instance used to control the runtime of the remote
                 communication process.
             _communication_process: Stores the (remote) Process instance that runs the communication cycle.
-            _input_unity_topics: Stores the MQTT topics that needs to be monitored for module-addressed commands sent
-                by Unity. The list is filled during _parse_module_data() runtime.
-            _unity_input: Determines whether the communication cycle involves processing module-addressed commands
-                sent by Unity via MQTT.
-            _unity_output: Determines whether the communication cycle involves sending received module data to Unity
-                via MQTT.
-            _queue_output: Determines whether the communication cycle involves sending received module data to other
-                processes via the output_queue exposed by the class.
             _controller_map_section: Stores the microcontroller-specific NestedDictionary section that stores byte-code
                 and id information for the microcontroller and all modules used by the microcontroller.
+            _reset_command: Stores the pre-packaged Kernel-addressed command that resets the microcontroller's hardware
+                and software.
+            _identify_command: Stores the pre-packaged Kernel-addressed command that requests the microcontroller to
+                send back its id-code.
+            _disable_locks: Stores the pre-packaged Kernel parameters configuration that disables all pin locks. This
+                allows writing to all microcontroller pins.
+            _enable_locks: Stores the pre-packaged Kernel parameters configuration that enables all pin locks. This
+                prevents every Module managed by the Kernel from writing to any of the microcontroller pins.
     """
 
     # Pre-packages Kernel commands into attributes. Since Kernel commands are known and fixed at compilation,
@@ -458,17 +474,17 @@ class MicroControllerInterface:
     )
 
     def __init__(
-            self,
-            controller_id: np.uint8,
-            controller_name: str,
-            controller_description: str,
-            controller_usb_port: str,
-            logger_queue: MPQueue,
-            modules: tuple[ModuleInterface, ...],
-            baudrate: int = 115200,
-            maximum_transmitted_payload_size: int = 254,
-            unity_broker_ip: str = "127.0.0.1",
-            unity_broker_port: int = 1883,
+        self,
+        controller_id: np.uint8,
+        controller_name: str,
+        controller_description: str,
+        controller_usb_port: str,
+        logger_queue: MPQueue,
+        modules: tuple[ModuleInterface, ...],
+        baudrate: int = 115200,
+        maximum_transmitted_payload_size: int = 254,
+        unity_broker_ip: str = "127.0.0.1",
+        unity_broker_port: int = 1883,
     ):
         # Controller (kernel) ID information. Follows the same code-name-description format as module type and instance
         # values do.
@@ -481,13 +497,13 @@ class MicroControllerInterface:
         self._baudrate: int = baudrate
         self._max_tx_payload_size: int = maximum_transmitted_payload_size
 
-        # UnityCommunication parameters. This is used to initialize the unity communication from the remote process,
-        # provided that the managed module need this functionality.
+        # UnityCommunication parameters. This is used to initialize the unity communication from the remote process
+        # if the managed modules need this functionality.
         self._unity_ip: str = unity_broker_ip
         self._unity_port: int = unity_broker_port
 
-        # Managed modules and data logger queue. Modules will be pre-processes as part of this initialization runtime,
-        # logger queue is fed directly into the SerialCommunication, which automatically logs all incoming and outgoing
+        # Managed modules and data logger queue. Modules will be pre-processes as part of this initialization runtime.
+        # Logger queue is fed directly into the SerialCommunication, which automatically logs all incoming and outgoing
         # data to disk.
         self._modules = modules
         self._logger_queue: MPQueue = logger_queue  # type: ignore
@@ -500,38 +516,33 @@ class MicroControllerInterface:
         self._terminator_array: None | SharedMemoryArray = None
         self._communication_process: None | Process = None
 
-        # Precreates a variable to store the Unity topics to which the class should listen to. The list is filled when
-        # the module data is parsed, as it depends on whether modules are configured to receive commands from Unity.
-        self._input_unity_topics: list[str] | tuple[str, ...] = []
-
-        # Also precreates flags used to optimize the communication cycle by excluding unnecessary processing steps.
-        # TODO document
-        self._unity_input: bool = False
-        self._unity_output: bool = False
-        self._queue_output: bool = False
-        self._unity_input_indices: list[int] | tuple[int, ...] = []
-        self._additional_output_indices: list[int] | tuple[int, ...] = []
-
-        # Extracts code maps from each module, ensures there are no non-unique instance+type combinations, builds an
-        # ID map and pre-optimized the communication runtime by determining additional processing steps and executing
-        # the necessary communication runtime. Basically, this is a step of going over modules and ensuring the
-        # communication will be done in the most efficient way given module configuration. Saves the generated
-        # controller-specific map section to the class attribute.
+        # Extracts information from the input modules and finalizes runtime preparations. As part of this process,
+        # the method will create the microcontroller-specific code-map dictionary section.
         self._controller_map_section: NestedDictionary = self._parse_module_data()
 
     def _parse_module_data(self) -> NestedDictionary:
+        """Loops over the input modules and extracts the necessary information to finish class initialization.
+
+        Primarily, this method has two distinct goals. First, it ensures that every ModuleInterface instance contains a
+        unique combination of type and instance codes, allowing to reliably identify each instance. Second, it extracts
+        microcontroller and module-specific information and uses it to construct the microcontroller-specific code-map
+        dictionary section.
+
+        Returns:
+            The NestedDictionary class instance that contains the microcontroller-specific information. This dictionary
+            can be retrieved by accessing the microcontroller_map_section attribute.
+        """
 
         # Seeds dictionary section with the main section description.
-        # It is expected that the process building the overall mega-dictionary that integrates information from all
-        # microcontrollers correctly extracts and combines all microcontroller-specific sections intone
-        # mega-dictionary by saving them under controller-named subsections (similar to how custom module data is
-        # saved).
+        # It is expected that the method building the overall mega-dictionary that integrates information from all
+        # microcontrollers correctly extracts and combines each microcontroller-specific section under its
+        # controller_name.
         message = (
-            "This section stores information for custom assets specific to this microcontroller. This includes satus, "
+            "This section stores information for custom assets specific to this microcontroller. It includes satus, "
             "command and data-object mappings for each used module type (family) and the information about the "
-            "specific instances of each module type. This also includes information about the microcontroller itself. "
+            "specific instances of each module type. It also includes information about the microcontroller itself. "
             "This section is created separately for each used microcontroller and, in general, is expected to not "
-            "contain the same information as similar sections for other microcontrollers."
+            "contain the same information as sections for other microcontrollers."
         )
         code_dict = NestedDictionary(seed_dictionary={"section_description": message})
 
@@ -547,47 +558,44 @@ class MicroControllerInterface:
 
         # Loops over all modules. Parses and uses their information to interactively fill the code dictionary with
         # information
-        for num, module in enumerate(self._modules):
+        for module in self._modules:
             # Extracts type and id codes of the module
             module_id = module.module_id
             module_type = module.module_type
             module_section = f"{module.type_name}_module"  # Constructs module-specific section name
 
-            # Constructs a merged type_id string, used to ensure each module instance is uniquely identifiable based on
-            # the combination of type and ID code.
-            type_id = f"{module_type}_{module_id}"
-
-            # If the constructed type_id is already inside the processed_id_types set, this means another module with
-            # the same exact type and ID has already been processed. This is not allowed, so breaks with an error.
-            if type_id in processed_id_types:
+            # If the module's combined type + id code is already inside the processed_id_types set, this means another
+            # module with the same exact type and ID combination has already been processed. This is not allowed, so
+            # aborts with an error.
+            if module.type_id in processed_id_types:
                 message = (
                     f"Unable to initialize the MicroControllerInterface class instance for {self._controller_name} "
                     f"microcontroller with id {self._controller_id}. Encountered two ModuleInterface instances "
-                    f"with the same type-code {module_type} and id-code {module_id}, which is not allowed. Make sure "
-                    f"each type and id combination is only used by a single ModuleInterface class instance."
+                    f"with the same type-code ({module_type}) and id-code ({module_id}), which is not allowed. Make "
+                    f"sure each type and id combination is only used by a single ModuleInterface class instance."
                 )
                 console.error(message=message, error=ValueError)
 
             # If the error check above was not triggered, adds the unique type + id combination to the processed set.
-            processed_id_types.add(type_id)
+            processed_id_types.add(module.type_id)
 
             # This section only needs to be executed once for each module type (family). It will be skipped for
-            # instances of already processed types.
+            # instances with already processed module type codes.
             if module_type not in processed_types:
                 # Adds each new module type to the processed types set
                 processed_types.add(processed_types)
 
-                # Calls the class method that should fill the status_codes, commands and data_objects
-                # module-type-specific sections of the dictionary with data and return it back to caller.
+                # Calls the class method that should fill the status_code, command and data_object module-type-specific
+                # sections of the dictionary with data and return it to caller.
                 code_dict = module.write_code_map(code_dict)
 
-                # Adds the type-code and description of the module family to the module-type-specific section
+                # Adds the type-code and description of the module family to the module-type-specific section.
                 section = f"{module_section}.code"
                 code_dict.write_nested_value(variable_path=section, value=module.module_type)
                 section = f"{module_section}.description"
                 code_dict.write_nested_value(variable_path=section, value=module.type_description)
 
-                # Adds placeholder variables to store instance ID codes, names and descriptions. All instances are
+                # Adds placeholder variables to store instance ID codes, names, and descriptions. All instances are
                 # combined into lists for more optimized handling. These placeholders are then iteratively filled with
                 # information as the method loops through instances of the same type.
                 section = f"{module_section}.instance_ids"
@@ -615,7 +623,7 @@ class MicroControllerInterface:
             new_values = existing_values.append(module.instance_description)
             code_dict.write_nested_value(variable_path=section, value=new_values)
 
-            # Also, for each instance, records whether additional processing flags were used
+            # Also, for each instance, records whether additional processing flags were used for that instance.
             section = f"{module_section}.unity_output"
             code_dict.write_nested_value(variable_path=section, value=module.unity_input)
             section = f"{module_section}.unity_input"
@@ -623,71 +631,80 @@ class MicroControllerInterface:
             section = f"{module_section}.queue_output"
             code_dict.write_nested_value(variable_path=section, value=module.queue_output)
 
-            # TODO finish this section
-            if module.unity_input:
-                self._unity_input = True
-                unity_input_indices.append(num)
-            if module.unity_output:
-                self._unity_output = True
-                if num not in self._additional_output_indices:
-                    self._additional_output_indices.append(num)
-            if module.queue_output:
-                self._queue_output = True
-                if num not in self._additional_output_indices:
-                    self._additional_output_indices.append(num)
-
         # Returns filled section dictionary to caller
         return code_dict
 
     @property
-    def core_code_map(self) -> NestedDictionary:
-        # Pre-initializes with a seed dictionary that includes the purpose (description) of the dictionary file
+    def general_map_section(self) -> NestedDictionary:
+        """Returns the NestedDictionary instance that stores the general information about the byte-codes used by
+        AtaraxisMicroController (AXMC) library classes.
+
+        The dictionary returned by this class should be integrated into the overall code-dictionary by saving it under
+        the 'general' section name (key).
+
+        Notes:
+            This method only needs to be called once, as this section is shared by all microcontrollers.
+        """
+
+        # Seeds dictionary section with the main section description.
+        # It is expected that the method building the overall mega-dictionary that integrates information from all
+        # microcontrollers only adds this section once.
         message = (
-            "This dictionary maps status, commands and data object byte-values used by the Core classes that manage "
-            "microcontroller runtime to meaningful names and provides a human-friendly description for each byte-code. "
-            "This information is used by parsers when decoding logged communication data."
+            "This section stores general information about the Core classes that manage microcontroller runtime. "
+            "Specifically, it maps the status, command and data object codes used during PC-MicroController "
+            "communication to meaningful names and descriptions. This information is the same for all used "
+            "microcontrollers and, therefore, this section only needs to be filled once."
         )
-        code_dictionary = NestedDictionary(seed_dictionary={"description": message})
+        code_dict = NestedDictionary(seed_dictionary={"section_description": message})
 
         # Kernel: status codes
-        code_dictionary = self._write_kernel_status_codes(code_dictionary)
+        code_dict = self._write_kernel_status_codes(code_dict)
 
         # Kernel: command codes
-        code_dictionary = self._write_kernel_command_codes(code_dictionary)
+        code_dict = self._write_kernel_command_codes(code_dict)
 
         # Kernel: object data
-        code_dictionary = self._write_kernel_object_data(code_dictionary)
+        code_dict = self._write_kernel_object_data(code_dict)
 
         # Module: core status codes.
         # Note, primarily, modules use custom status and command codes for each module family. This data is extracted
         # from managed ModuleInterface classes via the build_module_code_map() method. This section specifically tracks
         # the 'core' codes that each custom module inherits by subclassing the base Module class.
-        code_dictionary = self._write_base_module_status_codes(code_dictionary)
+        code_dict = self._write_base_module_status_codes(code_dict)
 
         # Module: core object data
-        code_dictionary = self._write_base_module_object_data(code_dictionary)
+        code_dict = self._write_base_module_object_data(code_dict)
 
         # Communication: status codes
         # This is the final class of the 'core' triad. This class writes protocols and prototypes sections in addition
         # to the status_codes section. This information is used during data transmission and reception to decode various
         # incoming and outgoing message payloads.
-        code_dictionary = self._write_communication_status_codes(code_dictionary)
-        code_dictionary = prototypes.write_prototype_codes(code_dictionary)
-        code_dictionary = protocols.write_protocol_codes(code_dictionary)
+        code_dict = self._write_communication_status_codes(code_dict)
+        code_dict = prototypes.write_prototype_codes(code_dict)
+        code_dict = protocols.write_protocol_codes(code_dict)
 
         # TransportLayer: status codes
         # This and the following sections track codes from classes wrapped by the Communication class. Due to the
         # importance of the communication library, we track all status codes that are (theoretically) relevant for
         # communication. TransportLayer is the source of all codes added in this way (it 'passes' CRC and COBS codes
         # as its own).
-        code_dictionary = self._write_transport_layer_status_codes(code_dictionary)
-        code_dictionary = self._write_cobs_status_codes(code_dictionary)
-        code_dictionary = self._write_crc_status_codes(code_dictionary)
+        code_dict = self._write_transport_layer_status_codes(code_dict)
+        code_dict = self._write_cobs_status_codes(code_dict)
+        code_dict = self._write_crc_status_codes(code_dict)
 
-        return code_dictionary
+        return code_dict
 
     @property
-    def custom_code_map(self) -> NestedDictionary:
+    def microcontroller_map_section(self) -> NestedDictionary:
+        """Returns the NestedDictionary instance that stores the microcontroller-specific codes and ID information.
+
+        The dictionary returned by this class should be integrated into the overall code-dictionary by saving it under
+        the microcontroller section name (key). To get the name of the microcontroller, use the 'controlled_name'
+        property.
+
+        Notes:
+            This method needs to be called once for each microcontroller.
+        """
         return self._controller_map_section
 
     def start(self):
@@ -713,15 +730,6 @@ class MicroControllerInterface:
         )
         self._communication_process.start()
 
-        # elif isinstance(in_data, Identification):
-        # if in_data.controller_id == controller_id:
-        #     message = (
-        #         f"Unexpected controller_id code received from the microcontroller managed by the "
-        #         f"{controller_name} MicroControllerInterface instance. Expected {controller_id}, but "
-        #         f"received {in_data.controller_id}."
-        #     )
-        #     console.error(message=message, error=ValueError)
-
     def stop(self):
         pass
 
@@ -735,40 +743,63 @@ class MicroControllerInterface:
 
     @staticmethod
     def _runtime_cycle(
-            controller_id: np.uint8,
-            input_queue: MPQueue,
-            logger_queue: MPQueue,
-            terminator_array: SharedMemoryArray,
-            usb_port: str,
-            baudrate: int,
-            unity_ip: str,
-            unity_port: int,
-            payload_size: int,
-            active_modules: tuple[ModuleInterface, ...],
-            output_queue: None | MPQueue = None,
+        controller_id: np.uint8,
+        modules: tuple[ModuleInterface, ...],
+        input_queue: MPQueue,
+        output_queue: MPQueue,
+        logger_queue: MPQueue,
+        terminator_array: SharedMemoryArray,
+        usb_port: str,
+        baudrate: int,
+        payload_size: int,
+        unity_ip: str,
+        unity_port: int,
     ) -> None:
-        # Sorts active module into further categories, depending on whether they are configured to receive commands from
-        # Unity, send data to Unity ro send data to the output queue
-        additional_input_indices = []
-        additional_processing_indices = []
-        unity_out = False
-        unity_in = False
-        queue_out = False
-        for module in enumerate(active_modules):
-            if module.unity_input:
-                unity_in = True
-                additional_input_indices.append(num)
-            if module.unity_output:
-                unity_out = True
-                if num not in additional_processing_indices:
-                    additional_processing_indices.append(num)
-            if module.queue_output:
-                queue_out = True
-                if num not in additional_processing_indices:
-                    additional_processing_indices.append(num)
-        additional_input_indices = tuple(additional_input_indices)
 
-        # Initializes the communication class and connects to the managed MicroController.
+        # Precreates the assets used to optimize the communication runtime cycling. These assets are filled below to
+        # support efficient interaction between the Communication classes and the ModuleInterface classes.
+        unity_input_map: dict[str, list[int]] = {}
+        unity_output_map: dict[np.uint16, int] = {}
+        queue_output_map: dict[np.uint16, int] = {}
+
+        # Loops over all modules and configures the assets instantiated above
+        for num, module in enumerate(modules):
+
+            # If the module is configured to receive data from unity, configures the necessary data structures to enable
+            # monitoring the necessary topics and allow to quickly pass the data received on that topic to the
+            # appropriate module class for processing.
+            if module.unity_input:
+                for topic in module.unity_input_topics:
+                    # Extends the list of module indices that listen for that particular topic. This allows addressing
+                    # multiple modules at the same time, as long as they all listen to the same topic.
+                    existing_modules = unity_input_map.get(topic, [])
+                    unity_input_map[topic] = existing_modules + [num]
+
+            # If the module is configured to output data to Unity or other processes, maps its type+id combined code
+            # to its index number. This is used to quickly find the module interface instance addressed by incoming
+            # data, so that they can then send the data to the appropriate output stream.
+            if module.unity_output:
+                unity_output_map[module.type_id] = num
+
+            if module.queue_output:
+                queue_output_map[module.type_id] = num
+
+        # Disables unused processing steps. For example, if none of the managed modules sends data to Unity, that
+        # processing step is disabled outright via a simple boolean if check (see the communication loop code).
+        unity_input = False
+        unity_output = False
+        queue_output = False
+
+        # Note, keys() essentially returns a set of keys, since the same hash-map optimizations are involved with
+        # dictionary keys as with set values.
+        if len(unity_input_map.keys()) != 0:
+            unity_input = True
+        if len(unity_output_map.keys()) != 0:
+            unity_output = True
+        if len(queue_output_map.keys()) != 0:
+            queue_output = True
+
+        # Initializes the serial communication class and connects to the managed MicroController.
         serial_communication = SerialCommunication(
             usb_port=usb_port,
             source_id=int(controller_id),
@@ -779,13 +810,12 @@ class MicroControllerInterface:
 
         # Initializes the unity_communication class and connects to the MQTT broker, if the class is configured to
         # communicate with Unity.
-        if unity_in or unity_out:
+        if unity_input or unity_output:
+            # If the set is empty, the class initialization method will correctly interpret this as a case where no
+            # topics need to be monitored. Therefore, it is safe to just pass the set regardless of whether it is
+            # empty or not.
             unity_communication = UnityCommunication(
-                ip=unity_ip,
-                port=unity_port,
-                lick_topic=True if unity_out else False,
-                position_topic=True if unity_out else False,
-                reward_topic=True if unity_in else False,
+                ip=unity_ip, port=unity_port, monitored_topics=tuple(tuple(unity_input_map.keys()))
             )
             unity_communication.connect()
         else:
@@ -804,58 +834,62 @@ class MicroControllerInterface:
             # sent to the Microcontroller and send it.
             while not input_queue.empty():
                 out_data: (
-                        RepeatedModuleCommand
-                        | OneOffModuleCommand
-                        | DequeueModuleCommand
-                        | KernelCommand
-                        | ModuleParameters
-                        | KernelParameters
+                    RepeatedModuleCommand
+                    | OneOffModuleCommand
+                    | DequeueModuleCommand
+                    | KernelCommand
+                    | ModuleParameters
+                    | KernelParameters
                 ) = input_queue.get_nowait()
                 serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
             # Unity data sending loop. The loop will keep cycling until the class runs out of stored data to send to the
             # microcontroller.
-            while unity_communication.has_data:
+            if unity_input:
+                while unity_communication.has_data:
 
-                # If UnityCommunication has received data, loops over all interfaces that were flagged as
-                # capable of processing data and calls their unity data acquisition methods. The methods are expected to
-                # extract the data from the communication class and translate it into a valid message format to be sent
-                # to the microcontroller.
-                for i in additional_input_indices:
-                    out_data = modules[i].get_from_unity(unity_communication=unity_communication)
+                    # If UnityCommunication has received data, loops over all interfaces flagged as
+                    # capable of processing data and calls their unity data acquisition methods. The methods are
+                    # expected to extract the data from the communication class and translate it into a valid message
+                    # format to be sent to the microcontroller.
 
-                    # It is expected that the method will return None if no message needs to be sent to the
-                    # microcontroller and a valid message structure otherwise
-                    if out_data is None:
-                        continue
+                    topic, payload = unity_communication.get_data()
 
-                    # If all data stored in the communication class has been consumed, stops the for loop early.
-                    # Otherwise, keeps looping over modules in case not-yet-evaluated modules in the sequence can
-                    # process the remaining data. This maximizes the runtime efficiency of this code section by
-                    # avoiding unnecessary module cycling.
-                    if not unity_communication.has_data:
-                        break
+                    if topic in unity_input_map.keys():
+                        for i in unity_input_map[topic]:
+                            out_data = modules[i].get_from_unity(topic=topic, payload=payload)
+                            serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
             # Receives data from microcontroller
             in_data = serial_communication.receive_message()
 
             if in_data is None:
                 continue
+
             # Resolve additional processing steps associated with incoming data
             if isinstance(in_data, (ModuleState, ModuleData)):
 
-                if not unity_out and not queue_out:
+                if not unity_output or not queue_output:
                     continue
 
-                for module in active_modules:
-                    if module.module_type != in_data.module_type or module.module_id != in_data.module_id:
-                        continue
+                target_type_id = (in_data.module_type.astype(np.uint16) << 8) | in_data.module_type.astype(np.uint16)
 
-                    if module.unity_output:
-                        module.send_to_unity(message=in_data, unity_communication=unity_communication)
-                    if module.queue_output:
-                        module.send_to_queue(message=in_data, queue=output_queue)
-                    break
+                if target_type_id in unity_output_map.keys():
+                    modules[unity_output_map[target_type_id]].send_to_unity(
+                        message=in_data, unity_communication=unity_communication
+                    )
+
+                if target_type_id in queue_output_map.keys():
+                    modules[queue_output_map[target_type_id]].send_to_queue(message=in_data, queue=output_queue)
+
+            # elif isinstance(in_data, Identification):
+            #     if in_data.controller_id == controller_id:
+            #         message = (
+            #             f"Unexpected controller_id code received from the microcontroller managed by the "
+            #             f"{controller_name} MicroControllerInterface instance. Expected {controller_id}, but "
+            #             f"received {in_data.controller_id}."
+            #         )
+            #         console.error(message=message, error=ValueError)
 
         # Disconnects from the terminator array and terminates the process.
         terminator_array.disconnect()

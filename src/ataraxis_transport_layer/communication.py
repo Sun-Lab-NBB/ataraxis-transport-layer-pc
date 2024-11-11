@@ -5,8 +5,7 @@ Currently, SerialCommunication is used to interface between the PC and the Micro
 used to interface between python PC code and Unity game engine running Virtual Environment tasks.
 """
 
-import json
-from queue import Empty, Queue
+from queue import Queue
 from typing import Any
 import datetime
 from datetime import timezone
@@ -594,7 +593,7 @@ class ModuleParameters:
         current_position = 4
         for param_bytes in byte_parameters:
             param_size = param_bytes.size
-            packed_data[current_position: current_position + param_size] = param_bytes
+            packed_data[current_position : current_position + param_size] = param_bytes
             current_position += param_size
 
         # Writes the constructed packed data object to the packed_data attribute
@@ -1097,8 +1096,8 @@ class SerialCommunication:
 
         Due to the use of many non-pickleable classes, this class should be initialized by the process that intends to
         use it. For the canonical purpose of communication with microcontrollers, this means the class should be
-        initialized by their emote process that runs the communication loop (see MicroControllerInterface implementation
-        for details).
+        initialized by their remote process that runs the communication loop (see MicroControllerInterface
+        implementation for details).
 
     Args:
         usb_port: The name of the USB port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. You can use the
@@ -1133,12 +1132,12 @@ class SerialCommunication:
     """
 
     def __init__(
-            self,
-            usb_port: str,
-            logger_queue: MPQueue,
-            source_id: int,
-            baudrate: int = 115200,
-            maximum_transmitted_payload_size: int = 254,
+        self,
+        usb_port: str,
+        logger_queue: MPQueue,
+        source_id: int,
+        baudrate: int = 115200,
+        maximum_transmitted_payload_size: int = 254,
     ) -> None:
         # Initializes the TransportLayer to mostly match a similar specialization carried out by the microcontroller
         # Communication class.
@@ -1165,9 +1164,10 @@ class SerialCommunication:
         self._reception_code = ReceptionCode(self._transport_layer)
 
         # Initializes the trackers used to id-stamp data sent to the logger via the logger_queue. All data sent
-        # in this way ahs to be bundled with a unique source_id (for this class, expected to be the id fo the bundled
-        # microcontroller), the monotonically increasing data object counter (to preserve object sequence) and
-        # timestamp values. Moreover, the data itself should be serialized to a bytes array.
+        # in this way has to be bundled with a unique source_id, which, for this class, is expected to be the id of the
+        # bundled microcontroller. Also, it should be bundled with the monotonically increasing data object counter
+        # to preserve the object sequence and timestamp values. Moreover, the data itself should be serialized to a
+        # bytes' array.
         self._timestamp_timer = PrecisionTimer("us")
         self._source_id = source_id
         self._logger_queue = logger_queue
@@ -1176,15 +1176,15 @@ class SerialCommunication:
         # Constructs a timezone-aware stamp using UTC time. This creates a reference point for all later delta time
         # readouts.
         onset = datetime.datetime.now(timezone.utc)
-        self.timestamp_timer.reset()  # Immediately resets the timer to make it as close as possible to the onset time
+        self._timestamp_timer.reset()  # Immediately resets the timer to make it as close as possible to the onset time
 
-        # Converts the timestamp to numpy datetime64 with microsecond precision and casts it to a bytes array to make
+        # Converts the timestamp to numpy datetime64 with microsecond precision and casts it to a bytes' array to make
         # it compatible with the format expected by the logger
         onset_numpy = np.datetime64(onset.isoformat(timespec="microseconds"), "us")
         onset_serial = np.frombuffer(buffer=onset_numpy.tobytes(), dtype=np.uint8)
 
-        # Logs the timestamp as a bytes array and 0 as object and timestamp values. This pattern is universally
-        # interpreted as the 'onset time' log. All subsequent timestamps will be treated as integer time deltas relative
+        # Logs the timestamp as a bytes' array and 0 as object and timestamp values. This pattern is universally
+        # interpreted as the 'onset time' log. All further timestamps will be treated as integer time deltas relative
         # to the input time in microseconds.
         self._logger_queue.put((source_id, self._object_counter, 0, onset_serial))
 
@@ -1208,15 +1208,15 @@ class SerialCommunication:
         return list_available_ports()
 
     def send_message(
-            self,
-            message: (
-                    RepeatedModuleCommand
-                    | OneOffModuleCommand
-                    | DequeueModuleCommand
-                    | KernelCommand
-                    | KernelParameters
-                    | ModuleParameters
-            ),
+        self,
+        message: (
+            RepeatedModuleCommand
+            | OneOffModuleCommand
+            | DequeueModuleCommand
+            | KernelCommand
+            | KernelParameters
+            | ModuleParameters
+        ),
     ) -> None:
         """Packages the input command or parameters message and sends it to the connected microcontroller.
 
@@ -1234,10 +1234,10 @@ class SerialCommunication:
         self._transport_layer.send_data()
         stamp = self._timestamp_timer.elapsed  # Stamps transmission time.
 
-        _log_data(stamp, message.packed_data)
+        self._log_data(stamp, message.packed_data)
 
     def receive_message(
-            self,
+        self,
     ) -> ModuleData | ModuleState | KernelData | KernelState | Identification | ReceptionCode | None:
         """Receives the incoming message from the connected microcontroller and parses it into the matching class
         message attribute.
@@ -1276,32 +1276,32 @@ class SerialCommunication:
         # payload.
         if protocol == protocols.kModuleData:
             self._module_data.update_message_data()
-            _log_data(stamp, self._module_data.message)
+            self._log_data(stamp, self._module_data.message)
             return self._module_data
 
         if protocol == protocols.kKernelData:
             self._kernel_data.update_message_data()
-            _log_data(stamp, self._kernel_data.message)
+            self._log_data(stamp, self._kernel_data.message)
             return self._kernel_data
 
         if protocol == protocols.kModuleState:
             self._module_state.update_message_data()
-            _log_data(stamp, self._module_state.message)
+            self._log_data(stamp, self._module_state.message)
             return self._module_state
 
         if protocol == protocols.kKernelState:
             self._kernel_state.update_message_data()
-            _log_data(stamp, self._kernel_state.message)
+            self._log_data(stamp, self._kernel_state.message)
             return self._kernel_state
 
         if protocol == protocols.kReceptionCode:
             self._reception_code.update_message_data()
-            _log_data(stamp, self._reception_code.message)
+            self._log_data(stamp, self._reception_code.message)
             return self._reception_code
 
         if protocol == protocols.kIdentification:
             self._identification.update_message_data()
-            _log_data(stamp, self._identification.message)
+            self._log_data(stamp, self._identification.message)
             return self._identification
 
         # If the protocol code is not resolved by any conditional above, it is not valid. Terminates runtime with a
@@ -1319,7 +1319,7 @@ class SerialCommunication:
         """Bundles the input data with ID variables and sends it to be saved to disk by the DataLogger class.
 
         Args:
-            timestamp: The value fo the 'elapsed' property of the timestamp timer for the logged data.
+            timestamp: The value of the timestamp timer 'elapsed' property for the logged data.
             data: The byte-serialized message payload that was sent or received.
         """
         self._object_counter += 1  # Increments the logged object counter
@@ -1341,44 +1341,32 @@ class UnityCommunication:
     bridge MQTT and Serial communication protocols sued by this library.
 
     Notes:
-        Unlike most classes of this library, this one is intentionally specialized for the VR environment used in the
-        Sun lab. It is very likely that the class needs to be adjusted to work for other use cases.
-
         In the future, this class may be phased out in favor of a unified communication protocol that would use
         Zero-MQ binding instead of MQTT to transmit byte-serialized payloads.
 
     Args:
         ip: The ip address used by Unity-MQTT binding to create channels.
         port: The port used by Unity-MQTT binding to create MQTT channels.
-        lick_topic: Determines whether this class instance should connect to and be able to send lick data to Unity.
-        position_topic: Determines whether this class instance should connect to and be able to send treadmill position
-            data to Unity.
-        reward_topic: Determines whether this class instance should connect to and be able to receive reward data
-            from Unity. Note, if this flag is True, the client will initialize a thread to continuously monitor the
-            reward topic for new messages.
+        monitored_topics: The list of MQTT topics which the class instance should subscribe to and monitor for incoming
+            data.
 
     Attributes:
         _broker: Stores the IP address of the MQTT broker.
         _port: Stores the port used by the broker's TCP socket.
         _connected: Tracks whether the class instance is currently connected to the MQTT broker.
-        _publish_topics: Stores the names of the topics used by the class instance to publish data to Unity.
         _subscribe_topics: Stores the names of the topics used by the class instance to subscribe to data from Unity.
-        _reward_queue: A threading queue used to buffer incoming reward commands.
+        _output_queue: A threading queue used to buffer incoming Unity-sent data inside the local process.
         _client: Stores the initialized mqtt Client class instance that carries out the communication.
 
     Raises:
-        ValueError: If the class is not configured to subscribe or publish to any MQTT topics. Also, if the port or ip
-            arguments are not valid.
+        ValueError: If the port or ip arguments are not valid.
     """
 
     def __init__(
-            self,
-            ip: str = "127.0.0.1",
-            port: int = 1883,
-            *,
-            lick_topic: bool = False,
-            position_topic: bool = False,
-            reward_topic: bool = False
+        self,
+        ip: str = "127.0.0.1",
+        port: int = 1883,
+        monitored_topics: None | tuple[str, ...] = None,
     ) -> None:
 
         # Ensures that ip and port formats are valid:
@@ -1399,29 +1387,12 @@ class UnityCommunication:
         self._broker: str = ip
         self._port: int = port
         self._connected = False
-        self._publish_topics: list[str] | tuple[str, ...] = []
-        self._subscribe_topics: list[str] | tuple[str, ...] = []
-        self._reward_queue: Queue = Queue()
+        self._subscribe_topics: tuple[str, ...] = monitored_topics if monitored_topics is not None else tuple()
 
-        # Depending on the topic flags, initializes the necessary topics.
-        if lick_topic:
-            self._publish_topics.append("LickPort/")
-        if position_topic:
-            self._publish_topics.append("LinearTreadmill/Data")
-        if reward_topic:
-            self._subscribe_topics.append("Gimbl/Reward/")
-
-        # If no topics are enabled, aborts with an error.
-        if len(self._subscribe_topics) != 0 and len(self._publish_topics) == 0:
-            message = (
-                "Unable to initialize a UnityCommunication class instance. At least one MQTT topic flag must be True "
-                "to allow class initialization."
-            )
-            console.error(message=message, error=ValueError)
-
-        # Converts topic lists to tuples.
-        self._publish_topics = tuple(self._publish_topics)
-        self._subscribe_topics = tuple(self._subscribe_topics)
+        # Initializes the queue to buffer incoming data if the class is configured to listen to certain topics.
+        self._output_queue: Queue | None = None
+        if len(self._subscribe_topics) != 0:
+            self._output_queue = Queue()
 
         # Initializes the MQTT client. Note, it needs to be connected before it can send and receive messages!
         self._client: mqtt.Client = mqtt.Client(protocol=mqtt.MQTTv5, transport="tcp")
@@ -1430,7 +1401,7 @@ class UnityCommunication:
         """Returns a string representation of the UnityCommunication object."""
         return (
             f"UnityCommunication(broker_ip={self._broker}, socket_port={self._port}, connected={self._connected}, "
-            f"subscribe_topics={self._subscribe_topics}, publish_topics={self._publish_topics}"
+            f"subscribed_topics={self._subscribe_topics}"
         )
 
     def __del__(self):
@@ -1441,17 +1412,17 @@ class UnityCommunication:
         """The callback function used to receive data from MQTT.
 
         When passed to the client, this function will be called each time a new message is received. This function
-        will then parse message data and put it into the appropriate queue object to store the data until it is
-        retrieved via one of the class properties.
+        will then record the message topic and payload and put them into the output_queue for the data to be consumed
+        by external processes.
 
         Args:
             _client: The MQTT client that received the message. Currently not used.
             _userdata: Custom user-defined data. Currently not used.
-            message: The MQTT message received.
+            message: The received MQTT message.
         """
+
         # Whenever a reward message is received, puts True into the reward queue
-        if message.topic == self._publish_topics[0]:
-            self._reward_queue.put_nowait(True)
+        self._output_queue.put_nowait((message.topic, message.payload))
 
         # Add more statements as necessary to extend the class to support other types of incoming data.
 
@@ -1485,49 +1456,38 @@ class UnityCommunication:
         for topic in self._subscribe_topics:
             self._client.subscribe(topic=topic, qos=0)
 
-    def send_movement(self, displacement: float) -> None:
-        """Sends the linear treadmill displacement relative to the last evaluation period to Unity.
+    def send_data(self, topic: str, payload: str | bytes | bytearray | float | None = None) -> None:
+        """Publishes the input payload to the specified MQTT topic.
 
-        This data is typically obtained from the microcontroller running the EncoderModule class code.
+        Use this method to send data over top Unity via the appropriate topic. Note, this method does not verify the
+        validity of the input topic or payload data. Ensure both are correct given your specific runtime configuration.
 
         Args:
-            displacement: The amount, in Unity units, the treadmill moved over the last evaluation period.
-
+            topic: The MQTT topic to publish the data to.
+            payload: The data to be published. Keep this set to None to send an empty message, which is the most
+                efficient form of binary boolean communication. Otherwise, use Gimbl or Ataraxis serialization
+                protocols, depending on your specific use case.
         """
-        # Converts the displacement into JSON byte-string.
-        json_string = json.dumps({"movement": displacement})
-        byte_array = json_string.encode("utf-8")
-        self._client.publish(topic=self._publish_topics[1], payload=byte_array, qos=0)
-
-    def send_lick(self) -> None:
-        """Sends a binary lick ON signal to Unity.
-
-        The lick data is obtained from the microcontroller running the LickSensorModule class code. The controller
-        pre-thresholds the data to determine whether the licks have or have not occurred when it sends it to the PC.
-        """
-        self._client.publish(topic=self._publish_topics[0], qos=0)
+        self._client.publish(topic=topic, payload=payload, qos=0)
 
     @property
     def has_data(self) -> bool:
-        """Returns True if the class stores data received from Unity in any of its data queues.
-
-        Currently, the only data queue is the reward_data queue, but this may change in the future.
-        """
-        if not self._reward_queue.empty():
+        """Returns True if the class stores data received from Unity inside the _output_queue."""
+        if not self._output_queue.empty():
             return True
         return False
 
-    @property
-    def reward(self) -> bool | None:
-        """Extracts and returns the first buffered boolean object from the reward_queue.
+    def get_data(self) -> tuple[str, bytes | bytearray] | None:
+        """Extracts and returns the first buffered message from the reward_queue.
 
-        If no buffered objects are stored in the queue (queue is empty), returns None.
+        The received messages are saved as two-element tuples. The first element is a string that communicates the topic
+        the message was sent to. The second element is the payload of the message, which is a bytes or bytearray
+        object. If no buffered objects are stored in the queue (queue is empty), returns None.
         """
-        try:
-            result: bool = self._reward_queue.get_nowait()
-            return result
-        except Empty:
+        if not self.has_data:
             return None
+
+        return self._output_queue.get_nowait()
 
     def disconnect(self) -> None:
         """Disconnects the client from the MQTT broker."""
