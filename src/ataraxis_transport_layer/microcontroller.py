@@ -296,6 +296,15 @@ class ModuleInterface:
             f"base ModuleInterface class."
         )
 
+    def make_deque_command(self) -> DequeueModuleCommand:
+        """Returns the command that, upon being sent to the microcontroller, will clear all queued commands for this
+        module instance.
+
+        Since these Dequeue commands are universal, the method that packages and returns these command messages is
+        defined as a non-abstract base ModuleInterface class method.
+        """
+        return DequeueModuleCommand(module_type=self._module_type, module_id=self._module_id, return_code=np.uint8(0))
+
     @property
     def module_type(self) -> np.uint8:
         """Returns the byte-code of the interfaced module type (family)."""
@@ -796,19 +805,19 @@ class MicroControllerInterface:
         self._terminator_array.destroy()
 
     def identify_controller(self) -> None:
-        """Sends the Identification command to the connected Microcontroller."""
+        """Prompts the connected MicroController to identify itself by returning its id code."""
         self._input_queue.put(self._identify_command)
 
     def reset_controller(self) -> None:
-        """Sends the reset command to the connected Microcontroller."""
+        """Resets the connected MicroController to use default hardware and software parameters."""
         self._input_queue.put(self._reset_command)
 
     def lock_controller(self) -> None:
-        """Configures microcontroller parameters in a way that prevents all modules from writing to any output pin."""
+        """Configures connected MicroController parameters to prevent all modules from writing to any output pin."""
         self._input_queue.put(self._enable_locks)
 
     def unlock_controller(self) -> None:
-        """Configures microcontroller parameters in a way that enables all modules to write to any output pin."""
+        """Configures connected MicroController parameters to allow all modules to write to any output pin."""
         self._input_queue.put(self._disable_locks)
 
     @property
