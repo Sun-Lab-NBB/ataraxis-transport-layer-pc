@@ -102,17 +102,17 @@ class ModuleInterface:
     """
 
     def __init__(
-        self,
-        module_type: np.uint8,
-        type_name: str,
-        type_description: str,
-        module_id: np.uint8,
-        instance_name: str,
-        instance_description: str,
-        unity_input_topics: tuple[str, ...] | None,
-        *,
-        unity_output: bool = False,
-        queue_output: bool = False,
+            self,
+            module_type: np.uint8,
+            type_name: str,
+            type_description: str,
+            module_id: np.uint8,
+            instance_name: str,
+            instance_description: str,
+            unity_input_topics: tuple[str, ...] | None,
+            *,
+            unity_output: bool = False,
+            queue_output: bool = False,
     ) -> None:
 
         # Verifies input byte-codes for validity.
@@ -160,6 +160,45 @@ class ModuleInterface:
         return message
 
     @abstractmethod
+    def get_from_unity(
+            self, topic: str, payload: bytes | bytearray
+    ) -> OneOffModuleCommand | RepeatedModuleCommand:
+        """Packages and returns a command message structure to send to the microcontroller, based on input Unity message
+        topic and payload.
+
+        Unity can issue module commands as it resolves the game logic of the Virtual Reality (VR) task. The initialized
+        UnityCommunication class will monitor the MQTT (communication protocol) traffic and process incoming Unity-sent
+        messages in a background thread. The MicroControllerInterface will then read the data received from Unity and
+        pass it to all ModuleInterface instances that declared the MQTT topic at which the message was received as an
+        input topic. Therefore, this method is ONLY called when the topic to which the Unity sent command data exactly
+        matches the topic(s) specified at ModuleInterface instantiation.
+
+        Notes:
+            This method should resolve, package and return the appropriate ModuleCommand message structure, based on the
+            input Unity topic and payload. Since this method is only called for topics declared by the class instance as
+            input topics, it is expected that the method returns a valid command to send every time it is called.
+
+            Remember to provide the class with topics to listen to via the 'unity_input_topics' argument when
+            initializing the interface class if the instance does need this functionality. If the instance does not
+            need this functionality, implement the method by calling an empty return statement and ensure that the
+            'unity_input_topics' argument is set to None.
+
+        Args:
+            topic: The MQTT topic to which the Unity message was sent.
+            payload: The message payload received from Unity.
+
+        Returns:
+            An initialized OneOffModuleCommand or RepeatedModuleCommand class instance that stores the message payload
+            to be sent to the microcontroller.
+        """
+        # While abstract method should prompt the user to implement this method, the default error-condition is also
+        # included for additional safety.
+        raise NotImplementedError(
+            f"get_from_unity method for {self._type_name} module interface must be implemented when subclassing the "
+            f"base ModuleInterface class."
+        )
+
+    @abstractmethod
     def send_to_unity(self, message: ModuleData | ModuleState, unity_communication: UnityCommunication) -> None:
         """Checks the input message data and, if necessary, sends a message to Unity game engine.
 
@@ -167,12 +206,10 @@ class ModuleInterface:
         Currently, the communication with Unity is handled via the MQTT protocol and this method is used to
         conditionally transfer the data received from the Module running on the microcontroller to Unity.
 
-        To send a message to unity, use the send_data() method of the input UnityCCommunication class instance.
-
         Notes:
-            This method should contain a series of if-else statements that determine whether the incoming message
-            should be transferred to Unity. If so, this method should call the specific method of the UnityCommunication
-            class that transmits the message data to Unity.
+            This method should contain the logic to determine whether the incoming message should be transferred to
+            Unity. If so, this method should call the send_data() method of the input UnityCommunication class and
+            send the data to the appropriate MQTT topic.
 
             The arguments to this method will be provided by the managing MicroControllerInterface class and, therefore,
             the UnityCommunication would be connected and appropriately configured to carry out the communication.
@@ -196,47 +233,8 @@ class ModuleInterface:
         )
 
     @abstractmethod
-    def get_from_unity(
-        self, topic: str, payload: bytes | bytearray
-    ) -> OneOffModuleCommand | RepeatedModuleCommand | None:
-        """Checks the topic and payload of the input message received from Unity game engine and, if necessary, packages
-        and returns a command message to send to the interfaced module.
-
-        Unity can issue module commands as it resolves the game logic of the Virtual Reality (VR) task. The initialized
-        UnityCommunication class will monitor the MQTT (communication protocol) traffic and process incoming Unity-sent
-        messages in a background thread. The MicroControllerInterface will then read the data received from Unity and
-        pass it to modules that implement this method. In turn, this method should convert Unity messages to appropriate
-        module-addressed command structures that will be sent to the microcontroller.
-
-        Notes:
-            This method should contain a series of if-else statements that evaluate the input topic and payload and,
-            based on their values, decide whether to send a message to the microcontroller. If a message needs to be
-            sent, the method should package the message data into the appropriate structure and return it to caller.
-            Otherwise, the method should return None to indicate that no message needs to be sent.
-
-            Remember to provide the class with topics to listen to via the 'unity_input_topics' argument when
-            initializing the interface class if the instance does need this functionality. If the instance does not
-            need this functionality, implement the method by calling an empty return statement and ensure that the
-            'unity_input_topics' argument is set to None.
-
-        Args:
-            topic: The MQTT topic to which the processed message was sent.
-            payload: The payload of the received message.
-
-        Returns:
-            An initialized OneOffModuleCommand or RepeatedModuleCommand class instance that stores the message payload
-            to be sent to the microcontroller. None, if there is no message to send.
-        """
-        # While abstract method should prompt the user to implement this method, the default error-condition is also
-        # included for additional safety.
-        raise NotImplementedError(
-            f"get_from_unity method for {self._type_name} module interface must be implemented when subclassing the "
-            f"base ModuleInterface class."
-        )
-
-    @abstractmethod
     def send_to_queue(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
-        """Checks the input message data and, if necessary, sends the message to other processes via the provided
+        """Checks the input message data and, if necessary, sends a message to other processes via the provided
         multiprocessing Queue instance.
 
         This method allows sending received data to other processes, running in-parallel with the microcontroller
@@ -245,8 +243,9 @@ class ModuleInterface:
         monitor microcontroller runtime.
 
         Notes:
-            This method should contain a series of if-else statements that determine whether the incoming message
-            should be shared with other processes and, if so, put it into the input queue.
+            This method should contain the logic to determine whether the incoming message should be transferred to
+            other processes. If so, this method should call the put() method of the input queue object to pipe the
+            data to the shared multiprocessing queue.
 
             Remember to enable the 'queue_output' flag when initializing the interface class if the instance does need
             this functionality. If the instance does not need this functionality, implement the method by calling an
@@ -474,17 +473,17 @@ class MicroControllerInterface:
     )
 
     def __init__(
-        self,
-        controller_id: np.uint8,
-        controller_name: str,
-        controller_description: str,
-        controller_usb_port: str,
-        logger_queue: MPQueue,
-        modules: tuple[ModuleInterface, ...],
-        baudrate: int = 115200,
-        maximum_transmitted_payload_size: int = 254,
-        unity_broker_ip: str = "127.0.0.1",
-        unity_broker_port: int = 1883,
+            self,
+            controller_id: np.uint8,
+            controller_name: str,
+            controller_description: str,
+            controller_usb_port: str,
+            logger_queue: MPQueue,
+            modules: tuple[ModuleInterface, ...],
+            baudrate: int = 115200,
+            maximum_transmitted_payload_size: int = 254,
+            unity_broker_ip: str = "127.0.0.1",
+            unity_broker_port: int = 1883,
     ):
         # Controller (kernel) ID information. Follows the same code-name-description format as module type and instance
         # values do.
@@ -743,17 +742,17 @@ class MicroControllerInterface:
 
     @staticmethod
     def _runtime_cycle(
-        controller_id: np.uint8,
-        modules: tuple[ModuleInterface, ...],
-        input_queue: MPQueue,
-        output_queue: MPQueue,
-        logger_queue: MPQueue,
-        terminator_array: SharedMemoryArray,
-        usb_port: str,
-        baudrate: int,
-        payload_size: int,
-        unity_ip: str,
-        unity_port: int,
+            controller_id: np.uint8,
+            modules: tuple[ModuleInterface, ...],
+            input_queue: MPQueue,
+            output_queue: MPQueue,
+            logger_queue: MPQueue,
+            terminator_array: SharedMemoryArray,
+            usb_port: str,
+            baudrate: int,
+            payload_size: int,
+            unity_ip: str,
+            unity_port: int,
     ) -> None:
 
         # Precreates the assets used to optimize the communication runtime cycling. These assets are filled below to
@@ -834,12 +833,12 @@ class MicroControllerInterface:
             # sent to the Microcontroller and send it.
             while not input_queue.empty():
                 out_data: (
-                    RepeatedModuleCommand
-                    | OneOffModuleCommand
-                    | DequeueModuleCommand
-                    | KernelCommand
-                    | ModuleParameters
-                    | KernelParameters
+                        RepeatedModuleCommand
+                        | OneOffModuleCommand
+                        | DequeueModuleCommand
+                        | KernelCommand
+                        | ModuleParameters
+                        | KernelParameters
                 ) = input_queue.get_nowait()
                 serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
