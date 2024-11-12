@@ -4,7 +4,7 @@ import numpy as np
 from _typeshed import Incomplete
 from numpy.typing import NDArray
 
-from ataraxis_transport_layer.helper_modules import (
+from .helper_modules import (
     SerialMock as SerialMock,
     CRCProcessor as CRCProcessor,
     COBSProcessor as COBSProcessor,
@@ -90,6 +90,8 @@ class SerialTransportLayer:
             cannot exceed 254 bytes due to COBS encoding.
         _max_rx_payload_size: Stores the maximum number of bytes that can be received from the microcontroller as a
             single payload. This value cannot exceed 254 bytes due to COBS encoding.
+        _min_rx_payload_size: Stores the minimum number of bytes that can be received from the Microcontroller as a
+            single payload. This value has to be between 1 and 254 and cannot exceed the max_rx_payload_size.
         _postamble_size: Stores the byte-size of the CRC checksum.
         _transmission_buffer: The buffer used to stage the data to be sent to the Microcontroller.
         _reception_buffer: The buffer used to store the decoded data received from the Microcontroller.
@@ -105,10 +107,10 @@ class SerialTransportLayer:
         _minimum_packet_size: Stores the minimum number of bytes that can represent a valid packet. This value is used
             to optimize packet reception logic.
 
-        Raises:
-            TypeError: If any of the input arguments is not of the expected type.
-            ValueError: If any of the input arguments have invalid values.
-            SerialException: If wrapped pySerial class runs into an error.
+    Raises:
+        TypeError: If any of the input arguments is not of the expected type.
+        ValueError: If any of the input arguments have invalid values.
+        SerialException: If wrapped pySerial class runs into an error.
     """
 
     _accepted_numpy_scalars: tuple[
@@ -135,6 +137,7 @@ class SerialTransportLayer:
     _postamble_size: Incomplete
     _max_tx_payload_size: Incomplete
     _max_rx_payload_size: Incomplete
+    _min_rx_payload_size: Incomplete
     _transmission_buffer: Incomplete
     _reception_buffer: Incomplete
     _minimum_packet_size: Incomplete
@@ -236,7 +239,7 @@ class SerialTransportLayer:
             | np.float64
             | np.bool
         ]
-        | type,
+        | type[Any],
         start_index: int | None = None,
     ) -> int:
         """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
@@ -379,7 +382,7 @@ class SerialTransportLayer:
             | np.float64
             | np.bool
         ]
-        | type,
+        | type[Any],
         start_index: int = 0,
     ) -> tuple[Any, int]:
         """Recreates the input data_object using the data read from the payload stored inside the class reception
@@ -524,132 +527,169 @@ class SerialTransportLayer:
             error, it may be necessary to rerun this computation using error-raising wrapper COBS and CRC classes.
         """
     def receive_data(self) -> bool:
-        """If available, receives the serial packet stored inside the reception buffer of the serial port.
+        """If data bytes are available for reception, parses the serialized data packet, verified its integrity, and
+        decodes the packet's payload into the class reception buffer.
 
         This method aggregates the steps necessary to read the packet data from the serial port's reception buffer,
-        verify its integrity using CRC, and decode the payload out of the received data packet using COBS. Following
-        verification, the decoded payload is transferred into the _reception_buffer array. This method uses multiple
-        sub-methods and attempts to intelligently minimize the number of calls to the expensive serial port buffer
-        manipulation methods.
+        verify its integrity using CRC, and decode the payload using COBS. Following verification, the decoded payload
+        is transferred into the class reception buffer. This method uses multiple sub-methods and attempts to
+        intelligently minimize the number of calls to comparatively slow serial port buffer manipulation methods.
 
         Notes:
-            Expects the received data to be organized in the following format (different from the format used for
-            sending the data to the microcontroller):
-            [START BYTE]_[PAYLOAD SIZE BYTE]_[OVERHEAD BYTE]_[ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
+            Expects the received data to be organized in the following format:
+            [START BYTE]_[PAYLOAD SIZE BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
 
-            The method can be co-opted as the check for whether the data is present in the first place, as it returns
-            'False' if called when no data can be read or when the detected data is noise.
+            Before doing any processing, the method checks for whether the data is present in the first place. Even if
+            the class 'available' property returns True, this method can still return False. This would be the case if
+            the 'data' available for reading is actually the communication line noise. Overall, there is no need to
+            check the 'available' property before calling this method, as the method does this internally anyway.
 
-            Since calling data parsing methods is expensive, the method only attempts to parse the data if enough
-            bytes are available, which is based on the minimum_received_payload_size class argument, among
-            other things. The higher the value of this argument, the less time is wasted on trying to parse incomplete
-            packets.
+            Since running this method can get comparatively costly, the method only attempts to process the data if
+            it is relatively likely that the method will run successfully. To determine this likelihood, the method uses
+            the minimum_received_payload_size class attribute and only processes the data if enough bytes are available
+            to represent the minimum packet size.
 
         Returns:
-            A boolean 'True' if the data was parsed and is available for reading via read-data() calls. A boolean
-            'False' if the number of available bytes is not enough to justify attempting to read the data.
+            True if the packet was successfully received and its payload was decoded into the reception buffer. False,
+            if there are no packet bytes to receive and process when this method is called.
 
         Raises:
-            ValueError: If the received packet fails the CRC verification check, indicating that the packet is
-                corrupted.
-            RuntimeError: If _receive_packet method fails. Also, if an unexpected error occurs for any of the
-                methods used to receive and parse the data.
-            Exception: If _validate_packet() method fails, the validation steps are re-run using slower python-wrapped
-                methods. Any errors encountered by these methods (From COBS and CRC classes) are raised as their
-                preferred exception types.
+            ValueError: If the received packet fails the CRC verification check.
+            RuntimeError: If the method runs into an error while receiving the packet's data.
         """
-    def _receive_packet(self) -> int:
-        """Attempts to read the serialized packet from the serial interface reception buffer.
+    def _receive_packet(self) -> bool:
+        """Attempts to receive (parse) the serialized payload and the CRC checksum postamble from the byte-stream
+        stored inside the serial interface buffer.
 
-        This is a fairly complicated method that calls another jit-compiled method to parse the bytes read from
-        the serial port buffer into the packet format expected by this class. The method is designed to minimize the
-        number of read() and in_waiting() method calls as they are very costly. The way this method is written should
-        be optimized for the vast majority of cases though.
+        This method's runtime can be broadly divided into 2 distinct steps. The first step transfers the bytes received
+        by the serial interface into the buffer used by the second step. This step relies on pure python code and
+        pySerial library and is comparatively slow. The second step parses the encoded payload and the CRC checksum from
+        the received bytes, and it uses comparatively fast jit-compiled code. The method is designed to minimize the
+        time spent in step 1 where possible, but is largely limited by the serial port interface.
 
         Notes:
-            This method uses the _timeout attribute to specify the maximum delay in microseconds(!) between receiving
-            any two consecutive bytes of the packet. That is, if not all bytes of the packet are available to the method
-            at runtime initialization, it will wait at most _timeout microseconds for the number of available bytes to
+            This method uses the class _timeout attribute to specify the maximum delay in microseconds(!) between
+            receiving any two consecutive bytes of the packet. If the packet is not fully received at method runtime
+            initialization, it will wait at most _timeout microseconds for the number of available bytes to
             increase before declaring the packet stale. There are two points at which the packet can become stale: the
-            very beginning (the end of the preamble reception) and the reception of the packet itself. This corresponds
-            to how the microcontroller sends teh data (preamble, followed by the packet+postamble fused into one). As
-            such, the separating the two breakpoints with different error codes makes sense from the algorithmic
-            perspective.
+            end of the preamble reception and the reception of the packet (payload + crc postamble). The primary
+            difference between the two breakpoints is that in the latter case the exact size of the packet is known and
+            in the former it is not known.
 
-            The method tries to minimize the number of read() calls it makes as these calls are costly (compared to the
-            rest of the methods in this library). As such, it may occasionally read more bytes than needed to process
-            the incoming packet. In this case, any 'leftover' bytes are saved to the class _leftover_bytes attribute
-            and reused by the next call to _parse_packet().
+            The method tries to minimize the number of serial port interface calls, as these calls are comparatively
+            costly. To do so, the method always reads all bytes available from the serial port interface, regardless of
+            how many bytes it needs to resolve the packet. After resolving the packet, any 'leftover' bytes are saved
+            to the class _leftover_bytes buffer and reused by the next call to _parse_packet().
 
-            This method assumes the sender uses the same CRC type as the SerializedTransferProtocol class, as it
-            directly controls the CRC checksum byte-size. Similarly, it assumes teh sender uses the same delimiter and
-            start_byte values as the class instance. If any of these assumptions are violated, this method will not
-            parse the packet data correctly.
-
-            Returned static codes: 101 → no bytes to read. 102 → start byte not found error. 103 → reception staled
-            at acquiring the payload_size / packet_size. 104 → payload size too large (not valid). 105 → reception
-            staled at acquiring packet bytes. Also returns code 1 to indicate successful packet acquisition.
+            For this method to work correctly, the class configuration should exactly match the configuration of the
+            TransportLayer class used by the connected Microcontroller. If the two configurations do not match, this
+            method will likely fail to parse any incoming packet.
 
         Returns:
-            A static integer code (see notes) that denotes method runtime status. Status code '1' indicates successful
-            runtime, and any other code is an error to be handled by the wrapper method. If runtime is successful, the
-            retrieved packet is saved to the _reception_buffer and the size of the retrieved packet is saved to the
-            _bytes_in_reception_buffer tracker.
+            True, if the method is able to successfully parse the incoming packet. In this case, the COBS-encoded
+            payload and the CRC checksum will be stored inside the _reception_buffer and the size of the received
+            packet will be stored in the _bytes_in_reception_buffer tracker. Returns False if there are no packet
+            bytes to parse (valid non-error status).
+
+        Raises:
+            RuntimeError: If the method runs into an error while parsing the incoming packet. Broadly, this can be due
+                to packet corruption, the mismatch between TransportLayer class configurations, or the packet
+                transmission staling.
+        """
+    def _bytes_available(self, required_bytes_count: int = 1, timeout: int = 0) -> bool:
+        """Determines if the required number of bytes is available across all class buffers that store unprocessed
+        bytes.
+
+        Specifically, this method first checks whether the leftover_bytes buffer of the class contains enough bytes.
+        If not, the method checks how many bytes can be extracted from the serial interface buffer, combines these bytes
+        with the leftover bytes, and repeats the check. If the check succeeds, the method reads all available bytes from
+        the serial port and stacks them with the bytes already stored inside the leftover_bytes buffer before returning.
+        Optionally, the method can block in-place while the serial port continuously receives new bytes, until the
+        required number of bytes becomes available.
+
+        Notes:
+            This method is primarily designed to optimize packet processing speed by minimizing the number of calls to
+            the serial interface methods. This is because these methods take a comparatively long time to execute.
+
+        Args:
+            required_bytes_count: The number of bytes that needs to be available across all class buffers that store
+                unprocessed bytes for this method to return True.
+            timeout: The maximum number of microseconds that can pass between the serial port receiving any two
+                consecutive bytes. Using a non-zero timeout allows the method to briefly block and wait for the
+                required number of bytes to become available, as long as the serial port keeps receiving new bytes.
+
+        Returns:
+            True if enough bytes are available at the end of this method runtime to justify parsing the packet.
         """
     @staticmethod
     def _parse_packet(
-        read_bytes: bytes,
+        unparsed_bytes: NDArray[np.uint8],
         start_byte: np.uint8,
+        delimiter_byte: np.uint8,
         max_payload_size: np.uint8,
-        postamble_size: int | np.unsignedinteger[Any],
+        min_payload_size: np.uint8,
+        postamble_size: np.uint8,
         allow_start_byte_errors: bool,
         start_found: bool = False,
-        packet_size: int = 0,
-        packet_bytes: NDArray[np.uint8] = ...,
+        parsed_byte_count: int = 0,
+        parsed_bytes: NDArray[np.uint8] = ...,
     ) -> tuple[int, int, NDArray[np.uint8], NDArray[np.uint8]]:
-        """Parses as much of the packet as possible using the input bytes object.
+        """Parses as much of the packet data as possible using the input unparsed_bytes object.
 
-        This method contains all packet parsing logic and takes in the bytes extracted from the serial port buffer.
-        Running this method may produce a number of outputs, from a fully parsed packet to an empty buffer without
-        a single packet byte. This method is designed to be called repeatedly until a packet is fully parsed, or until
-        an external timeout guard handled by the _receive_packet() method aborts the reception. As such, it can
-        recursively work on the same packet across multiple calls. To enable proper call hierarchy it is essential that
-        this method is called strictly from the _receive_packet() method.
+        This method contains all packet parsing logic, split into 4 distinct stages: resolving the start_byte, resolving
+        the packet_size, resolving the encoded payload, and resolving the CRC postamble. It is common for the method to
+        not advance through all stages during a single call, requiring multiple calls to fully parse the packet.
+        The method is written in a way that supports iterative calls to work on the same packet. This method is not
+        intended to be used standalone and should always be called through the _receive_packet() method.
 
         Notes:
+            For this method, the 'packet' refers to the COBS encoded payload + the CRC checksum postamble. While each
+            received byte stream also necessarily includes the metadata preamble, the preamble data is used and
+            discarded during this method's runtime.
+
             This method becomes significantly more efficient in use patterns where many bytes are allowed to aggregate
             in the serial port buffer before being evaluated. Due to JIT compilation this method is very fast, and any
-            execution time loss typically comes from reading the data from the underlying serial port.
+            major execution delay typically comes from reading the data from the underlying serial port.
 
-            The returns of this method are designed to support potentially iterative (not recursive) calls to this
-            method. As a minium, the packet may be fully resolved (parsed or failed to be parsed) with one call, and,
-            as a maximum, 3 calls may be necessary.
+            The returns of this method are designed to support iterative calls to this method. As a minium, the packet
+            may be fully resolved (parsed or failed to be parsed) with one call, and, as a maximum, 3 calls may be
+            necessary.
 
             The method uses static integer codes to communicate its runtime status:
 
-            0 - Not enough bytes read to fully parse the packet. The start byte was found, but payload_size byte was not
-            and needs to be read.
+            0 - Not enough bytes read to fully parse the packet. The start byte was found, but packet size has not
+            been resolved and, therefore, not known.
             1 - Packet fully parsed.
-            2 - Not enough bytes read to fully parse the packet. The payload_size was resolved, but there were not
-            enough bytes to fully parse the packet and more bytes need to be read.
-            101 - No start byte found, interpreted as 'no bytes to read' as the class is configured to ignore start
-            byte errors. Usually, this situation is caused by communication line noise generating 'noise bytes'.
-            102 - No start byte found, interpreted as a 'no start byte detected' error case. This status is only
-            possible when the class is configured to detect start byte errors.
-            104 - Payload_size value is too big (above maximum allowed payload size) error.
-
-            The _read_packet() method is expected to issue codes 103 and 105 if packet reception stales at
-            payload_size or packet bytes reception. All error codes are converted to errors at the highest level of the
-            call hierarchy, which is the receive_data() method.
+            2 - Not enough bytes read to fully parse the packet. The packet size was resolved, but there were not
+            enough bytes to fully parse the packet (encoded payload + crc postamble).
+            101 - No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to
+            ignore start byte errors. Usually, this situation is caused by communication line noise generating
+            'noise bytes'.
+            102 - No start byte found, which is interpreted as a 'no start byte detected' error case. This status is
+            only possible when the class is configured to detect start byte errors.
+            103 - Parsed payload_size value is either less than the minimum expected value or above the maximum value.
+            This likely indicates packet corruption or communication parameter mismatch between this class and the
+            connected Microcontroller.
+            104 - Delimiter byte value encountered before reaching the end of the encoded payload data block. It is
+            expected that the last byte of the encoded payload is set to the delimiter value and that the value is not
+            present anywhere else inside the encoded payload region. Encountering the delimiter early indicates packet
+            corruption.
+            105 - Delimiter byte value not encountered at the end of the encoded payload data block. See code 104
+            description for more details, but this code also indicates packet corruption.
 
         Args:
-            read_bytes: A bytes() object that stores the bytes read from the serial port. If this is the first call to
-                this method for a given _receive_packet() method runtime, this object may also include any bytes left
+            unparsed_bytes: A bytes() object that stores the bytes read from the serial port. If this is the first call
+                to this method for a given _receive_packet() method runtime, this object may also include any bytes left
                 from the previous _receive_packet() runtime.
             start_byte: The byte-value used to mark the beginning of a transmitted packet in the byte-stream. This is
                 used to detect the portion of the stream that stores the data packet.
+            delimiter_byte: The byte-value used to mark the end of a transmitted packet in the byte-stream. This is
+                used to detect the portion of the stream that stores the data packet and the portion that stores the
+                CRC postamble.
             max_payload_size: The maximum size of the payload, in bytes, that can be received. This value cannot
                 exceed 254 due to COBS limitations.
+            min_payload_size: The minimum size of the payload, in bytes, that can be received. This value cannot be
+                less than 1 or above 254 (see above) and cannot exceed the max_payload_size.
             postamble_size: The number of bytes needed to store the CRC checksum. This is determined based on the type
                 of the CRC polynomial used by the class.
             allow_start_byte_errors: A boolean flag that determines whether inability to find start_byte should be
@@ -658,21 +698,16 @@ class SerialTransportLayer:
                 to the method to skip resolving the start byte (detecting packet presence). Specifically, it is used
                 when a call to this method finds the start byte, but cannot resolve the packet size. Then, during a
                 second call, start_byte searching step is skipped.
-            packet_size: Iterative parameter. When this method is called two or more times, this value can be provided
-                to the method to skip resolving the packet size. Specifically, it is used when a call to this method
-                resolves the packet size, but cannot fully resolve the packet. Then, a second call to this method is
-                made to resolve the packet and the size is provided as an argument to skip already completed parsing
-                steps.
-            packet_bytes: Iterative parameter. If the method is able to parse some, but not all the bytes making up the
-                packet, parsed bytes can be fed back into the method during a second call using this argument.
-                Then, the method will automatically combine already parsed bytes with newly extracted bytes.
+            parsed_byte_count: Iterative parameter. When this method is called multiple times, this value communicates
+                how many bytes out of the expected byte number have been parsed by the previous method runtime.
+            parsed_bytes: Iterative parameter. This object is initialized to the expected packet size once it is parsed.
+                Multiple method runtimes may be necessary to fully fill the object with parsed data bytes.
 
         Returns:
             A tuple of four elements. The first element is an integer status code that describes the runtime. The
-            second element is the parsed packet_size of the packet or 0 to indicate packet_size was not parsed. The
-            third element is a numpy uint8 array that stores any bytes that remain after the packet parsing has been
-            terminated due to success or error. The fourth element is the uint8 array that stores the portion of the
-            packet that has been parsed so far, up to the entire packet (when method succeeds).
+            second element is the number of packet's bytes processed during method runtime. The third element is a
+            bytes' object that stores any unprocessed bytes that remain after method runtime. The fourth element
+            is the uint8 array that stores some or all of the packet's bytes.
         """
     @staticmethod
     def _validate_packet(
@@ -681,38 +716,40 @@ class SerialTransportLayer:
         cobs_processor: _COBSProcessor,
         crc_processor: _CRCProcessor,
         delimiter_byte: np.uint8,
-        postamble_size: int | np.unsignedinteger[Any],
+        postamble_size: np.uint8,
     ) -> int:
-        """Validates the packet using CRC checksum, decodes it using COBS-scheme, and saves it to the reception_buffer.
+        """Validates the packet by passing it through a CRC checksum calculator, decodes the COBS-encoded payload, and
+        saves it back to the input reception_buffer.
 
-        Both the CRC checksum and COBS decoding act as validation steps, and they jointly make it very unlikely that
-        a corrupted packet passes this step. COBS-decoding extracts the payload from the buffer, making it available
-        for consumption via read_data() method calls.
+        Both the CRC checksum calculation and COBS decoding act as data integrity verification steps. Jointly, they
+        make it very unlikely that a corrupted packet advances to further data processing steps. If this method runs
+        successfully, the payload will be available for consumption via read_data() method.
 
         Notes:
-            This method expects the packet to be stored inside the _reception_buffer and will store the decoded
-            payload to the _reception_buffer if method runtime succeeds. This allows optimizing memory usage and
-            reduces the overhang of passing arrays around.
+            This method expects the packet to be stored inside the _reception_buffer and will write the decoded
+            payload back to the _reception_buffer if method runtime succeeds. This allows optimizing memory access and
+            method runtime speed.
 
-            The method uses the property of CRCs that ensures running a CRC calculation on the buffer to which its CRC
-            checksum is appended will always return 0. For multibyte CRCs, this may be compromised if the byte-order of
-            loading the CRC bytes into the postamble is not the order expected by the receiver system. This was never an
-            issue during library testing, but good to be aware that is possible (usually some of the more nuanced
-            UNIX-derived systems are known to do things differently in this regard).
+            The method uses the following CRC property: running a CRC calculation on the data with appended CRC
+            checksum (for that data) will always return 0. This stems from the fact that CRC checksum is the remainder
+            of dividing the data by the CRC polynomial. For checksums that use multiple bytes, it is essential that the
+            receiver and the sender use the same order of bytes when serializing and deserializing the CRC postamble,
+            for this method to run as expected.
 
         Args:
-            reception_buffer: The buffer to which the extracted payload data will be saved and which is expected to
-                store the packet to verify. Should be set to the _reception_buffer of the class.
-            packet_size: The size of the packet to be verified. Used to access the required portion of the input
-                reception_buffer.
+            reception_buffer: The buffer that stores the packet to be verified and decoded. If method runtime is
+                successful, a portion of the buffer will be overwritten to store the decoded payload. This should be
+                the reception buffer of the caller class.
+            packet_size: The number of bytes that makes up the packet to be verified. It is expected that payload only
+                uses a portion of the input reception_buffer.
             cobs_processor: The inner _COBSProcessor jitclass instance. The instance can be obtained by using
                 '.processor' property of the COBSProcessor wrapper class.
             crc_processor: The inner _CRCProcessor jitclass instance. The instance can be obtained by using '.processor'
                 property of the RCProcessor wrapper class.
-            delimiter_byte: The byte-value used to mark the end of each transmitted packet's payload region.
-            postamble_size: The byte-size of the crc postamble.
+            delimiter_byte: The byte-value used to mark the end of each received packet's payload region.
+            postamble_size: The CRC postamble byte-size for the processed packet.
 
         Returns:
-             A positive (> 0) integer that represents the size of the decoded payload if the method succeeds. Static
-             code 0 if the method fails.
+             A positive integer (>= 1) that stores the size of the decoded payload, if the method succeeds. Integer
+             error code 0, if the method fails.
         """

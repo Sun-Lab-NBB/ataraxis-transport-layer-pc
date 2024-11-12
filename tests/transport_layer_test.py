@@ -40,7 +40,6 @@ class SampleDataClass:
 
 class TestSerialTransportLayerInitialization:
     def test_valid_initialization(self):
-        # Existing valid initialization tests
         protocol = SerialTransportLayer(
             port="COM7",
             baudrate=115200,
@@ -49,14 +48,16 @@ class TestSerialTransportLayerInitialization:
             timeout=10000,
             test_mode=True,
         )
-        assert protocol.port == "COM7"
-        # Add more assertions as needed
-
-    # New Tests for Argument Validation
+        # Check that _port is an instance of SerialMock when in test mode
+        assert isinstance(protocol._port, SerialMock)
+        assert protocol._port.open  # Verify that the mock port is open
 
     def test_invalid_port_type_none(self):
         # Test for None as port
-        with pytest.raises(TypeError, match=r"Expected a string value for 'port' argument, but encountered NoneType"):
+        with pytest.raises(
+            TypeError,
+            match=r"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but encountered None of type NoneType",
+        ):
             SerialTransportLayer(
                 port=None,  # This should trigger the TypeError
                 baudrate=115200,
