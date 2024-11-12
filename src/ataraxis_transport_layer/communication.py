@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 import paho.mqtt.client as mqtt
-from ataraxis_base_utilities import console
+from ataraxis_base_utilities import console, LogLevel
 from ataraxis_data_structures import NestedDictionary
 
 from .transport_layer import SerialTransportLayer, list_available_ports
@@ -1115,6 +1115,9 @@ class SerialCommunication:
         maximum_transmitted_payload_size: The maximum size of the payload that can be transmitted in a single data
             message. This is used to optimize memory usage and prevent overflowing the microcontroller's buffer.
             The default value is 254, which is a typical size for most microcontroller systems.
+        verbose: Determines whether to print sent and received data messages to console. This is used during debugging
+            and should be disabled during production runtimes. Make sure the console is enabled if this flag is
+            enabled, the class itself does NOT enable the console.
 
     Attributes:
         _transport_layer: A SerialTransportLayer instance that exposes the low-level methods that handle bidirectional
@@ -1129,6 +1132,7 @@ class SerialCommunication:
         _source_id: Stores the unique integer-code to use as the logged data source.
         _logger_queue: Stores the multiprocessing Queue that buffers and pipes the data to the Logger process(es).
         _object_counter: Stores a monotonically incrementing counter that helps tracks the order of logged data objects.
+        _verbose: Stores the verbose flag.
     """
 
     def __init__(
@@ -1138,6 +1142,8 @@ class SerialCommunication:
         source_id: int,
         baudrate: int = 115200,
         maximum_transmitted_payload_size: int = 254,
+        *,
+        verbose: bool = False,
     ) -> None:
         # Initializes the TransportLayer to mostly match a similar specialization carried out by the microcontroller
         # Communication class.
@@ -1187,6 +1193,7 @@ class SerialCommunication:
         # interpreted as the 'onset time' log. All further timestamps will be treated as integer time deltas relative
         # to the input time in microseconds.
         self._logger_queue.put((source_id, self._object_counter, 0, onset_serial))
+        self._verbose = verbose
 
     def __repr__(self) -> str:
         """Returns a string representation of the SerialCommunication object."""
@@ -1234,7 +1241,7 @@ class SerialCommunication:
         self._transport_layer.send_data()
         stamp = self._timestamp_timer.elapsed  # Stamps transmission time.
 
-        self._log_data(stamp, message.packed_data)
+        self._log_data(stamp, message.packed_data, output=True)
 
     def receive_message(
         self,
@@ -1276,32 +1283,32 @@ class SerialCommunication:
         # payload.
         if protocol == protocols.kModuleData:
             self._module_data.update_message_data()
-            self._log_data(stamp, self._module_data.message)
+            self._log_data(stamp, self._module_data.message, output=False)
             return self._module_data
 
         if protocol == protocols.kKernelData:
             self._kernel_data.update_message_data()
-            self._log_data(stamp, self._kernel_data.message)
+            self._log_data(stamp, self._kernel_data.message, output=False)
             return self._kernel_data
 
         if protocol == protocols.kModuleState:
             self._module_state.update_message_data()
-            self._log_data(stamp, self._module_state.message)
+            self._log_data(stamp, self._module_state.message, output=False)
             return self._module_state
 
         if protocol == protocols.kKernelState:
             self._kernel_state.update_message_data()
-            self._log_data(stamp, self._kernel_state.message)
+            self._log_data(stamp, self._kernel_state.message, output=False)
             return self._kernel_state
 
         if protocol == protocols.kReceptionCode:
             self._reception_code.update_message_data()
-            self._log_data(stamp, self._reception_code.message)
+            self._log_data(stamp, self._reception_code.message, output=False)
             return self._reception_code
 
         if protocol == protocols.kIdentification:
             self._identification.update_message_data()
-            self._log_data(stamp, self._identification.message)
+            self._log_data(stamp, self._identification.message, output=False)
             return self._identification
 
         # If the protocol code is not resolved by any conditional above, it is not valid. Terminates runtime with a
@@ -1315,12 +1322,14 @@ class SerialCommunication:
         # Fallback to appease mypy
         raise ValueError(message)  # pragma: no cover
 
-    def _log_data(self, timestamp: int, data: NDArray[np.uint8]) -> None:
+    def _log_data(self, timestamp: int, data: NDArray[np.uint8], *, output: bool = False) -> None:
         """Bundles the input data with ID variables and sends it to be saved to disk by the DataLogger class.
 
         Args:
             timestamp: The value of the timestamp timer 'elapsed' property for the logged data.
             data: The byte-serialized message payload that was sent or received.
+            output: Determines whether the logged data was sent or received. This is only used if the class is
+                initialized in verbose mode.
         """
         self._object_counter += 1  # Increments the logged object counter
 
@@ -1329,6 +1338,14 @@ class SerialCommunication:
 
         # Sends the data to the logger
         self._logger_queue.put(data_log)
+
+        if self._verbose:
+            if output:
+                message = f"Source {self._source_id}, object {self._object_counter}. Sent data: {data}"
+            else:
+                message = f"Source {self._source_id}, object {self._object_counter}. Received data: {data}"
+
+            console.echo(message=message, level=LogLevel.SUCCESS)
 
 
 class UnityCommunication:

@@ -1,11 +1,10 @@
-
 import numpy as np
-from ataraxis_time import PrecisionTimer
+from ataraxis_data_structures import DataLogger
 from ataraxis_time.precision_timer.timer_class import PrecisionTimer
 
 from ataraxis_transport_layer import KernelParameters, ModuleParameters, RepeatedModuleCommand, MicroControllerInterface
 
-#print(SerialCommunication.list_available_ports())
+# print(SerialCommunication.list_available_ports())
 
 set_output_params = KernelParameters(
     action_lock=False,
@@ -17,7 +16,7 @@ ttl_params = ModuleParameters(
     module_type=np.uint8(2),
     module_id=np.uint8(1),
     return_code=np.uint8(22),
-    parameter_data=(np.uint32(5000000), np.uint8(0))
+    parameter_data=(np.uint32(5000000), np.uint8(0)),
 )
 
 ttl_pulse = RepeatedModuleCommand(
@@ -31,26 +30,24 @@ ttl_pulse = RepeatedModuleCommand(
 
 timeout = PrecisionTimer(precision="ms")
 if __name__ == "__main__":
+    logger = DataLogger
+
     interface = MicroControllerInterface(
-        name="Test",
         controller_id=np.uint8(123),
-        usb_port="/dev/cu.usbmodem142013801",
+        controller_name="TestController",
+        controller_description="The controller used to test our code and hardware assembly.",
+        controller_usb_port="/dev/cu.usbmodem142013801",
         baudrate=115200,
         maximum_transmitted_payload_size=254,
-
     )
 
+    interface.start()
+
     interface.identify_controller()
-    interface._transmission_queue.put(set_output_params)
-    interface._transmission_queue.put(ttl_params)
-    interface._transmission_queue.put(ttl_pulse)
+    interface.send_message(set_output_params)
+    interface.send_message(ttl_params)
+    interface.send_message(ttl_pulse)
 
     timeout.delay_noblock(delay=20000, allow_sleep=True)
 
-    print("Terminating")
-
-    interface._terminator_array.write_data(0, 1)
-    timeout.delay_noblock(delay=2000, allow_sleep=True)
-    interface._terminator_array.disconnect()
-    interface._terminator_array.destroy()
-
+    interface.stop()
