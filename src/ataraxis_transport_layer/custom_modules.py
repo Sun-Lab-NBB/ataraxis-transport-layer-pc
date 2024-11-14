@@ -1,3 +1,4 @@
+from json import dumps
 from multiprocessing import Queue as MPQueue
 
 import numpy as np
@@ -7,13 +8,12 @@ from .communication import (
     ModuleData,
     ModuleState,
     ModuleParameters,
+    UnityCommunication,
     OneOffModuleCommand,
     RepeatedModuleCommand,
-    UnityCommunication,
     prototypes,
 )
 from .microcontroller import ModuleInterface
-from json import dumps
 
 
 class TTLModule(ModuleInterface):
@@ -30,7 +30,6 @@ class TTLModule(ModuleInterface):
     """
 
     def __init__(self, module_id: np.uint8, instance_name: str, instance_description: str) -> None:
-
         # Statically defines the TTLModule type description.
         type_description = (
             f"The family of modules that sends or receives Transistor-to-Transistor Logic (TTL) signals using the "
@@ -54,7 +53,11 @@ class TTLModule(ModuleInterface):
         """Not used."""
         return
 
-    def send_to_queue(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
+    def send_to_queue(
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
+    ) -> None:
         """Not used."""
         return
 
@@ -183,7 +186,7 @@ class TTLModule(ModuleInterface):
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
-                noblock=noblock,
+                noblock=np.bool(noblock),
             )
 
         return RepeatedModuleCommand(
@@ -191,7 +194,7 @@ class TTLModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(1),
-            noblock=noblock,
+            noblock=np.bool(noblock),
             cycle_delay=repetition_delay,
         )
 
@@ -212,7 +215,7 @@ class TTLModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(2 if state else 3),
-            noblock=False,
+            noblock=np.bool(False),
         )
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
@@ -237,7 +240,7 @@ class TTLModule(ModuleInterface):
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(4),
-                noblock=False,
+                noblock=np.bool(False),
             )
 
         return RepeatedModuleCommand(
@@ -245,7 +248,7 @@ class TTLModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(4),
-            noblock=False,
+            noblock=np.bool(False),
             cycle_delay=repetition_delay,
         )
 
@@ -282,7 +285,6 @@ class EncoderModule(ModuleInterface):
         unity_output: bool = True,
         motion_topic: str = "LinearTreadmill/Data",
     ) -> None:
-
         # Statically defines the module type description.
         type_description = (
             f"The family of modules that allows interfacing with a rotary encoder to track the direction and "
@@ -305,7 +307,7 @@ class EncoderModule(ModuleInterface):
         # Saves motion topic to class attributes.
         self._motion_topic = motion_topic
 
-    def send_to_unity(self, message: ModuleData, unity_communication: UnityCommunication) -> None:
+    def send_to_unity(self, message: ModuleState | ModuleData, unity_communication: UnityCommunication) -> None:
         # If the incoming message is not a CCW or CW motion report, aborts processing
         if message.event != np.uint8(51) or message.event != np.uint8(52):
             return
@@ -315,7 +317,7 @@ class EncoderModule(ModuleInterface):
         sign = -1 if message.event == np.uint8(51) else 1
 
         # Translates the absolute motion into the CW / CCW vector
-        signed_motion = int(message.data_object) * sign
+        signed_motion = int(message.data_object) * sign  # type: ignore
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -325,7 +327,11 @@ class EncoderModule(ModuleInterface):
         # Publishes the motion to the appropriate MQTT topic.
         unity_communication.send_data(topic=self._motion_topic, payload=byte_array)
 
-    def send_to_queue(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
+    def send_to_queue(
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
+    ) -> None:
         """Not used."""
         return
 
@@ -405,7 +411,10 @@ class EncoderModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-        self, report_ccw: bool = True, report_cw: bool = True, delta_threshold: np.uint32 = np.uint32(1)
+        self,
+        report_ccw: np.bool = np.bool(True),
+        report_cw: np.bool = np.bool(True),
+        delta_threshold: np.uint32 = np.uint32(1),
     ) -> ModuleParameters:
         """Sets PC-addressable parameters of the module instance running on the microcontroller.
 
@@ -453,7 +462,7 @@ class EncoderModule(ModuleInterface):
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
-                noblock=False,
+                noblock=np.bool(False),
             )
 
         return RepeatedModuleCommand(
@@ -461,7 +470,7 @@ class EncoderModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(1),
-            noblock=False,
+            noblock=np.bool(False),
             cycle_delay=repetition_delay,
         )
 
@@ -479,7 +488,7 @@ class EncoderModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(2),
-            noblock=False,
+            noblock=np.bool(False),
         )
 
 
@@ -498,7 +507,6 @@ class BreakModule(ModuleInterface):
     """
 
     def __init__(self, module_id: np.uint8, instance_name: str, instance_description: str) -> None:
-
         # Statically defines the TTLModule type description.
         type_description = (
             f"The family of modules that sends digital or analog Pulse-Width-Modulated (PWM) signals to engage the "
@@ -522,7 +530,11 @@ class BreakModule(ModuleInterface):
         """Not used."""
         return
 
-    def send_to_queue(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
+    def send_to_queue(
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
+    ) -> None:
         """Not used."""
         return
 
@@ -618,7 +630,7 @@ class BreakModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(1 if state else 2),
-            noblock=False,
+            noblock=np.bool(False),
         )
 
     def set_power(self) -> OneOffModuleCommand:
@@ -641,7 +653,7 @@ class BreakModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(3),
-            noblock=False,
+            noblock=np.bool(False),
         )
 
 
@@ -676,7 +688,6 @@ class SensorModule(ModuleInterface):
         unity_output: bool = True,
         sensor_topic: str = "LickPort/",
     ) -> None:
-
         # Statically defines the TTLModule type description.
         type_description = (
             f"The family of modules that receives unidirectional analog logic signals from a wide range of sensors."
@@ -705,7 +716,11 @@ class SensorModule(ModuleInterface):
         # Sends an empty message to the sensor MQTT topic, which acts as a binary trigger.
         unity_communication.send_data(topic=self._sensor_topic, payload=None)
 
-    def send_to_queue(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
+    def send_to_queue(
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
+    ) -> None:
         """Not used."""
         return
 
@@ -811,7 +826,7 @@ class SensorModule(ModuleInterface):
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
-                noblock=False,
+                noblock=np.bool(False),
             )
 
         return RepeatedModuleCommand(
@@ -819,7 +834,7 @@ class SensorModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(1),
-            noblock=False,
+            noblock=np.bool(False),
             cycle_delay=repetition_delay,
         )
 
@@ -850,7 +865,6 @@ class ValveModule(ModuleInterface):
         instance_description: str,
         input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
     ) -> None:
-
         # Statically defines the TTLModule type description.
         type_description = (
             f"The family of modules that sends digital signals to open or close the managed solenoid fluid or gas "
@@ -874,24 +888,28 @@ class ValveModule(ModuleInterface):
         """Not used."""
         return
 
-    def send_to_queue(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
+    def send_to_queue(
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
+    ) -> None:
         """Not used."""
         return
 
     def get_from_unity(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
-        # This is expected to be the "Gimbl/Reward/" topic.
-        if topic == self.unity_input_topics[0]:
+        # Currently, the only processed topic is "Gimbl/Reward/". If more supported topics are needed, this needs to be
+        # rewritten to use if-else conditions.
 
-            # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
-            # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
-            # desired amount of water reward.
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(1),
-                noblock=False,  # Blocks to ensure reward delivery precision.
-            )
+        # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
+        # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
+        # desired amount of water reward.
+        return OneOffModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            command=np.uint8(1),
+            noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
+        )
 
     def write_code_map(self, code_map: NestedDictionary) -> NestedDictionary:
         # Status Codes
@@ -1010,7 +1028,7 @@ class ValveModule(ModuleInterface):
                 module_id=self._module_id,
                 return_code=np.uint8(0),
                 command=np.uint8(1),
-                noblock=noblock,
+                noblock=np.bool(noblock),
             )
 
         return RepeatedModuleCommand(
@@ -1018,7 +1036,7 @@ class ValveModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(1),
-            noblock=noblock,
+            noblock=np.bool(noblock),
             cycle_delay=repetition_delay,
         )
 
@@ -1037,7 +1055,7 @@ class ValveModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(2 if state else 3),
-            noblock=False,
+            noblock=np.bool(False),
         )
 
     def calibrate(self) -> OneOffModuleCommand:
@@ -1061,5 +1079,5 @@ class ValveModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(4),
-            noblock=False,
+            noblock=np.bool(False),
         )

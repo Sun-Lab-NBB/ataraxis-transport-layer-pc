@@ -6,7 +6,7 @@ used to interface between python PC code and Unity game engine running Virtual E
 """
 
 from queue import Queue
-from typing import Any
+from typing import Any, Union
 import datetime
 from datetime import timezone
 from dataclasses import field, dataclass
@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 import paho.mqtt.client as mqtt
-from ataraxis_base_utilities import console, LogLevel
+from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import NestedDictionary
 
 from .transport_layer import SerialTransportLayer, list_available_ports
@@ -250,7 +250,7 @@ class SerialPrototypes:
     kOneUnsignedShort: np.uint8 = np.uint8(6)
     _kOneUnsignedShortPrototype: np.uint16 = field(default_factory=lambda: np.uint16(0))
 
-    def get_prototype(self, code: np.uint8) -> NDArray[Any] | np.unsignedinteger[Any] | None:
+    def get_prototype(self, code: np.uint8) -> Union[NDArray[np.uint8], np.uint8, np.uint16, np.uint32, None]:
         """Returns the prototype object associated with the input prototype code.
 
         The prototype object returned by this method can be passed to the reading method of the SerialTransportLayer
@@ -732,7 +732,7 @@ class ModuleData:
         self.event = self.message[4]
 
         # Parses the prototype code and uses it to retrieve the prototype object from the prototypes dataclass instance
-        prototype, _ = prototypes.get_prototype(code=self.message[5])
+        prototype = prototypes.get_prototype(code=self.message[5])
 
         # If prototype retrieval fails, raises ValueError
         if prototype is None:
@@ -742,9 +742,9 @@ class ModuleData:
                 f"data prototype codes have to be available from the SerialPrototypes class to be resolved."
             )
             console.error(message, ValueError)
-
-        # Otherwise, uses the retrieved prototype to parse the data object
-        self.data_object, _ = self._transport_layer.read_data(prototype, start_index=6)
+        else:
+            # Otherwise, uses the retrieved prototype to parse the data object
+            self.data_object, _ = self._transport_layer.read_data(prototype, start_index=6)
 
     def __repr__(self) -> str:
         """Returns a string representation of the ModuleData object."""
@@ -816,7 +816,7 @@ class KernelData:
         self.event = self.message[2]
 
         # Parses the prototype code and uses it to retrieve the prototype object from the prototypes dataclass instance
-        prototype, _ = prototypes.get_prototype(code=self.message[3])
+        prototype = prototypes.get_prototype(code=self.message[3])
 
         # If the prototype retrieval fails, raises ValueError.
         if prototype is None:
@@ -827,8 +827,9 @@ class KernelData:
             )
             console.error(message, ValueError)
 
-        # Otherwise, uses the retrieved prototype to parse the data object
-        self.data_object, _ = self._transport_layer.read_data(prototype, start_index=4)
+        else:
+            # Otherwise, uses the retrieved prototype to parse the data object
+            self.data_object, _ = self._transport_layer.read_data(prototype, start_index=4)
 
     def __repr__(self) -> str:
         """Returns a string representation of the KernelData object."""
@@ -1138,7 +1139,7 @@ class SerialCommunication:
     def __init__(
         self,
         usb_port: str,
-        logger_queue: MPQueue,
+        logger_queue: MPQueue,  # type: ignore
         source_id: int,
         baudrate: int = 115200,
         maximum_transmitted_payload_size: int = 254,
@@ -1234,6 +1235,12 @@ class SerialCommunication:
         Args:
             message: The command or parameters message to send to the microcontroller.
         """
+
+        # Static guard that prevents sending messages whose data has not been packed. Generally, it should be impossible
+        # to encounter this scenario though.
+        if message.packed_data is None:
+            return
+
         # Writes the pre-packaged data into the transmission buffer.
         self._transport_layer.write_data(data_object=message.packed_data)
 
@@ -1385,7 +1392,6 @@ class UnityCommunication:
         port: int = 1883,
         monitored_topics: None | tuple[str, ...] = None,
     ) -> None:
-
         # Ensures that ip and port formats are valid:
         if not isinstance(ip, str) or len(ip.split(".")) != 4:
             message = (
@@ -1406,10 +1412,9 @@ class UnityCommunication:
         self._connected = False
         self._subscribe_topics: tuple[str, ...] = monitored_topics if monitored_topics is not None else tuple()
 
-        # Initializes the queue to buffer incoming data if the class is configured to listen to certain topics.
-        self._output_queue: Queue | None = None
-        if len(self._subscribe_topics) != 0:
-            self._output_queue = Queue()
+        # Initializes the queue to buffer incoming data. The queue may not be used if the class is not configured to
+        # receive any data, but this is a fairly minor inefficiency.
+        self._output_queue: Queue = Queue()  # type: ignore
 
         # Initializes the MQTT client. Note, it needs to be connected before it can send and receive messages!
         self._client: mqtt.Client = mqtt.Client(protocol=mqtt.MQTTv5, transport="tcp")
@@ -1421,7 +1426,7 @@ class UnityCommunication:
             f"subscribed_topics={self._subscribe_topics}"
         )
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Ensures proper resource release when the class instance is garbage-collected."""
         self.disconnect()
 
@@ -1504,7 +1509,8 @@ class UnityCommunication:
         if not self.has_data:
             return None
 
-        return self._output_queue.get_nowait()
+        data: tuple[str, bytes | bytearray] = self._output_queue.get_nowait()
+        return data
 
     def disconnect(self) -> None:
         """Disconnects the client from the MQTT broker."""

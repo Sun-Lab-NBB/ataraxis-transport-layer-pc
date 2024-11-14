@@ -15,6 +15,7 @@ from .communication import (
     ModuleData,
     ModuleState,
     KernelCommand,
+    Identification,
     KernelParameters,
     ModuleParameters,
     UnityCommunication,
@@ -22,9 +23,8 @@ from .communication import (
     SerialCommunication,
     DequeueModuleCommand,
     RepeatedModuleCommand,
-    prototypes,
     protocols,
-    Identification,
+    prototypes,
 )
 
 
@@ -114,7 +114,6 @@ class ModuleInterface:
         unity_output: bool = False,
         queue_output: bool = False,
     ) -> None:
-
         # Verifies input byte-codes for validity.
         if module_type < 1:
             message = (
@@ -132,7 +131,7 @@ class ModuleInterface:
         # Module Type. Should be the same for all instances of this type
         self._module_type: np.uint8 = module_type
         self._type_name: str = type_name
-        self._type_description = type_description
+        self._type_description: str = type_description
 
         # Module Instance. This should be unique for each instance within the same type
         self._module_id: np.uint8 = module_id
@@ -142,7 +141,9 @@ class ModuleInterface:
         # Combines type and ID into a 16-bit value. This is used to ensure every module instance has a unique
         # ID + Type combination. This method is position-aware, which avoids the issue of reverse pairs giving the same
         # resultant value(e.g.: 4-5 != 5-4)
-        self._type_id = (self._module_type.astype(np.uint16) << 8) | self._module_type.astype(np.uint16)
+        self._type_id: np.uint16 = np.uint16(
+            (self._module_type.astype(np.uint16) << 8) | self._module_id.astype(np.uint16)
+        )
 
         # Additional processing flags. Unity input is set based on whether there are input / output topics
         self._unity_input_topics: tuple[str, ...] = unity_input_topics if unity_input_topics is not None else tuple()
@@ -160,7 +161,9 @@ class ModuleInterface:
         return message
 
     @abstractmethod
-    def get_from_unity(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def get_from_unity(
+        self, topic: str, payload: bytes | bytearray
+    ) -> OneOffModuleCommand | RepeatedModuleCommand | None:
         """Packages and returns a command message structure to send to the microcontroller, based on the input Unity
         message topic and payload.
 
@@ -232,7 +235,11 @@ class ModuleInterface:
         )
 
     @abstractmethod
-    def send_to_queue(self, message: ModuleData | ModuleState, queue: MPQueue) -> None:
+    def send_to_queue(
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
+    ) -> None:
         """Checks the input message data and, if necessary, sends a message to other processes via the provided
         multiprocessing Queue instance.
 
@@ -476,13 +483,13 @@ class MicroControllerInterface:
     # also send messages with partial locks (e.g.: TTl ON, Action OFF), but those are usually not used outside
     # specific debugging and testing scenarios, so are not really worth to pre-package.
     _disable_locks = KernelParameters(
-        action_lock=False,
-        ttl_lock=False,
+        action_lock=np.bool(False),
+        ttl_lock=np.bool(False),
         return_code=np.uint8(0),
     )
     _enable_locks = KernelParameters(
-        action_lock=True,
-        ttl_lock=True,
+        action_lock=np.bool(True),
+        ttl_lock=np.bool(True),
         return_code=np.uint8(0),
     )
 
@@ -492,7 +499,7 @@ class MicroControllerInterface:
         controller_name: str,
         controller_description: str,
         controller_usb_port: str,
-        logger_queue: MPQueue,
+        logger_queue: MPQueue,  # type: ignore
         modules: tuple[ModuleInterface, ...],
         baudrate: int = 115200,
         maximum_transmitted_payload_size: int = 254,
@@ -547,7 +554,7 @@ class MicroControllerInterface:
             f"started={self._started})"
         )
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Ensures that all class resources are properly released when the class instance is garbage-collected."""
         self.stop()
 
@@ -582,10 +589,10 @@ class MicroControllerInterface:
         code_dict.write_nested_value(variable_path=f"description", value=self._controller_description)
 
         # This set is used to limit certain operations that only need to be performed once for each module type
-        processed_types = set()
+        processed_types: set[np.uint8] = set()
 
         # This set is used to ensure each module instance has a unique id within the same module type.
-        processed_id_types = set()
+        processed_id_types: set[np.uint16] = set()
 
         # Loops over all modules. Parses and uses their information to interactively fill the code dictionary with
         # information
@@ -614,7 +621,7 @@ class MicroControllerInterface:
             # instances with already processed module type codes.
             if module_type not in processed_types:
                 # Adds each new module type to the processed types set
-                processed_types.add(processed_types)
+                processed_types.add(module_type)
 
                 # Calls the class method that should fill the status_code, command and data_object module-type-specific
                 # sections of the dictionary with data and return it to caller.
@@ -641,18 +648,18 @@ class MicroControllerInterface:
             # type information.
             section = f"{module_section}.instance_ids"
             existing_values: list[np.uint8] = code_dict.read_nested_value(variable_path=section)
-            new_values = existing_values.append(module.module_id)
-            code_dict.write_nested_value(variable_path=section, value=new_values)
+            existing_values.append(module.module_id)
+            code_dict.write_nested_value(variable_path=section, value=existing_values)
 
             section = f"{module_section}.instance_names"
-            existing_values: list[str] = code_dict.read_nested_value(variable_path=section)
-            new_values = existing_values.append(module.instance_name)
-            code_dict.write_nested_value(variable_path=section, value=new_values)
+            existing_strings: list[str] = code_dict.read_nested_value(variable_path=section)
+            existing_strings.append(module.instance_name)
+            code_dict.write_nested_value(variable_path=section, value=existing_strings)
 
             section = f"{module_section}.instance_descriptions"
-            existing_values: list[str] = code_dict.read_nested_value(variable_path=section)
-            new_values = existing_values.append(module.instance_description)
-            code_dict.write_nested_value(variable_path=section, value=new_values)
+            existing_strings = code_dict.read_nested_value(variable_path=section)
+            existing_strings.append(module.instance_description)
+            code_dict.write_nested_value(variable_path=section, value=existing_strings)
 
             # Also, for each instance, records whether additional processing flags were used for that instance.
             section = f"{module_section}.unity_output"
@@ -752,7 +759,7 @@ class MicroControllerInterface:
             return
 
         # Instantiates the array used to control the runtime of the communication Process.
-        self._terminator_array: SharedMemoryArray = SharedMemoryArray.create_array(
+        self._terminator_array = SharedMemoryArray.create_array(
             name=f"{self._controller_name}_terminator_array",
             # Uses class name to ensure the array buffer name is unique
             prototype=np.zeros(shape=1, dtype=np.uint8),
@@ -783,7 +790,7 @@ class MicroControllerInterface:
         # Sets the started flag
         self._started = True
 
-    def stop(self):
+    def stop(self) -> None:
         """Shuts down the communication process, frees all reserved resources, and discards any unprocessed data stored
         inside input and output queues."""
 
@@ -792,17 +799,20 @@ class MicroControllerInterface:
             return
 
         # Sets the terminator tracker to 1, which triggers communication process shutdown.
-        self._terminator_array.write_data(0, np.uint8(1))
+        if self._terminator_array is not None:
+            self._terminator_array.write_data(0, np.uint8(1))
 
         # Waits until the communication process terminates
-        self._communication_process.join()
+        if self._communication_process is not None:
+            self._communication_process.join()
 
         # Shuts down the multiprocessing manager. This collects all active queues and discards all unprocessed data.
         self._mp_manager.shutdown()
 
         # Disconnects from the shared memory array and destroys its shared buffer.
-        self._terminator_array.disconnect()
-        self._terminator_array.destroy()
+        if self._terminator_array is not None:
+            self._terminator_array.disconnect()
+            self._terminator_array.destroy()
 
     def identify_controller(self) -> None:
         """Prompts the connected MicroController to identify itself by returning its id code."""
@@ -821,7 +831,7 @@ class MicroControllerInterface:
         self._input_queue.put(self._disable_locks)
 
     @property
-    def output_queue(self) -> MPQueue:
+    def output_queue(self) -> MPQueue:  # type: ignore
         """Returns the multiprocessing queue used by the communication process to pipe data to other concurrently active
         processes."""
         return self._output_queue
@@ -836,7 +846,7 @@ class MicroControllerInterface:
             | KernelParameters
             | KernelCommand
         ),
-    ):
+    ) -> None:
         """Sends the input arbitrary message structure to the connected Microcontroller.
 
         This is the primary interface for communicating with the Microcontroller. It allows sending all supported
@@ -848,9 +858,9 @@ class MicroControllerInterface:
     def _runtime_cycle(
         controller_id: np.uint8,
         modules: tuple[ModuleInterface, ...],
-        input_queue: MPQueue,
-        output_queue: MPQueue,
-        logger_queue: MPQueue,
+        input_queue: MPQueue,  # type: ignore
+        output_queue: MPQueue,  # type: ignore
+        logger_queue: MPQueue,  # type: ignore
         terminator_array: SharedMemoryArray,
         usb_port: str,
         baudrate: int,
@@ -901,7 +911,6 @@ class MicroControllerInterface:
 
         # Loops over all modules and configures the assets instantiated above
         for num, module in enumerate(modules):
-
             # If the module is configured to receive data from unity, configures the necessary data structures to enable
             # monitoring the necessary topics and allow to quickly pass the data received on that topic to the
             # appropriate module class for processing.
@@ -966,7 +975,6 @@ class MicroControllerInterface:
         # and the main input queue of the interface to be empty. This ensures that all queued commands issued from
         # the central process are fully carried out before the communication is terminated.
         while not terminator_array.read_data(index=0, convert_output=True) or not input_queue.empty():
-
             # Main data sending loop. The method will sequentially retrieve the queued command and parameter data to be
             # sent to the Microcontroller and send it.
             while not input_queue.empty():
@@ -982,20 +990,19 @@ class MicroControllerInterface:
 
             # Unity data sending loop. The loop is only executed if unity_input flag is enabled.
             if unity_input:
-                while unity_communication.has_data:
-
+                while unity_communication.has_data:  # type: ignore
                     # If UnityCommunication has received data, loops over all interfaces that requested the data from
                     # this topic and calls their unity data processing method. The method is expected to extract the
                     # data from the communication class and translate it into a valid message format to be sent to the
                     # microcontroller.
-                    topic, payload = unity_communication.get_data()
+                    topic, payload = unity_communication.get_data()  # type: ignore
 
                     # Each incoming message will be processed by each module subscribed to this topic. Since
                     # UnityCommunication is configured to only listen to topics submitted by the interface classes, the
                     # topic is guaranteed to be inside the unity_input_map dictionary and have at least one Module which
                     # can process its data.
                     for i in unity_input_map[topic]:
-                        out_data = modules[i].get_from_unity(topic=topic, payload=payload)
+                        out_data = modules[i].get_from_unity(topic=topic, payload=payload)  # type: ignore
                         serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
             # Attempts to receive the data from microcontroller
@@ -1009,18 +1016,20 @@ class MicroControllerInterface:
             # interfaces have additional data processing steps. Therefore, limits the evaluation to ModuleState and
             # Data messages.
             if isinstance(in_data, (ModuleState, ModuleData)) and (unity_output or queue_output):
-
                 # Only carries out additional processing steps if unity or queue output flags are enabled.
 
                 # Computes the combined type and id code for the incoming data. This allows quickly finding the unique
                 # addressee of the data payload.
-                target_type_id = (in_data.module_type.astype(np.uint16) << 8) | in_data.module_type.astype(np.uint16)
+                target_type_id: np.uint16 = np.uint16(
+                    (in_data.module_type.astype(np.uint16) << 8) | in_data.module_type.astype(np.uint16)
+                )
 
                 # Depending on whether the combined code is inside the unity_output_map, queue_output_map or both
                 # executes the necessary module's method to handle data output.
                 if target_type_id in unity_output_map.keys():
                     modules[unity_output_map[target_type_id]].send_to_unity(
-                        message=in_data, unity_communication=unity_communication
+                        message=in_data,
+                        unity_communication=unity_communication,  # type: ignore
                     )
                 if target_type_id in queue_output_map.keys():
                     modules[queue_output_map[target_type_id]].send_to_queue(message=in_data, queue=output_queue)
@@ -1040,7 +1049,8 @@ class MicroControllerInterface:
         # communication cycle.
         # Disconnects from the terminator array and shuts down Unity communication.
         terminator_array.disconnect()
-        unity_communication.disconnect()
+        if unity_communication is not None:
+            unity_communication.disconnect()
 
         # If this method enabled the console to comply with the verbose flag, disables the console.
         if is_enabled and verbose:
