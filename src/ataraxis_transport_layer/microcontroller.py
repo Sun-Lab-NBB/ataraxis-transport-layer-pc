@@ -367,7 +367,7 @@ class ModuleInterface:
     def type_id(self) -> np.uint16:
         """Returns the unique unsigned integer value that results from combining the type-code and the id-code of the
         module instance."""
-        return self.type_id
+        return self._type_id
 
 
 class MicroControllerInterface:
@@ -537,13 +537,14 @@ class MicroControllerInterface:
         self._terminator_array: None | SharedMemoryArray = None
         self._communication_process: None | Process = None
 
+        # Stores the value of the verbose flag. This ahs to be done before parsing module data in case the process fails
+        # and the class needs to be garbage-collected before initialization is over
+        self._verbose: bool = verbose
+        self._started: bool = False
+
         # Extracts information from the input modules and finalizes runtime preparations. As part of this process,
         # the method will create the microcontroller-specific code-map dictionary section.
         self._controller_map_section: NestedDictionary = self._parse_module_data()
-
-        # Stores the value of the verbose flag.
-        self._verbose: bool = verbose
-        self._started: bool = False
 
     def __repr__(self) -> str:
         """Returns a string representation of the class instance."""
@@ -662,9 +663,9 @@ class MicroControllerInterface:
             code_dict.write_nested_value(variable_path=section, value=existing_strings)
 
             # Also, for each instance, records whether additional processing flags were used for that instance.
-            section = f"{module_section}.unity_output"
-            code_dict.write_nested_value(variable_path=section, value=module.unity_input)
             section = f"{module_section}.unity_input"
+            code_dict.write_nested_value(variable_path=section, value=module.unity_input)
+            section = f"{module_section}.unity_output"
             code_dict.write_nested_value(variable_path=section, value=module.unity_output)
             section = f"{module_section}.queue_output"
             code_dict.write_nested_value(variable_path=section, value=module.queue_output)
