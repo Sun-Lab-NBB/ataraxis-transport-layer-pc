@@ -309,15 +309,15 @@ class EncoderModule(ModuleInterface):
 
     def send_to_unity(self, message: ModuleState | ModuleData, unity_communication: UnityCommunication) -> None:
         # If the incoming message is not a CCW or CW motion report, aborts processing
-        if message.event != np.uint8(51) or message.event != np.uint8(52):
+        if message.event != np.uint8(51) and message.event != np.uint8(52):
             return
 
         # The rotation direction is encoded via the message event code. CW rotation (code 51) is interpreted as negative
         # and CCW as positive.
-        sign = -1 if message.event == np.uint8(51) else 1
+        sign = 1 if message.event == np.uint8(51) else -1
 
         # Translates the absolute motion into the CW / CCW vector
-        signed_motion = int(message.data_object) * sign  # type: ignore
+        signed_motion = (float(message.data_object)/500) * sign  # type: ignore
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.

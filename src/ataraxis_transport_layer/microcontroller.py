@@ -825,6 +825,9 @@ class MicroControllerInterface:
             self._terminator_array.disconnect()
             self._terminator_array.destroy()
 
+        # Changes the started tracker value
+        self._started = False
+
     def identify_controller(self) -> None:
         """Prompts the connected MicroController to identify itself by returning its id code."""
         self._input_queue.put(self._identify_command)
@@ -1029,6 +1032,10 @@ class MicroControllerInterface:
                     | ModuleParameters
                     | KernelParameters
                 ) = input_queue.get_nowait()
+
+                print(out_data.packed_data)
+                sys.stdout.flush()
+
                 serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
             # Unity data sending loop. The loop is only executed if unity_input flag is enabled.
@@ -1055,6 +1062,9 @@ class MicroControllerInterface:
             if in_data is None:
                 continue
 
+            print(in_data.message)
+            sys.stdout.flush()
+
             # Otherwise, resolves additional processing steps associated with incoming data. Currently, only Module
             # interfaces have additional data processing steps. Therefore, limits the evaluation to ModuleState and
             # Data messages.
@@ -1064,7 +1074,7 @@ class MicroControllerInterface:
                 # Computes the combined type and id code for the incoming data. This allows quickly finding the unique
                 # addressee of the data payload.
                 target_type_id: np.uint16 = np.uint16(
-                    (in_data.module_type.astype(np.uint16) << 8) | in_data.module_type.astype(np.uint16)
+                    (in_data.module_type.astype(np.uint16) << 8) | in_data.module_id.astype(np.uint16)
                 )
 
                 # Depending on whether the combined code is inside the unity_output_map, queue_output_map or both

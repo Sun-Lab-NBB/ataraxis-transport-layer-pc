@@ -4,7 +4,6 @@ structures, that enable communication between various project Ataraxis systems.
 Currently, SerialCommunication is used to interface between the PC and the MicroController, while UnityCommunication is
 used to interface between python PC code and Unity game engine running Virtual Environment tasks.
 """
-
 from queue import Queue
 from typing import Any, Union
 import datetime
@@ -1459,7 +1458,7 @@ class UnityCommunication:
             with a listener callback to monitor incoming traffic.
         """
         # Guards against re-connecting an already connected client.
-        if not self._connected:
+        if self._connected:
             return
 
         # Initializes the client
