@@ -631,8 +631,10 @@ def test_non_one_dimensional_array():
     with pytest.raises(
         ValueError,
         match=re.escape(
-            f"A multidimensional numpy array with {invalid_array.ndim} dimensions encountered when writing data to _transmission_buffer. At this time, only one-dimensional (flat) arrays are supported."
-        ),
+            "Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with 2 dimensions as"
+        )
+        + r"\s+"
+        + re.escape("input data_object. At this time, only one-dimensional (flat) arrays are supported."),
     ):
         protocol.write_data(invalid_array)
 
