@@ -1,3 +1,4 @@
+import sys
 from abc import abstractmethod
 from multiprocessing import (
     Queue as MPQueue,
@@ -763,7 +764,7 @@ class MicroControllerInterface:
         self._terminator_array = SharedMemoryArray.create_array(
             name=f"{self._controller_name}_terminator_array",
             # Uses class name to ensure the array buffer name is unique
-            prototype=np.zeros(shape=1, dtype=np.uint8),
+            prototype=np.zeros(shape=3, dtype=np.uint8),
         )  # Instantiation automatically connects the main process to the array.
 
         # Sets up the communication process. This process continuously cycles through the communication loop until
@@ -787,6 +788,15 @@ class MicroControllerInterface:
             daemon=True,
         )
         self._communication_process.start()
+
+        # Sends controller identification command and ensures the (connected) controller id matches expectation.
+        self.identify_controller()
+
+        # Blocks until the microcontroller has finished all initialization steps or encounters an initialization error.
+        while self._terminator_array.read_data(1) != 7:
+            if not self._communication_process.is_alive():
+                print(f"Initialization error code {self._terminator_array.read_data(1)}")
+                raise RuntimeError("Communication died unexpectedly.")
 
         # Sets the started flag
         self._started = True
@@ -904,6 +914,11 @@ class MicroControllerInterface:
         if not is_enabled and verbose:
             console.enable()
 
+        # Connects to the terminator array. This is done early, as the terminator_array is used to track the
+        # initialization and runtime status of the process, since errors that occur inside the process usually get
+        # silenced.
+        terminator_array.connect()
+
         # Precreates the assets used to optimize the communication runtime cycling. These assets are filled below to
         # support efficient interaction between the Communication classes and the ModuleInterface classes.
         unity_input_map: dict[str, list[int]] = {}
@@ -946,36 +961,63 @@ class MicroControllerInterface:
         if len(queue_output_map.keys()) != 0:
             queue_output = True
 
+        # Reports that additional module processing steps have been resolved.
+        terminator_array.write_data(index=1, data=np.uint8(1))
+
         # Initializes the serial communication class and connects to the managed MicroController.
-        serial_communication = SerialCommunication(
-            usb_port=usb_port,
-            source_id=int(controller_id),
-            logger_queue=logger_queue,
-            baudrate=baudrate,
-            maximum_transmitted_payload_size=payload_size,
-        )
+        try:
+            serial_communication = SerialCommunication(
+                usb_port=usb_port,
+                source_id=int(controller_id),
+                logger_queue=logger_queue,
+                baudrate=baudrate,
+                maximum_transmitted_payload_size=payload_size,
+            )
+        except Exception as e:
+            # Communicates that the process terminated at establishing serial communication
+            terminator_array.write_data(index=1, data=np.uint8(2))
+
+            # Also prints the error to terminal.
+            print(e)
+            sys.stdout.flush()
+
+            sys.exit(2)
+
+        # Reports that communication class has been successfully initialized.
+        terminator_array.write_data(index=1, data=np.uint8(3))
 
         # Initializes the unity_communication class and connects to the MQTT broker, if the class is configured to
         # communicate with Unity.
-        if unity_input or unity_output:
-            # If the set is empty, the class initialization method will correctly interpret this as a case where no
-            # topics need to be monitored. Therefore, it is safe to just pass the set regardless of whether it is
-            # empty or not.
-            unity_communication = UnityCommunication(
-                ip=unity_ip, port=unity_port, monitored_topics=tuple(tuple(unity_input_map.keys()))
-            )
-            unity_communication.connect()
-        else:
-            unity_communication = None
+        try:
+            if unity_input or unity_output:
+                # If the set is empty, the class initialization method will correctly interpret this as a case where no
+                # topics need to be monitored. Therefore, it is safe to just pass the set regardless of whether it is
+                # empty or not.
+                unity_communication = UnityCommunication(
+                    ip=unity_ip, port=unity_port, monitored_topics=tuple(tuple(unity_input_map.keys()))
+                )
+                unity_communication.connect()
+            else:
+                unity_communication = None
+        except Exception as e:
+            # Communicates that the process terminated at establishing unity communication
+            terminator_array.write_data(index=1, data=np.uint8(4))
 
-        # Connects to the terminator array
-        terminator_array.connect()
+            # Also prints the error to terminal.
+            print(e)
+            sys.stdout.flush()
+
+            sys.exit(4)
+
+        # Reports that communication class has been successfully initialized.
+        terminator_array.write_data(index=1, data=np.uint8(5))
 
         # Initializes the main communication loop. This loop will run until the exit conditions are encountered.
         # The exit conditions for the loop require the first variable in the terminator_array to be set to True
         # and the main input queue of the interface to be empty. This ensures that all queued commands issued from
         # the central process are fully carried out before the communication is terminated.
         while not terminator_array.read_data(index=0, convert_output=True) or not input_queue.empty():
+
             # Main data sending loop. The method will sequentially retrieve the queued command and parameter data to be
             # sent to the Microcontroller and send it.
             while not input_queue.empty():
@@ -1038,13 +1080,24 @@ class MicroControllerInterface:
             # Whenever the incoming message is the Identification message, ensures that the received controller_id
             # matches the ID expected by the class.
             elif isinstance(in_data, Identification):
-                if in_data.controller_id == controller_id:
+
+                if in_data.controller_id != controller_id:
+                    # Reports that the controller-sent id code does not match the expected controller_id.
+                    terminator_array.write_data(index=1, data=np.uint8(6))
+
+                    # Raises the error.
                     message = (
                         f"Unexpected controller_id code received from the microcontroller managed by the "
                         f"MicroControllerInterface instance. Expected {controller_id}, but received "
                         f"{in_data.controller_id}."
                     )
                     console.error(message=message, error=ValueError)
+
+                else:
+                    # Reports that communication class has been successfully initialized. Seeing this code means that
+                    # the communication appears to be functioning correctly, at least in terms of the data reaching the
+                    # Kernel.
+                    terminator_array.write_data(index=1, data=np.uint8(7))
 
         # If this point is reached, the loop has received the shutdown command and successfully escaped the
         # communication cycle.
