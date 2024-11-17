@@ -1,4 +1,15 @@
-import sys
+"""This module provides the ModuleInterface and MicroControllerInterface classes that aggregate the methods to
+bidirectionally transmit data between PC, MicroControllers, and Unity game engine.
+
+Specifically, each microcontroller module that manages physical hardware should be matched to a specialized instance
+of the ModuleInterface class. Similarly, for each concurrently active microcontroller, there has to be a specific
+MicroControllerInterface instance that manages the ModuleInterface instances for the modules of that controller.
+
+In addition to carrying out the communication, these classes also jointly create dictionary maps that match byte-codes
+used during communication to human-readable names and descriptions. This is necessary to properly decode the
+communication logs that store transmitted data as byte-serialized payloads.
+"""
+
 from abc import abstractmethod
 from multiprocessing import (
     Queue as MPQueue,
@@ -9,8 +20,9 @@ from multiprocessing.managers import SyncManager
 from multiprocessing.shared_memory import SharedMemory
 
 import numpy as np
-from ataraxis_base_utilities import console
+from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
+from ataraxis_time import PrecisionTimer
 
 from .communication import (
     ModuleData,
@@ -304,7 +316,7 @@ class ModuleInterface:
             f"base ModuleInterface class."
         )
 
-    def make_deque_command(self) -> DequeueModuleCommand:
+    def dequeue_command(self) -> DequeueModuleCommand:
         """Returns the command that, upon being sent to the microcontroller, will clear all queued commands for this
         module instance.
 
@@ -432,8 +444,9 @@ class MicroControllerInterface:
         unity_broker_port: The TCP port of the MQTT broker used for Unity communication. THis is used in conjunction
             with the unity_broker_ip argument to connect to the MQTT broker. Unity communication will only be
             initialized if any of the input modules require this functionality.
-        verbose: Determines whether the contents of the received and outgoing serial messages are printed to console.
-            This option is used during debugging and should be disabled during production runtimes.
+        verbose: Determines whether the communication cycle reports runtime progress, including the contents of all
+            incoming and outgoing messages, by printing messages to the console. This option is used during debugging
+            and should be disabled during production runtimes.
 
         Attributes:
             _controller_id: Stores the id byte-code of the managed microcontroller.
@@ -464,7 +477,6 @@ class MicroControllerInterface:
                 allows writing to all microcontroller pins.
             _enable_locks: Stores the pre-packaged Kernel parameters configuration that enables all pin locks. This
                 prevents every Module managed by the Kernel from writing to any of the microcontroller pins.
-            _verbose: Stores the value of the verbose flag.
             _started: Tracks whether the communication process has been started. This is used to prevent calling
                 the start() and stop() methods multiple times.
     """
@@ -524,6 +536,10 @@ class MicroControllerInterface:
         self._unity_ip: str = unity_broker_ip
         self._unity_port: int = unity_broker_port
 
+        # Verbose flag and started trackers
+        self._verbose: bool = verbose
+        self._started: bool = False
+
         # Managed modules and data logger queue. Modules will be pre-processes as part of this initialization runtime.
         # Logger queue is fed directly into the SerialCommunication, which automatically logs all incoming and outgoing
         # data to disk.
@@ -538,11 +554,6 @@ class MicroControllerInterface:
         self._terminator_array: None | SharedMemoryArray = None
         self._communication_process: None | Process = None
 
-        # Stores the value of the verbose flag. This ahs to be done before parsing module data in case the process fails
-        # and the class needs to be garbage-collected before initialization is over
-        self._verbose: bool = verbose
-        self._started: bool = False
-
         # Extracts information from the input modules and finalizes runtime preparations. As part of this process,
         # the method will create the microcontroller-specific code-map dictionary section.
         self._controller_map_section: NestedDictionary = self._parse_module_data()
@@ -552,8 +563,7 @@ class MicroControllerInterface:
         return (
             f"MicroControllerInterface(controller_id={self._controller_id}, controller_name={self._controller_name}, "
             f"usb_port={self._usb_port}, baudrate={self._baudrate}, max_tx_payload_size={self._max_tx_payload_size}, "
-            f"unity_ip={self._unity_ip}, unity_port={self._unity_port}, verbose={self._verbose}, "
-            f"started={self._started})"
+            f"unity_ip={self._unity_ip}, unity_port={self._unity_port}, started={self._started})"
         )
 
     def __del__(self) -> None:
@@ -747,13 +757,63 @@ class MicroControllerInterface:
         """
         return self._controller_map_section
 
+    def identify_controller(self) -> None:
+        """Prompts the connected MicroController to identify itself by returning its id code."""
+        self._input_queue.put(self._identify_command)
+
+    def reset_controller(self) -> None:
+        """Resets the connected MicroController to use default hardware and software parameters."""
+        self._input_queue.put(self._reset_command)
+
+    def lock_controller(self) -> None:
+        """Configures connected MicroController parameters to prevent all modules from writing to any output pin."""
+        self._input_queue.put(self._enable_locks)
+
+    def unlock_controller(self) -> None:
+        """Configures connected MicroController parameters to allow all modules to write to any output pin."""
+        self._input_queue.put(self._disable_locks)
+
+    def send_message(
+        self,
+        message: (
+            ModuleParameters
+            | OneOffModuleCommand
+            | RepeatedModuleCommand
+            | DequeueModuleCommand
+            | KernelParameters
+            | KernelCommand
+        ),
+    ) -> None:
+        """Sends the input arbitrary message structure to the connected Microcontroller.
+
+        This is the primary interface for communicating with the Microcontroller. It allows sending all supported
+        message structures to the Microcontroller for further processing.
+        """
+        self._input_queue.put(message)
+
+    @property
+    def output_queue(self) -> MPQueue:  # type: ignore
+        """Returns the multiprocessing queue used by the communication process to pipe received data to other
+        concurrently active processes."""
+        return self._output_queue
+
     def start(self) -> None:
         """Initializes the communication with the managed MicroController, Unity game engine, and other systems.
 
         The MicroControllerInterface class will not be able to carry out any communications until this method is called.
-        If you have submitted commands to the class before calling start(), all queue commands will be transmitted in
+        If you have submitted commands to the class before calling start(), all queued commands will be transmitted in
         one step. Multiple commands addressed to the same module will likely interfere with each-other if pre-queued in
         this fashion.
+
+        Note:
+            As part of this method runtime, the interface emits an identification request and ensures that the
+            connected microController responds with the id_code that exactly matches the id code used during class
+            initialization.
+
+        Raises:
+            RuntimeError: If the class is not able to properly initialize the communication runtime. The actual cause
+                of this error is usually one of the numerous subclasses used in the process. Use 'verbose' flag
+                during class initialization to view the detailed error message that aborts the initialization process.
         """
 
         # If the process has already been started, returns without doing anything.
@@ -764,7 +824,7 @@ class MicroControllerInterface:
         self._terminator_array = SharedMemoryArray.create_array(
             name=f"{self._controller_name}_terminator_array",
             # Uses class name to ensure the array buffer name is unique
-            prototype=np.zeros(shape=3, dtype=np.uint8),
+            prototype=np.zeros(shape=2, dtype=np.uint8),  # Index 0 = terminator, index 1 = initialization status
         )  # Instantiation automatically connects the main process to the array.
 
         # Sets up the communication process. This process continuously cycles through the communication loop until
@@ -787,16 +847,32 @@ class MicroControllerInterface:
             ),
             daemon=True,
         )
+
+        # Initializes the communication process.
         self._communication_process.start()
 
         # Sends controller identification command and ensures the (connected) controller id matches expectation.
         self.identify_controller()
 
+        start_timer = PrecisionTimer("s")
+        start_timer.reset()
         # Blocks until the microcontroller has finished all initialization steps or encounters an initialization error.
-        while self._terminator_array.read_data(1) != 7:
-            if not self._communication_process.is_alive():
-                print(f"Initialization error code {self._terminator_array.read_data(1)}")
-                raise RuntimeError("Communication died unexpectedly.")
+        while self._terminator_array.read_data(1) != 1:
+
+            # Generally, there are two ways initialization failure is detected. One is if the managed process
+            # terminates, which would be the case if any subclass used in the communication process raises an exception.
+            # Another way if the status tracker never reaches success code (1). This latter case would likely indicate
+            # that there is a communication issue where the data does not reach the controller or the PC. The
+            # initialization process should be VERY fast, likely on the order of hundreds of microseconds. Waiting for
+            # 5 seconds is likely complete overkill.
+            if not self._communication_process.is_alive() or start_timer.elapsed > 5:
+                message = (
+                    f"MicroControllerInterface for {self._controller_name} (id={self._controller_id}) failed to "
+                    f"initialize the communication runtime with the microcontroller. If the class was initialized with "
+                    f"the 'verbose' flag disabled, enable the flag to get more information and debug the "
+                    f"initialization process error."
+                )
+                console.error(error=RuntimeError, message=message)
 
         # Sets the started flag
         self._started = True
@@ -809,7 +885,7 @@ class MicroControllerInterface:
         if not self._started:
             return
 
-        # Sets the terminator tracker to 1, which triggers communication process shutdown.
+        # Sets the terminator trigger to 1, which triggers communication process shutdown.
         if self._terminator_array is not None:
             self._terminator_array.write_data(0, np.uint8(1))
 
@@ -827,46 +903,6 @@ class MicroControllerInterface:
 
         # Changes the started tracker value
         self._started = False
-
-    def identify_controller(self) -> None:
-        """Prompts the connected MicroController to identify itself by returning its id code."""
-        self._input_queue.put(self._identify_command)
-
-    def reset_controller(self) -> None:
-        """Resets the connected MicroController to use default hardware and software parameters."""
-        self._input_queue.put(self._reset_command)
-
-    def lock_controller(self) -> None:
-        """Configures connected MicroController parameters to prevent all modules from writing to any output pin."""
-        self._input_queue.put(self._enable_locks)
-
-    def unlock_controller(self) -> None:
-        """Configures connected MicroController parameters to allow all modules to write to any output pin."""
-        self._input_queue.put(self._disable_locks)
-
-    @property
-    def output_queue(self) -> MPQueue:  # type: ignore
-        """Returns the multiprocessing queue used by the communication process to pipe data to other concurrently active
-        processes."""
-        return self._output_queue
-
-    def send_message(
-        self,
-        message: (
-            ModuleParameters
-            | OneOffModuleCommand
-            | RepeatedModuleCommand
-            | DequeueModuleCommand
-            | KernelParameters
-            | KernelCommand
-        ),
-    ) -> None:
-        """Sends the input arbitrary message structure to the connected Microcontroller.
-
-        This is the primary interface for communicating with the Microcontroller. It allows sending all supported
-        message structures to the Microcontroller for further processing.
-        """
-        self._input_queue.put(message)
 
     @staticmethod
     def _runtime_cycle(
@@ -911,16 +947,19 @@ class MicroControllerInterface:
                 printed to console. This is only used during debugging and should be disabled during most runtimes.
         """
 
-        # If the cycle is started in verbose mode and the console is not enabled, enables the console. The console will
-        # be disabled as part of this method shutdown
-        is_enabled = console.is_enabled
-        if not is_enabled and verbose:
+        # Connects to the terminator array. This is done early, as the terminator_array is used to track the
+        # initialization and runtime status of the process.
+        terminator_array.connect()
+
+        # If the runtime is called in the verbose mode, ensures the console is enabled.
+        was_enabled = console.is_enabled
+        if verbose and not was_enabled:
             console.enable()
 
-        # Connects to the terminator array. This is done early, as the terminator_array is used to track the
-        # initialization and runtime status of the process, since errors that occur inside the process usually get
-        # silenced.
-        terminator_array.connect()
+            # Also sends a message to notify that the initialization has started.
+            console.echo(
+                message=f"Starting MicroControllerInterface for controller {controller_id}...", level=LogLevel.INFO
+            )
 
         # Precreates the assets used to optimize the communication runtime cycling. These assets are filled below to
         # support efficient interaction between the Communication classes and the ModuleInterface classes.
@@ -964,63 +1003,41 @@ class MicroControllerInterface:
         if len(queue_output_map.keys()) != 0:
             queue_output = True
 
-        # Reports that additional module processing steps have been resolved.
-        terminator_array.write_data(index=1, data=np.uint8(1))
-
         # Initializes the serial communication class and connects to the managed MicroController.
-        try:
-            serial_communication = SerialCommunication(
-                usb_port=usb_port,
-                source_id=int(controller_id),
-                logger_queue=logger_queue,
-                baudrate=baudrate,
-                maximum_transmitted_payload_size=payload_size,
+        serial_communication = SerialCommunication(
+            usb_port=usb_port,
+            source_id=int(controller_id),
+            logger_queue=logger_queue,
+            baudrate=baudrate,
+            maximum_transmitted_payload_size=payload_size,
+        )
+
+        # Initializes the unity_communication class and connects to the MQTT broker. If the interface does not
+        # need Unity communication, this initialization will only statically reserve some RAM with no other
+        # adverse effects.
+        # If the set is empty, the class initialization method will correctly interpret this as a case where no
+        # topics need to be monitored. Therefore, it is safe to just pass the set regardless of whether it is
+        # empty or not.
+        unity_communication = UnityCommunication(
+            ip=unity_ip, port=unity_port, monitored_topics=tuple(tuple(unity_input_map.keys()))
+        )
+
+        # Only connects to the class if managed modules need to send or receive data from unity.
+        if unity_input or unity_output:
+            unity_communication.connect()
+
+        # This notifies the user that subclass initialization is complete. The interface still needs to verify that the
+        # connected controller has the correct ID (see below).
+        if verbose:
+            console.echo(
+                message=f"MicroControllerInterface {controller_id} initialization complete.", level=LogLevel.SUCCESS
             )
-        except Exception as e:
-            # Communicates that the process terminated at establishing serial communication
-            terminator_array.write_data(index=1, data=np.uint8(2))
-
-            # Also prints the error to terminal.
-            print(e)
-            sys.stdout.flush()
-
-            sys.exit(2)
-
-        # Reports that communication class has been successfully initialized.
-        terminator_array.write_data(index=1, data=np.uint8(3))
-
-        # Initializes the unity_communication class and connects to the MQTT broker, if the class is configured to
-        # communicate with Unity.
-        try:
-            if unity_input or unity_output:
-                # If the set is empty, the class initialization method will correctly interpret this as a case where no
-                # topics need to be monitored. Therefore, it is safe to just pass the set regardless of whether it is
-                # empty or not.
-                unity_communication = UnityCommunication(
-                    ip=unity_ip, port=unity_port, monitored_topics=tuple(tuple(unity_input_map.keys()))
-                )
-                unity_communication.connect()
-            else:
-                unity_communication = None
-        except Exception as e:
-            # Communicates that the process terminated at establishing unity communication
-            terminator_array.write_data(index=1, data=np.uint8(4))
-
-            # Also prints the error to terminal.
-            print(e)
-            sys.stdout.flush()
-
-            sys.exit(4)
-
-        # Reports that communication class has been successfully initialized.
-        terminator_array.write_data(index=1, data=np.uint8(5))
 
         # Initializes the main communication loop. This loop will run until the exit conditions are encountered.
         # The exit conditions for the loop require the first variable in the terminator_array to be set to True
         # and the main input queue of the interface to be empty. This ensures that all queued commands issued from
         # the central process are fully carried out before the communication is terminated.
         while not terminator_array.read_data(index=0, convert_output=True) or not input_queue.empty():
-
             # Main data sending loop. The method will sequentially retrieve the queued command and parameter data to be
             # sent to the Microcontroller and send it.
             while not input_queue.empty():
@@ -1031,29 +1048,27 @@ class MicroControllerInterface:
                     | KernelCommand
                     | ModuleParameters
                     | KernelParameters
-                ) = input_queue.get_nowait()
-
-                print(out_data.packed_data)
-                sys.stdout.flush()
+                ) = input_queue.get()
 
                 serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
-            # Unity data sending loop. The loop is only executed if unity_input flag is enabled.
-            if unity_input:
-                while unity_communication.has_data:  # type: ignore
-                    # If UnityCommunication has received data, loops over all interfaces that requested the data from
-                    # this topic and calls their unity data processing method. The method is expected to extract the
-                    # data from the communication class and translate it into a valid message format to be sent to the
-                    # microcontroller.
-                    topic, payload = unity_communication.get_data()  # type: ignore
+            # Unity data sending loop. This loop will be O(1) if unity never has data. In turn, this will always be
+            # teh case if no module supports unity inputs. Therefore, there is no need to both have an 'if' and a
+            # 'while' check here for optimal runtime speed.
+            while unity_communication.has_data:
+                # If UnityCommunication has received data, loops over all interfaces that requested the data from
+                # this topic and calls their unity data processing method. The method is expected to extract the
+                # data from the communication class and translate it into a valid message format to be sent to the
+                # microcontroller.
+                topic, payload = unity_communication.get_data()
 
-                    # Each incoming message will be processed by each module subscribed to this topic. Since
-                    # UnityCommunication is configured to only listen to topics submitted by the interface classes, the
-                    # topic is guaranteed to be inside the unity_input_map dictionary and have at least one Module which
-                    # can process its data.
-                    for i in unity_input_map[topic]:
-                        out_data = modules[i].get_from_unity(topic=topic, payload=payload)  # type: ignore
-                        serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
+                # Each incoming message will be processed by each module subscribed to this topic. Since
+                # UnityCommunication is configured to only listen to topics submitted by the interface classes, the
+                # topic is guaranteed to be inside the unity_input_map dictionary and have at least one Module which
+                # can process its data.
+                for i in unity_input_map[topic]:
+                    out_data = modules[i].get_from_unity(topic=topic, payload=payload)
+                    serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
             # Attempts to receive the data from microcontroller
             in_data = serial_communication.receive_message()
@@ -1062,27 +1077,24 @@ class MicroControllerInterface:
             if in_data is None:
                 continue
 
-            print(in_data.message)
-            sys.stdout.flush()
-
             # Otherwise, resolves additional processing steps associated with incoming data. Currently, only Module
-            # interfaces have additional data processing steps. Therefore, limits the evaluation to ModuleState and
-            # Data messages.
+            # interfaces have additional data processing steps that are expected more than once during runtime. The
+            # Kernel Identification message also has a unique processing step, but it should only be executed once,
+            # during runtime initialization.
             if isinstance(in_data, (ModuleState, ModuleData)) and (unity_output or queue_output):
-                # Only carries out additional processing steps if unity or queue output flags are enabled.
-
-                # Computes the combined type and id code for the incoming data. This allows quickly finding the unique
-                # addressee of the data payload.
+                # Computes the combined type and id code for the incoming data. This is used to find the specific
+                # ModuleInterface to which the message is addressed and, if necessary, invoke interface-specific
+                # additional processing method.
                 target_type_id: np.uint16 = np.uint16(
                     (in_data.module_type.astype(np.uint16) << 8) | in_data.module_id.astype(np.uint16)
                 )
 
-                # Depending on whether the combined code is inside the unity_output_map, queue_output_map or both
+                # Depending on whether the combined code is inside the unity_output_map, queue_output_map or both,
                 # executes the necessary module's method to handle data output.
                 if target_type_id in unity_output_map.keys():
                     modules[unity_output_map[target_type_id]].send_to_unity(
                         message=in_data,
-                        unity_communication=unity_communication,  # type: ignore
+                        unity_communication=unity_communication,
                     )
                 if target_type_id in queue_output_map.keys():
                     modules[queue_output_map[target_type_id]].send_to_queue(message=in_data, queue=output_queue)
@@ -1090,11 +1102,7 @@ class MicroControllerInterface:
             # Whenever the incoming message is the Identification message, ensures that the received controller_id
             # matches the ID expected by the class.
             elif isinstance(in_data, Identification):
-
                 if in_data.controller_id != controller_id:
-                    # Reports that the controller-sent id code does not match the expected controller_id.
-                    terminator_array.write_data(index=1, data=np.uint8(6))
-
                     # Raises the error.
                     message = (
                         f"Unexpected controller_id code received from the microcontroller managed by the "
@@ -1106,18 +1114,25 @@ class MicroControllerInterface:
                 else:
                     # Reports that communication class has been successfully initialized. Seeing this code means that
                     # the communication appears to be functioning correctly, at least in terms of the data reaching the
-                    # Kernel.
-                    terminator_array.write_data(index=1, data=np.uint8(7))
+                    # Kernel and back. While this does not guarantee the runtime will continue running without errors,
+                    # it is very likely to be so.
+                    terminator_array.write_data(index=1, data=np.uint8(1))
 
         # If this point is reached, the loop has received the shutdown command and successfully escaped the
         # communication cycle.
         # Disconnects from the terminator array and shuts down Unity communication.
         terminator_array.disconnect()
-        if unity_communication is not None:
-            unity_communication.disconnect()
+        unity_communication.disconnect()
 
-        # If this method enabled the console to comply with the verbose flag, disables the console.
-        if is_enabled and verbose:
+        # If this runtime had to enable the console to comply with 'verbose' flag, disables it before ending the
+        # runtime.
+        if verbose and not was_enabled:
+
+            # Notifies the user that the runtime Process has been successfully terminated
+            console.echo(
+                message=f"MicroControllerInterface {controller_id} communication runtime terminated.",
+                level=LogLevel.SUCCESS,
+            )
             console.disable()
 
     @classmethod

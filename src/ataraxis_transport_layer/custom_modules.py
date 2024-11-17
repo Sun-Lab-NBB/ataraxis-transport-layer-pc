@@ -1,3 +1,7 @@
+"""This module provides ModuleInterface implementations for teh default modules shipped with the
+AtaraxisMicroController library. Primarily, they are included to showcase the correct usage of this library.
+"""
+
 from json import dumps
 from multiprocessing import Queue as MPQueue
 
@@ -272,9 +276,14 @@ class EncoderModule(ModuleInterface):
         unity_output: Determines whether the EncoderModule instance should send the motion data to Unity.
         motion_topic: The MQTT topic to which the instance should send the motion data received from the
             microcontroller.
+        encoder_ppr: The resolution of the managed quadrature encoder, in Pulses per Revolution (PPR). Specifically,
+            this is the number of quadrature pulses the encoder emits per full 360-degree rotation. If this number is
+            not known, provide a 'dummy' value and use get_ppr() command to estimate the PPR using the index channel
+            of the encoder.
 
     Attributes:
         _motion_topic: Stores the MQTT motion topic.
+        _ppr: Stores the resolution of the managed quadrature encoder.
     """
 
     def __init__(
@@ -284,6 +293,7 @@ class EncoderModule(ModuleInterface):
         instance_description: str,
         unity_output: bool = True,
         motion_topic: str = "LinearTreadmill/Data",
+        encoder_ppr: int = 2048,
     ) -> None:
         # Statically defines the module type description.
         type_description = (
@@ -304,8 +314,9 @@ class EncoderModule(ModuleInterface):
             queue_output=False,
         )
 
-        # Saves motion topic to class attributes.
+        # Saves additional data to class attributes.
         self._motion_topic = motion_topic
+        self._ppr = encoder_ppr
 
     def send_to_unity(self, message: ModuleState | ModuleData, unity_communication: UnityCommunication) -> None:
         # If the incoming message is not a CCW or CW motion report, aborts processing
@@ -316,8 +327,9 @@ class EncoderModule(ModuleInterface):
         # and CCW as positive.
         sign = 1 if message.event == np.uint8(51) else -1
 
-        # Translates the absolute motion into the CW / CCW vector
-        signed_motion = (float(message.data_object)/500) * sign  # type: ignore
+        # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to degrees using the
+        # PPR.
+        signed_motion = (float(message.data_object) / self._ppr) * sign  # type: ignore
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -361,6 +373,12 @@ class EncoderModule(ModuleInterface):
         code_map.write_nested_value(variable_path=f"{section}.description", value=description)
         code_map.write_nested_value(variable_path=f"{section}.error", value=False)
 
+        section = f"{module_section}.kPPR"
+        description = "The encoder has finished estimating the Pulse-Per-Revolution (PPR) resolution of the encoder."
+        code_map.write_nested_value(variable_path=f"{section}.code", value=np.uint8(53))
+        code_map.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_map.write_nested_value(variable_path=f"{section}.error", value=False)
+
         # Commands
         module_section = f"{self.type_name}_module.commands"
 
@@ -385,6 +403,14 @@ class EncoderModule(ModuleInterface):
         code_map.write_nested_value(variable_path=f"{section}.description", value=description)
         code_map.write_nested_value(variable_path=f"{section}.addressable", value=True)
 
+        section = f"{module_section}.kGetPPR"
+        description = (
+            "Estimates the Pulse-Per-Revolution (PPR) resolution of the encoder over up to 11 full revolutions."
+        )
+        code_map.write_nested_value(variable_path=f"{section}.code", value=np.uint8(3))
+        code_map.write_nested_value(variable_path=f"{section}.description", value=description)
+        code_map.write_nested_value(variable_path=f"{section}.addressable", value=True)
+
         #  Data Objects
         module_section = f"{self.type_name}_module.data_objects"
 
@@ -405,6 +431,15 @@ class EncoderModule(ModuleInterface):
         )
         code_map.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(52))
         code_map.write_nested_value(variable_path=f"{section}.prototype_code", value=prototypes.kOneUnsignedLong)
+        code_map.write_nested_value(variable_path=f"{section}.names", value=("Pulses",))
+        code_map.write_nested_value(variable_path=f"{section}.descriptions", value=(description_1,))
+
+        section = f"{module_section}.kPPRObject"
+        description_1 = (
+            "The estimated number of pulses the encoder emits per one full revolution of the tracked object."
+        )
+        code_map.write_nested_value(variable_path=f"{section}.event_code", value=np.uint8(53))
+        code_map.write_nested_value(variable_path=f"{section}.prototype_code", value=prototypes.kOneUnsignedShort)
         code_map.write_nested_value(variable_path=f"{section}.names", value=("Pulses",))
         code_map.write_nested_value(variable_path=f"{section}.descriptions", value=(description_1,))
 
@@ -488,6 +523,29 @@ class EncoderModule(ModuleInterface):
             module_id=self._module_id,
             return_code=np.uint8(0),
             command=np.uint8(2),
+            noblock=np.bool(False),
+        )
+
+    def get_ppr(self) -> OneOffModuleCommand:
+        """Uses the index channel of the encoder to estimate its Pulse-per-Revolution (PPR).
+
+        The PPR allows converting raw pulse counts reported by other commands of this module to real life circular
+        distances. This is a service command not intended to be used during most production runtimes if the PPR is
+        already known. It relies on the encoder completing up to 11 full rotations and uses the index channel of the
+        encoder to detect each revolution completion.
+
+        Notes:
+            Make sure the calibrated encoder revolves at a steady slow speed until this command completes. Similar to
+            other service commands, it is designed to deadlock the controller until the command completes.
+
+            The direction of the rotation is not relevant for this command, as long as it make the full 360-degree
+            revolution.
+        """
+        return OneOffModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            command=np.uint8(3),
             noblock=np.bool(False),
         )
 

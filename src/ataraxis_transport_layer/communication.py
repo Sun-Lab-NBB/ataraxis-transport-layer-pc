@@ -1,9 +1,10 @@
 """This module provides the SerialCommunication and UnityCommunication classes, as well as helper message layout
 structures, that enable communication between various project Ataraxis systems.
 
-Currently, SerialCommunication is used to interface between the PC and the MicroController, while UnityCommunication is
-used to interface between python PC code and Unity game engine running Virtual Environment tasks.
+SerialCommunication supports the PC-MicroController communication over USB / UART interface, while UnityCommunication
+supports the Python-Unity communication over the MQTT protocol (virtual / real TCP sockets).
 """
+
 from queue import Queue
 from typing import Any, Union
 import datetime
@@ -1395,8 +1396,7 @@ class UnityCommunication:
         if not isinstance(ip, str) or len(ip.split(".")) != 4:
             message = (
                 f"Unable to initialize a UnityCommunication class instance. A '.'-delimited string in the format "
-                f"'127.0.0.1' is expected as 'ip' argument, but instead encountered {ip} of type "
-                f"{type(ip).__name__}."
+                f"'127.0.0.1' is expected as 'ip' argument, but instead encountered {ip} of type {type(ip).__name__}."
             )
             console.error(message=message, error=ValueError)
         if port < 0:
@@ -1442,10 +1442,8 @@ class UnityCommunication:
             message: The received MQTT message.
         """
 
-        # Whenever a reward message is received, puts True into the reward queue
+        # Whenever a message is received, it is buffered via the local queue object.
         self._output_queue.put_nowait((message.topic, message.payload))
-
-        # Add more statements as necessary to extend the class to support other types of incoming data.
 
     def connect(self) -> None:
         """Connects to the requested MQTT channels and sets up the necessary callback routines.
