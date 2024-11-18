@@ -17,7 +17,7 @@ from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 import paho.mqtt.client as mqtt
 from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import NestedDictionary
+from ataraxis_data_structures import NestedDictionary, LogPackage
 
 from .transport_layer import SerialTransportLayer, list_available_ports
 
@@ -1132,7 +1132,6 @@ class SerialCommunication:
         _timestamp_timer: The PrecisionTimer instance used to stamp incoming and outgoing data as it is logged.
         _source_id: Stores the unique integer-code to use as the logged data source.
         _logger_queue: Stores the multiprocessing Queue that buffers and pipes the data to the Logger process(es).
-        _object_counter: Stores a monotonically incrementing counter that helps tracks the order of logged data objects.
         _verbose: Stores the verbose flag.
     """
 
@@ -1178,8 +1177,6 @@ class SerialCommunication:
         self._timestamp_timer = PrecisionTimer("us")
         self._source_id = source_id
         self._logger_queue = logger_queue
-        self._object_counter = 0
-
         # Constructs a timezone-aware stamp using UTC time. This creates a reference point for all later delta time
         # readouts.
         onset = datetime.datetime.now(timezone.utc)
@@ -1190,10 +1187,11 @@ class SerialCommunication:
         onset_numpy = np.datetime64(onset.isoformat(timespec="microseconds"), "us")
         onset_serial = np.frombuffer(buffer=onset_numpy.tobytes(), dtype=np.uint8)
 
-        # Logs the timestamp as a bytes' array and 0 as object and timestamp values. This pattern is universally
-        # interpreted as the 'onset time' log. All further timestamps will be treated as integer time deltas relative
-        # to the input time in microseconds.
-        self._logger_queue.put((source_id, self._object_counter, 0, onset_serial))
+        # Logs the timestamp as a bytes' array and 0 as timestamp value. This pattern is universally interpreted as the
+        # 'onset time' log. All further timestamps will be treated as integer time deltas relative to the input time in
+        # microseconds.
+        package = LogPackage(source_id, 0, onset_serial)  # Packages the id, timestamp, and data.
+        self._logger_queue.put(package)
         self._verbose = verbose
 
     def __repr__(self) -> str:
@@ -1338,21 +1336,19 @@ class SerialCommunication:
             output: Determines whether the logged data was sent or received. This is only used if the class is
                 initialized in verbose mode.
         """
-        self._object_counter += 1  # Increments the logged object counter
-
         # Packages the data to be logged into the appropriate tuple format (with ID variables)
-        data_log = (self._source_id, self._object_counter, timestamp, data)
+        data_log = (self._source_id, timestamp, data)
 
         # Sends the data to the logger
         self._logger_queue.put(data_log)
 
         if self._verbose:
             if output:
-                message = f"Source {self._source_id}, object {self._object_counter}. Sent data: {data}"
+                message = f"Source {self._source_id} sent data: {data}"
             else:
-                message = f"Source {self._source_id}, object {self._object_counter}. Received data: {data}"
+                message = f"Source {self._source_id} received data: {data}"
 
-            console.echo(message=message, level=LogLevel.SUCCESS)
+            console.echo(message=message, level=LogLevel.INFO)
 
 
 class UnityCommunication:
