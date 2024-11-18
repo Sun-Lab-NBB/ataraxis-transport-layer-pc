@@ -293,7 +293,7 @@ class EncoderModule(ModuleInterface):
         instance_description: str,
         unity_output: bool = True,
         motion_topic: str = "LinearTreadmill/Data",
-        encoder_ppr: int = 2048,
+        encoder_ppr: int = 8192,
     ) -> None:
         # Statically defines the module type description.
         type_description = (
@@ -535,11 +535,19 @@ class EncoderModule(ModuleInterface):
         encoder to detect each revolution completion.
 
         Notes:
-            Make sure the calibrated encoder revolves at a steady slow speed until this command completes. Similar to
-            other service commands, it is designed to deadlock the controller until the command completes.
+            Make sure the calibrated encoder rotates at a steady slow speed until this command completes. Similar to
+            other service commands, it is designed to deadlock the controller until the command completes. Since this
+            interface exclusive works with the encoder, you have to provide the encoder rotation separately (manually).
 
             The direction of the rotation is not relevant for this command, as long as it make the full 360-degree
             revolution.
+
+            The command is optimized for the object to be rotated with a human hand at a steady rate, so it delays
+            further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, the object
+            should not make more than 10 rotations per second and ideally should stay within 1-3 rotations per second.
+            It is also possible to evaluate motor-assisted rotation, provided that the motor does not leak the
+            magnetic field that would interfere with the index signalling from the encoder and spins the object at the
+            speed discussed above.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,

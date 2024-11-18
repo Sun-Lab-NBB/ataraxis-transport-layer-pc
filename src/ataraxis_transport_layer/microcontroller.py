@@ -9,8 +9,10 @@ In addition to carrying out the communication, these classes also jointly create
 used during communication to human-readable names and descriptions. This is necessary to properly decode the
 communication logs that store transmitted data as byte-serialized payloads.
 """
-import sys
+
 from abc import abstractmethod
+import sys
+from threading import Thread
 from multiprocessing import (
     Queue as MPQueue,
     Manager,
@@ -18,12 +20,11 @@ from multiprocessing import (
 )
 from multiprocessing.managers import SyncManager
 from multiprocessing.shared_memory import SharedMemory
-from threading import Thread
 
 import numpy as np
+from ataraxis_time import PrecisionTimer
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
-from ataraxis_time import PrecisionTimer
 
 from .communication import (
     ModuleData,
@@ -891,7 +892,6 @@ class MicroControllerInterface:
         start_timer.reset()
         # Blocks until the microcontroller has finished all initialization steps or encounters an initialization error.
         while self._terminator_array.read_data(1) != 1:
-
             # Generally, there are two ways initialization failure is detected. One is if the managed process
             # terminates, which would be the case if any subclass used in the communication process raises an exception.
             # Another way if the status tracker never reaches success code (1). This latter case would likely indicate
@@ -1051,6 +1051,7 @@ class MicroControllerInterface:
             logger_queue=logger_queue,
             baudrate=baudrate,
             maximum_transmitted_payload_size=payload_size,
+            verbose=verbose,
         )
 
         # Initializes the unity_communication class and connects to the MQTT broker. If the interface does not
@@ -1083,14 +1084,7 @@ class MicroControllerInterface:
                 # Main data sending loop. The method will sequentially retrieve the queued command and parameter data
                 # to be sent to the Microcontroller and send it.
                 while not input_queue.empty():
-                    out_data: (
-                        RepeatedModuleCommand
-                        | OneOffModuleCommand
-                        | DequeueModuleCommand
-                        | KernelCommand
-                        | ModuleParameters
-                        | KernelParameters
-                    ) = input_queue.get()
+                    out_data = input_queue.get()
 
                     serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
@@ -1102,7 +1096,7 @@ class MicroControllerInterface:
                     # this topic and calls their unity data processing method. The method is expected to extract the
                     # data from the communication class and translate it into a valid message format to be sent to the
                     # microcontroller.
-                    topic, payload = unity_communication.get_data()
+                    topic, payload = unity_communication.get_data()  # type: ignore
 
                     # Each incoming message will be processed by each module subscribed to this topic. Since
                     # UnityCommunication is configured to only listen to topics submitted by the interface classes, the
@@ -1110,7 +1104,8 @@ class MicroControllerInterface:
                     # can process its data.
                     for i in unity_input_map[topic]:
                         out_data = modules[i].get_from_unity(topic=topic, payload=payload)
-                        serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
+                        if out_data is not None:
+                            serial_communication.send_message(out_data)  # Transmits the data to the microcontroller
 
                 # Attempts to receive the data from microcontroller
                 in_data = serial_communication.receive_message()
@@ -2162,7 +2157,12 @@ class MicroControllerInterface:
         class termination leaves behind non-garbage-collected SharedMemory buffer. In turn, this would prevent the
         class remote Process from being started again. This method allows manually removing that buffer to reset the
         system.
+
+        This method is designed to do nothing, if the buffer with the same name as the microcontroller does not exist.
         """
-        buffer = SharedMemory(name=f"{self._controller_name}_terminator_array", create=False)
-        buffer.close()
-        buffer.unlink()
+        try:
+            buffer = SharedMemory(name=f"{self._controller_name}_terminator_array", create=False)
+            buffer.close()
+            buffer.unlink()
+        except FileNotFoundError:
+            pass

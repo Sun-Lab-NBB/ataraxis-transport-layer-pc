@@ -10,6 +10,9 @@ timeout = PrecisionTimer(precision="s")
 if __name__ == "__main__":
     # Initializes and starts the logger
     output_directory = Path("/home/cybermouse/Desktop/TestLog")
+
+    DataLogger._vacate_shared_memory_buffer()
+
     logger = DataLogger(output_directory)
     logger.start()
 
@@ -33,15 +36,19 @@ if __name__ == "__main__":
         unity_broker_port=1883,
         verbose=True,
     )
+    interface._vacate_shared_memory_buffer()
     interface.start()
     interface.unlock_controller()
 
     # Sends out the tested command
-    check_command = module.check_state(repetition_delay=np.uint32(1000000))
-    interface.send_message(check_command)
+    # check_command = module.check_state(repetition_delay=np.uint32(1000))
+    # interface.send_message(check_command)
+
+    calibrate = module.get_ppr()
+    interface.send_message(calibrate)
 
     # Statically blocks for 20 seconds while running recurrent commands.
-    timeout.delay_noblock(delay=20, allow_sleep=True)
+    timeout.delay_noblock(delay=120, allow_sleep=True)
 
     # Shuts down the communication interface and the logger
     interface.stop()

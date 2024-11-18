@@ -17,7 +17,7 @@ from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 import paho.mqtt.client as mqtt
 from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import NestedDictionary, LogPackage
+from ataraxis_data_structures import LogPackage, NestedDictionary
 
 from .transport_layer import SerialTransportLayer, list_available_ports
 
@@ -1337,10 +1337,10 @@ class SerialCommunication:
                 initialized in verbose mode.
         """
         # Packages the data to be logged into the appropriate tuple format (with ID variables)
-        data_log = (self._source_id, timestamp, data)
+        package = LogPackage(self._source_id, timestamp, data)
 
         # Sends the data to the logger
-        self._logger_queue.put(data_log)
+        self._logger_queue.put(package)
 
         if self._verbose:
             if output:
