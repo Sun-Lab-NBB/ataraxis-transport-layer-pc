@@ -1242,7 +1242,7 @@ def test_buffer_size_insufficient_error():
     large_data = np.ones(5, dtype=np.uint8)
 
     # Assert that a ValueError is raised with the correct message
-    with pytest.raises(ValueError, match=r"The transmission buffer does not have enough space to write the data"):
+    with pytest.raises(ValueError, match=r"Failed to write the data to the transmission buffer.*"):
         protocol.write_data(large_data, start_index=7)
 
 
