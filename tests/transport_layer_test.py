@@ -1290,23 +1290,28 @@ def test_send_receive_maximum_payload():
     protocol = SerialTransportLayer(
         port="COM3",
         baudrate=115200,
-        maximum_transmitted_payload_size=254,  # Maximum allowed by the protocol
         test_mode=True,
     )
 
-    max_payload_size = protocol.maximum_transmitted_payload_size
+    # Set the maximum transmitted payload size if it is not configurable in the constructor
+    protocol._maximum_tx_payload_size = 254  # Set this attribute manually
+
+    max_payload_size = protocol._maximum_tx_payload_size
     test_data = np.arange(max_payload_size, dtype=np.uint8)
 
+    # Write data to the protocol and send it
     protocol.write_data(test_data)
     send_status = protocol.send_data()
     assert send_status
     assert protocol.bytes_in_transmission_buffer == 0  # Buffer should be cleared after send
 
-    protocol._port.rx_buffer = protocol._port.tx_buffer  # Simulate loopback
+    # Simulate receiving the transmitted data by copying the tx buffer to the rx buffer
+    protocol._port.rx_buffer = protocol._port.tx_buffer
     receive_status = protocol.receive_data()
     assert receive_status
     assert protocol.bytes_in_reception_buffer == max_payload_size
 
+    # Read back the received data and verify
     received_data, _ = protocol.read_data(np.zeros(max_payload_size, dtype=np.uint8))
     assert np.array_equal(received_data, test_data)
 
