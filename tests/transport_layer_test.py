@@ -932,14 +932,18 @@ def test_byte_mismatch_in_buffers():
         test_mode=True,
     )
 
-    # Mock the in_waiting to simulate a situation where fewer bytes are available
-    protocol._port.in_waiting = 5
-    protocol._port.read = MagicMock(return_value=np.array([1, 2, 3, 4, 5], dtype=np.uint8))
+    # Mock the in_waiting property using PropertyMock to simulate fewer bytes available
+    with patch.object(type(protocol._port), "in_waiting", new_callable=PropertyMock) as mock_in_waiting:
+        mock_in_waiting.return_value = 5
 
-    result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+        # Mock the read method to simulate reading the available bytes
+        protocol._port.read = MagicMock(return_value=np.array([1, 2, 3, 4, 5], dtype=np.uint8))
 
-    # Expected to return False because not enough bytes are available
-    assert result is False
+        # Call the method under test
+        result = protocol._bytes_available(required_bytes_count=10, timeout=10000)
+
+        # Assert that the result is False since there are not enough bytes available
+        assert result is False
 
 
 def test_write_and_read_scalar():
