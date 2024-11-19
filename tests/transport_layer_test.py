@@ -997,6 +997,7 @@ def test_write_and_read_array():
     assert np.array_equal(read_array, array_value)
     assert read_end_index == len(array_value)
 
+
 def test_send_data():
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1044,6 +1045,7 @@ def test_receive_data():
     # Verify that the received data matches the original
     received_data, _ = protocol.read_data(np.zeros(4, dtype=np.uint8))
     assert np.array_equal(received_data, test_data)
+
 
 def test_crc_failure():
     protocol = SerialTransportLayer(
@@ -1108,53 +1110,22 @@ def test_sufficient_bytes_available():
     )
 
     # Case 1: in_waiting + leftover_bytes > minimum_packet_size (True)
-    protocol._port.in_waiting = 5  # 5 bytes available
-    protocol._leftover_bytes = [1, 2, 3]  # 3 leftover bytes
-    protocol._minimum_packet_size = 7  # Minimum packet size is 7
+    with patch.object(type(protocol._port), "in_waiting", new_callable=PropertyMock) as mock_in_waiting:
+        mock_in_waiting.return_value = 5  # 5 bytes available
+        protocol._leftover_bytes = [1, 2, 3]  # 3 leftover bytes
+        protocol._minimum_packet_size = 7  # Minimum packet size is 7
 
-    # Test the condition where in_waiting + leftover_bytes > minimum_packet_size
-    assert protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
+        # Test the condition where in_waiting + leftover_bytes > minimum_packet_size
+        assert protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size
 
     # Case 2: in_waiting + leftover_bytes <= minimum_packet_size (False)
-    protocol._port.in_waiting = 2  # Only 2 bytes available
-    protocol._leftover_bytes = [1]  # 1 leftover byte
-    protocol._minimum_packet_size = 7  # Minimum packet size is still 7
+    with patch.object(type(protocol._port), "in_waiting", new_callable=PropertyMock) as mock_in_waiting:
+        mock_in_waiting.return_value = 2  # Only 2 bytes available
+        protocol._leftover_bytes = [1]  # 1 leftover byte
+        protocol._minimum_packet_size = 7  # Minimum packet size is still 7
 
-    # Test the condition where in_waiting + leftover_bytes <= minimum_packet_size
-    assert not (protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size)
-
-
-from dataclasses import dataclass
-
-
-# Define a dataclass to simulate the structure serialization
-@dataclass
-class MockDataClass:
-    field1: np.uint8
-    field2: np.ndarray
-
-
-import pytest
-
-from ataraxis_transport_layer.transport_layer import SerialTransportLayer
-
-
-@dataclass
-class MockDataClass:
-    field1: np.uint8
-    field2: np.ndarray
-
-
-from dataclasses import dataclass
-
-import numpy as np
-
-
-# Define a mock dataclass for testing
-@dataclass
-class MockDataClass:
-    field1: np.uint8
-    field2: np.ndarray
+        # Test the condition where in_waiting + leftover_bytes <= minimum_packet_size
+        assert not (protocol._port.in_waiting + len(protocol._leftover_bytes) > protocol._minimum_packet_size)
 
 
 def test_read_data_unsupported_type():
