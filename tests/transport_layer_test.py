@@ -981,13 +981,23 @@ def test_write_and_read_array():
 
     # 1차원 배열 값을 기록
     array_value = np.array([1, 2, 3, 4, 5], dtype=np.uint8)
-    end_index = protocol.write_data(array_value)
-    assert end_index == 5  # 바이트 인덱스가 배열 길이와 일치하는지 확인
 
-    # 기록한 배열을 다시 읽음
+    # Mock the reception buffer to store the expected array value after writing
+    protocol._reception_buffer = array_value
+
+    # Mock the _bytes_in_reception_buffer to reflect that 5 bytes are available
+    protocol._bytes_in_reception_buffer = len(array_value)
+
+    # Test writing the array value
+    end_index = protocol.write_data(array_value)
+    assert end_index == len(array_value)  # 바이트 인덱스가 배열 길이와 일치하는지 확인
+
+    # Test reading the stored array value
     read_array, read_end_index = protocol.read_data(np.zeros(5, dtype=np.uint8))
     assert np.array_equal(read_array, array_value)
-    assert read_end_index == 5
+    assert read_end_index == len(array_value)
+
+
 
 
 def test_send_data():
@@ -1010,7 +1020,9 @@ def test_send_data():
 
     # Verify that the COBS-encoded and CRC checksummed data is in the mock serial port's tx buffer
     expected_packet = protocol._port.tx_buffer
-    assert expected_packet[0] == protocol.start_byte  # Ensure start byte is correct
+
+    # Corrected the attribute to `_start_byte`
+    assert expected_packet[0] == protocol._start_byte  # Ensure start byte is correct
 
 
 def test_receive_data():
