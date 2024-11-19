@@ -1337,7 +1337,7 @@ def test_write_unsupported_data_type():
     # Attempt to write an unsupported data type (e.g., string)
     unsupported_data = "This is a string"
 
-    with pytest.raises(TypeError, match=r"Unsupported input data_object type"):
+    with pytest.raises(TypeError, match=r"Encountered an unsupported input data_object type"):
         protocol.write_data(unsupported_data)
 
 
@@ -1359,7 +1359,6 @@ def test_receive_data_timeout():
     # Expect receive_data to return False due to timeout
     assert not receive_status
 
-
 def test_send_data_empty_buffer():
     """Test that send_data returns False when transmission buffer is empty."""
     protocol = SerialTransportLayer(
@@ -1373,10 +1372,11 @@ def test_send_data_empty_buffer():
     assert protocol.bytes_in_transmission_buffer == 0
 
     # Attempt to send data
-    send_status = protocol.send_data()
+    with pytest.raises(ValueError, match=r"Failed to encode the payload using COBS scheme.*The size of the input payload \(0\) is too small.*"):
+        send_status = protocol.send_data()
 
-    # Expect send_data to return False
-    assert not send_status
+        # Expect send_data to return False
+        assert not send_status
 
 
 def test_crc_different_polynomial():
