@@ -997,9 +997,6 @@ def test_write_and_read_array():
     assert np.array_equal(read_array, array_value)
     assert read_end_index == len(array_value)
 
-
-
-
 def test_send_data():
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1048,7 +1045,6 @@ def test_receive_data():
     received_data, _ = protocol.read_data(np.zeros(4, dtype=np.uint8))
     assert np.array_equal(received_data, test_data)
 
-
 def test_crc_failure():
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1062,11 +1058,12 @@ def test_crc_failure():
     protocol.send_data()
 
     # Manipulate the CRC in the rx buffer to simulate corruption
-    protocol._port.rx_buffer = protocol._port.tx_buffer
+    # Convert the tx buffer to a mutable bytearray to allow modification
+    protocol._port.rx_buffer = bytearray(protocol._port.tx_buffer)
     protocol._port.rx_buffer[-1] ^= 0xFF  # Flip some bits to corrupt the CRC
 
     # Receive the data and expect a failure due to CRC
-    with pytest.raises(ValueError, match="CRC checksum verification failed"):
+    with pytest.raises(ValueError, match="Failed to verify the received serial packet's integrity"):
         protocol.receive_data()
 
 
