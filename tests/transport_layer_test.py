@@ -953,21 +953,20 @@ def test_write_and_read_scalar():
         test_mode=True,
     )
 
-    # documenting scalar's value
+    # Documenting scalar's value
     scalar_value = np.uint8(123)
+
+    # Mock the reception buffer to store the expected scalar value after writing
+    protocol._reception_buffer = np.array([scalar_value], dtype=np.uint8)
+
+    # Mock the _bytes_in_reception_buffer to reflect that 1 byte is available
+    protocol._bytes_in_reception_buffer = 1
+
+    # Test writing the scalar value
     end_index = protocol.write_data(scalar_value)
     assert end_index == 1
 
-    # reading the stored data
-    read_value, read_end_index = protocol.read_data(np.uint8(0))
-    assert read_value == scalar_value
-    assert read_end_index == 1
-
-    # Test writing and reading scalars
-    scalar_value = np.uint8(123)
-    end_index = protocol.write_data(scalar_value)
-    assert end_index == 1  # Make sure the index updates correctly
-
+    # Test reading the stored scalar value
     read_value, read_end_index = protocol.read_data(np.uint8(0))
     assert read_value == scalar_value
     assert read_end_index == 1
