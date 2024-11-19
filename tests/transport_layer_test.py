@@ -1246,7 +1246,15 @@ def test_buffer_size_insufficient_error():
         protocol.write_data(large_data, start_index=7)
 
 
-def test_write_data_success(protocol):
+def test_write_data_success():
+    protocol = SerialTransportLayer(
+        port="COM7",
+        baudrate=115200,
+        start_byte=129,
+        delimiter_byte=0,
+        timeout=10000,
+        test_mode=True,
+    )
     data = np.array([1, 2, 3], dtype=np.uint8)
     end_index = protocol.write_data(data)
     assert end_index == len(data)
