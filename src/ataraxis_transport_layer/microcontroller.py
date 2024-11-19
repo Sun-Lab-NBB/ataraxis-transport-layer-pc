@@ -117,17 +117,17 @@ class ModuleInterface:
     """
 
     def __init__(
-        self,
-        module_type: np.uint8,
-        type_name: str,
-        type_description: str,
-        module_id: np.uint8,
-        instance_name: str,
-        instance_description: str,
-        unity_input_topics: tuple[str, ...] | None,
-        *,
-        unity_output: bool = False,
-        queue_output: bool = False,
+            self,
+            module_type: np.uint8,
+            type_name: str,
+            type_description: str,
+            module_id: np.uint8,
+            instance_name: str,
+            instance_description: str,
+            unity_input_topics: tuple[str, ...] | None,
+            *,
+            unity_output: bool = False,
+            queue_output: bool = False,
     ) -> None:
         # Verifies input byte-codes for validity.
         if module_type < 1:
@@ -177,7 +177,7 @@ class ModuleInterface:
 
     @abstractmethod
     def get_from_unity(
-        self, topic: str, payload: bytes | bytearray
+            self, topic: str, payload: bytes | bytearray
     ) -> OneOffModuleCommand | RepeatedModuleCommand | None:
         """Packages and returns a command message structure to send to the microcontroller, based on the input Unity
         message topic and payload.
@@ -251,9 +251,9 @@ class ModuleInterface:
 
     @abstractmethod
     def send_to_queue(
-        self,
-        message: ModuleData | ModuleState,
-        queue: MPQueue,  # type: ignore
+            self,
+            message: ModuleData | ModuleState,
+            queue: MPQueue,  # type: ignore
     ) -> None:
         """Checks the input message data and, if necessary, sends a message to other processes via the provided
         multiprocessing Queue instance.
@@ -510,18 +510,18 @@ class MicroControllerInterface:
     )
 
     def __init__(
-        self,
-        controller_id: np.uint8,
-        controller_name: str,
-        controller_description: str,
-        controller_usb_port: str,
-        logger_queue: MPQueue,  # type: ignore
-        modules: tuple[ModuleInterface, ...],
-        baudrate: int = 115200,
-        maximum_transmitted_payload_size: int = 254,
-        unity_broker_ip: str = "127.0.0.1",
-        unity_broker_port: int = 1883,
-        verbose: bool = False,
+            self,
+            controller_id: np.uint8,
+            controller_name: str,
+            controller_description: str,
+            controller_usb_port: str,
+            logger_queue: MPQueue,  # type: ignore
+            modules: tuple[ModuleInterface, ...],
+            baudrate: int = 115200,
+            maximum_transmitted_payload_size: int = 254,
+            unity_broker_ip: str = "127.0.0.1",
+            unity_broker_port: int = 1883,
+            verbose: bool = False,
     ):
         # Controller (kernel) ID information. Follows the same code-name-description format as module type and instance
         # values do.
@@ -778,15 +778,15 @@ class MicroControllerInterface:
         self._input_queue.put(self._disable_locks)
 
     def send_message(
-        self,
-        message: (
-            ModuleParameters
-            | OneOffModuleCommand
-            | RepeatedModuleCommand
-            | DequeueModuleCommand
-            | KernelParameters
-            | KernelCommand
-        ),
+            self,
+            message: (
+                    ModuleParameters
+                    | OneOffModuleCommand
+                    | RepeatedModuleCommand
+                    | DequeueModuleCommand
+                    | KernelParameters
+                    | KernelCommand
+            ),
     ) -> None:
         """Sends the input arbitrary message structure to the connected Microcontroller.
 
@@ -921,6 +921,11 @@ class MicroControllerInterface:
         if not self._started:
             return
 
+        self.reset_controller()  # Resets the controller. This automatically locks all pins and resets modules.
+
+        # There is no need for additional delays as the communication loop will make sure the reset command is sent
+        # to the controller before shutdown
+
         # Changes the started tracker value. Amongst other things this soft-inactivates the watchdog thread.
         self._started = False
 
@@ -947,18 +952,18 @@ class MicroControllerInterface:
 
     @staticmethod
     def _runtime_cycle(
-        controller_id: np.uint8,
-        modules: tuple[ModuleInterface, ...],
-        input_queue: MPQueue,  # type: ignore
-        output_queue: MPQueue,  # type: ignore
-        logger_queue: MPQueue,  # type: ignore
-        terminator_array: SharedMemoryArray,
-        usb_port: str,
-        baudrate: int,
-        payload_size: int,
-        unity_ip: str,
-        unity_port: int,
-        verbose: bool = False,
+            controller_id: np.uint8,
+            modules: tuple[ModuleInterface, ...],
+            input_queue: MPQueue,  # type: ignore
+            output_queue: MPQueue,  # type: ignore
+            logger_queue: MPQueue,  # type: ignore
+            terminator_array: SharedMemoryArray,
+            usb_port: str,
+            baudrate: int,
+            payload_size: int,
+            unity_ip: str,
+            unity_port: int,
+            verbose: bool = False,
     ) -> None:
         """The main communication loop runtime of the class.
 

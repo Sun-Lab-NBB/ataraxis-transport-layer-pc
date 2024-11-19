@@ -40,15 +40,19 @@ if __name__ == "__main__":
     interface.start()
     interface.unlock_controller()
 
-    # Sends out the tested command
-    # check_command = module.check_state(repetition_delay=np.uint32(1000))
-    # interface.send_message(check_command)
+    # parameters
+    encoder_params = module.set_parameters(np.bool(True), np.bool(False), np.uint32(10))
+    interface.send_message(encoder_params)
 
-    calibrate = module.get_ppr()
-    interface.send_message(calibrate)
+    # Sends out the tested command
+    check_command = module.check_state(repetition_delay=np.uint32(1000))
+    interface.send_message(check_command)
+
+    # calibrate = module.get_ppr()
+    # interface.send_message(calibrate)
 
     # Statically blocks for 20 seconds while running recurrent commands.
-    timeout.delay_noblock(delay=120, allow_sleep=True)
+    timeout.delay_noblock(delay=60, allow_sleep=True)
 
     # Shuts down the communication interface and the logger
     interface.stop()

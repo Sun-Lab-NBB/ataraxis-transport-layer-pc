@@ -1,7 +1,7 @@
 """This module provides ModuleInterface implementations for teh default modules shipped with the
 AtaraxisMicroController library. Primarily, they are included to showcase the correct usage of this library.
 """
-
+import math
 from json import dumps
 from multiprocessing import Queue as MPQueue
 
@@ -58,9 +58,9 @@ class TTLModule(ModuleInterface):
         return
 
     def send_to_queue(
-        self,
-        message: ModuleData | ModuleState,
-        queue: MPQueue,  # type: ignore
+            self,
+            message: ModuleData | ModuleState,
+            queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -142,7 +142,7 @@ class TTLModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-        self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
+            self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
     ) -> ModuleParameters:
         """Sets PC-addressable runtime parameters of the module instance running on the microcontroller.
 
@@ -164,7 +164,7 @@ class TTLModule(ModuleInterface):
         )
 
     def send_pulse(
-        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
+            self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Sends a one-off or recurrent (repeating) TTL pulse using the digital pin managed by the module instance.
 
@@ -280,20 +280,26 @@ class EncoderModule(ModuleInterface):
             this is the number of quadrature pulses the encoder emits per full 360-degree rotation. If this number is
             not known, provide a 'dummy' value and use get_ppr() command to estimate the PPR using the index channel
             of the encoder.
+        motion_diameter: The diameter of the rotating object connected to the encoder, in cm. This is used to
+            convert encoder pulses into rotated distance in cm.
 
     Attributes:
         _motion_topic: Stores the MQTT motion topic.
         _ppr: Stores the resolution of the managed quadrature encoder.
+        _circumference: Stores the circumference of the object connected to the encoder.
+        _cm_per_pulse: Stores the conversion factor to translate encoder pulses into centimeters traveled by the
+            object.
     """
 
     def __init__(
-        self,
-        module_id: np.uint8,
-        instance_name: str,
-        instance_description: str,
-        unity_output: bool = True,
-        motion_topic: str = "LinearTreadmill/Data",
-        encoder_ppr: int = 8192,
+            self,
+            module_id: np.uint8,
+            instance_name: str,
+            instance_description: str,
+            unity_output: bool = True,
+            motion_topic: str = "LinearTreadmill/Data",
+            encoder_ppr: int = 8192,
+            motion_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
     ) -> None:
         # Statically defines the module type description.
         type_description = (
@@ -317,6 +323,10 @@ class EncoderModule(ModuleInterface):
         # Saves additional data to class attributes.
         self._motion_topic = motion_topic
         self._ppr = encoder_ppr
+        self._circumference = math.pi * motion_diameter
+
+        # Computes the circumference of the motion
+        self._cm_per_pulse = math.pi * motion_diameter / encoder_ppr
 
     def send_to_unity(self, message: ModuleState | ModuleData, unity_communication: UnityCommunication) -> None:
         # If the incoming message is not a CCW or CW motion report, aborts processing
@@ -329,7 +339,7 @@ class EncoderModule(ModuleInterface):
 
         # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to degrees using the
         # PPR.
-        signed_motion = (float(message.data_object) / self._ppr) * sign  # type: ignore
+        signed_motion = ((float(message.data_object) * self._cm_per_pulse)/10) * sign  # type: ignore
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -340,9 +350,9 @@ class EncoderModule(ModuleInterface):
         unity_communication.send_data(topic=self._motion_topic, payload=byte_array)
 
     def send_to_queue(
-        self,
-        message: ModuleData | ModuleState,
-        queue: MPQueue,  # type: ignore
+            self,
+            message: ModuleData | ModuleState,
+            queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -446,10 +456,10 @@ class EncoderModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-        self,
-        report_ccw: np.bool = np.bool(True),
-        report_cw: np.bool = np.bool(True),
-        delta_threshold: np.uint32 = np.uint32(1),
+            self,
+            report_ccw: np.bool = np.bool(True),
+            report_cw: np.bool = np.bool(True),
+            delta_threshold: np.uint32 = np.uint32(10),
     ) -> ModuleParameters:
         """Sets PC-addressable parameters of the module instance running on the microcontroller.
 
@@ -597,9 +607,9 @@ class BreakModule(ModuleInterface):
         return
 
     def send_to_queue(
-        self,
-        message: ModuleData | ModuleState,
-        queue: MPQueue,  # type: ignore
+            self,
+            message: ModuleData | ModuleState,
+            queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -747,12 +757,12 @@ class SensorModule(ModuleInterface):
     """
 
     def __init__(
-        self,
-        module_id: np.uint8,
-        instance_name: str,
-        instance_description: str,
-        unity_output: bool = True,
-        sensor_topic: str = "LickPort/",
+            self,
+            module_id: np.uint8,
+            instance_name: str,
+            instance_description: str,
+            unity_output: bool = True,
+            sensor_topic: str = "LickPort/",
     ) -> None:
         # Statically defines the TTLModule type description.
         type_description = (
@@ -783,9 +793,9 @@ class SensorModule(ModuleInterface):
         unity_communication.send_data(topic=self._sensor_topic, payload=None)
 
     def send_to_queue(
-        self,
-        message: ModuleData | ModuleState,
-        queue: MPQueue,  # type: ignore
+            self,
+            message: ModuleData | ModuleState,
+            queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -833,11 +843,11 @@ class SensorModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-        self,
-        lower_threshold: np.uint16 = np.uint16(0),
-        upper_threshold: np.uint16 = np.uint16(65535),
-        delta_threshold: np.uint16 = np.uint16(1),
-        averaging_pool_size: np.uint8 = np.uint8(0),
+            self,
+            lower_threshold: np.uint16 = np.uint16(0),
+            upper_threshold: np.uint16 = np.uint16(65535),
+            delta_threshold: np.uint16 = np.uint16(1),
+            averaging_pool_size: np.uint8 = np.uint8(0),
     ) -> ModuleParameters:
         """Sets PC-addressable parameters of the module instance running on the microcontroller.
 
@@ -925,11 +935,11 @@ class ValveModule(ModuleInterface):
     """
 
     def __init__(
-        self,
-        module_id: np.uint8,
-        instance_name: str,
-        instance_description: str,
-        input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
+            self,
+            module_id: np.uint8,
+            instance_name: str,
+            instance_description: str,
+            input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
     ) -> None:
         # Statically defines the TTLModule type description.
         type_description = (
@@ -955,9 +965,9 @@ class ValveModule(ModuleInterface):
         return
 
     def send_to_queue(
-        self,
-        message: ModuleData | ModuleState,
-        queue: MPQueue,  # type: ignore
+            self,
+            message: ModuleData | ModuleState,
+            queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -1035,10 +1045,10 @@ class ValveModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-        self,
-        pulse_duration: np.uint32 = np.uint32(10000),
-        calibration_delay: np.uint32 = np.uint32(10000),
-        calibration_count: np.uint16 = np.uint16(1000),
+            self,
+            pulse_duration: np.uint32 = np.uint32(10000),
+            calibration_delay: np.uint32 = np.uint32(10000),
+            calibration_count: np.uint16 = np.uint16(1000),
     ) -> ModuleParameters:
         """Sets PC-addressable runtime parameters of the module instance running on the microcontroller.
 
@@ -1062,7 +1072,7 @@ class ValveModule(ModuleInterface):
         )
 
     def send_pulse(
-        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
+            self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Delivers the predetermined amount of gas or fluid once or repeatedly (recurrently) by opening and closing
         (pulsing) teh valve.
