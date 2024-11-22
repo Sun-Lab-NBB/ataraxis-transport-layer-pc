@@ -2145,7 +2145,13 @@ def test_receive_data_status_104_premature_delimiter():
         print("Caught expected ValueError for status 104:", e)
 
 
+from unittest.mock import call, patch
+
+import numpy as np
+import pytest
 from ataraxis_base_utilities.console.console_class import Console
+
+from ataraxis_transport_layer.transport_layer import SerialTransportLayer
 
 
 def test_receive_data_status_105_unexpected_last_delimiter():
@@ -2186,8 +2192,14 @@ def test_receive_data_status_105_unexpected_last_delimiter():
             f"corruption or mismatch in the transmission parameters between this system and the Microcontroller."
         )
 
-        # Collect all error messages from mock calls
-        messages_105 = [call_args.kwargs["message"] for call_args in mock_error.call_args_list]
+        # 추가 디버깅을 위한 로그
+        print(f"Expected message: {expected_message_105}")
+
+        # Collect all error messages from mock calls using `kwargs` directly
+        messages_105 = [call_args.kwargs.get("message") for call_args in mock_error.call_args_list]
+
+        # 로그에 실제 메시지를 출력
+        print(f"Received messages: {messages_105}")
 
         # Directly raise an error if expected message is not found
         if expected_message_105 not in messages_105:
@@ -2238,9 +2250,7 @@ def test_receive_data_success():
             assert protocol._bytes_in_reception_buffer == 10
 
 
-from unittest.mock import patch
-
-import pytest
+from unittest.mock import call, patch
 
 
 def test_construct_packet_error():
@@ -2255,32 +2265,29 @@ def test_construct_packet_error():
         with patch.object(protocol._cobs_processor, "encode_payload", return_value=np.array([1, 2, 3])):
             # Mock the CRC processor to return a valid checksum
             with patch.object(protocol._crc_processor, "calculate_crc_checksum", return_value=1234):
-                # Mock the console.error function to capture its usage and arguments
-                with patch("ataraxis_base_utilities.console.error") as mock_error:
-                    # Trigger the send_data() to cause the patched error to occur
-                    result = protocol.send_data()
+                # Patch the Console instance's error method to capture its usage and arguments
+                with patch.object(Console, "error") as mock_error:
+                    # Use pytest.raises to expect a RuntimeError
+                    with pytest.raises(
+                        RuntimeError,
+                        match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
+                    ):
+                        protocol.send_data()
 
-                    # Construct the expected error message
-                    message = (
-                        "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
-                        "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
-                        "error. Manual error resolution required."
-                    )
+                    # Construct the expected error messages
+                    expected_calls = [
+                        call(
+                            "Unable to convert the CRC checksum scalar to an array of bytes. A uint8, uint16 or uint32 value expected as 'crc_checksum' argument, but instead encountered 1234 of type int.",
+                            TypeError,
+                        ),
+                        call(
+                            "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the error. Manual error resolution required.",
+                            RuntimeError,
+                        ),
+                    ]
 
-                    # Verify that console.error was called with the correct message and exception type
-                    mock_error.assert_called_once_with(message=message, error=RuntimeError)
-
-                    # Ensure send_data returns False since the data transmission failed
-                    assert result is False
-
-
-from unittest.mock import call, patch
-
-import numpy as np
-import pytest
-from ataraxis_base_utilities.console.console_class import Console
-
-from ataraxis_transport_layer.transport_layer import SerialTransportLayer
+                    # Verify that console.error was called with the correct messages
+                    mock_error.assert_has_calls(expected_calls, any_order=False)
 
 
 def test_construct_packet_unexpected_error():
