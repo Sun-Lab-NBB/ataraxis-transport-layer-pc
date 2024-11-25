@@ -950,7 +950,7 @@ class ValveModule(ModuleInterface):
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             type_name="ValveModule",
-            module_type=np.uint8(1),
+            module_type=np.uint8(5),
             type_description=type_description,
             module_id=module_id,
             instance_name=instance_name,
