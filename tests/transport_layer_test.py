@@ -268,7 +268,6 @@ def test_serial_transfer_protocol_buffer_manipulation():
     extension, also tests all internal private methods that enable the proper functioning of the main two methods. Also
     test buffer reset methods.
     """
-
     # Instantiates the tested SerialTransportLayer class
     protocol = SerialTransportLayer(
         port="COM7",
@@ -877,7 +876,6 @@ def test_not_enough_bytes_received():
 
 def test_crc_verification_failure():
     """Test that a CRC checksum mismatch triggers an appropriate error message."""
-
     # Create an instance of the SerialTransportLayer with test_mode=True
     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
 
@@ -1077,7 +1075,6 @@ def test_crc_failure():
 
 def test_list_available_ports():
     """Test that list_available_ports correctly retrieves and formats serial port information."""
-
     # Mock the output of list_ports.comports()
     mock_port = MagicMock()
     mock_port.name = "COM3"
@@ -1104,7 +1101,6 @@ def test_list_available_ports():
 
 def test_sufficient_bytes_available():
     """Test the condition when sufficient bytes are available to process."""
-
     # Create a mock of the SerialTransportLayer class
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1156,7 +1152,6 @@ def test_read_data_unsupported_type():
 
 def test_unsupported_input_type_error():
     """Test that a TypeError is raised for unsupported input types."""
-
     # Create an instance of the SerialTransportLayer class
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1179,19 +1174,17 @@ def _write_array_data(
     self,
     target_buffer: NDArray[np.uint8],
     array_object: NDArray[
-        Union[
-            np.uint8,
-            np.uint16,
-            np.uint32,
-            np.uint64,
-            np.int8,
-            np.int16,
-            np.int32,
-            np.int64,
-            np.float32,
-            np.float64,
-            np.bool_,
-        ]
+        np.uint8
+        | np.uint16
+        | np.uint32
+        | np.uint64
+        | np.int8
+        | np.int16
+        | np.int32
+        | np.int64
+        | np.float32
+        | np.float64
+        | np.bool_
     ],
     start_index: int,
 ) -> int:
@@ -1207,7 +1200,6 @@ def _write_array_data(
     Returns:
         The positive index inside the transmission buffer that immediately follows the last index of the buffer to which the data was written. Integer code 0, if the buffer does not have enough space to accommodate the data written at the start_index. Integer code -1, if the input array object is not one-dimensional. Integer code -2, if the input array object is empty.
     """
-
     # Error checking logic (now in regular Python code)
     if array_object.ndim != 1:
         return -1  # Input array is not one-dimensional.
@@ -1229,7 +1221,6 @@ def _write_array_data(
 
 def test_buffer_size_insufficient_error():
     """Test that a ValueError is raised when the buffer does not have enough space."""
-
     # Create an instance of the SerialTransportLayer class
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1268,7 +1259,6 @@ def test_write_data_success():
 
 def test_buffer_tracker_update():
     """Test that the buffer tracker (_bytes_in_transmission_buffer) is updated correctly after a successful write."""
-
     # Create an instance of the SerialTransportLayer class
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1445,7 +1435,6 @@ def test_data_with_start_byte_and_delimiter():
 
 from ataraxis_transport_layer.helper_modules import CRCProcessor, COBSProcessor
 
-
 def test_validate_packet_success():
     """Test that _validate_packet successfully validates and decodes a packet."""
     reception_buffer = np.zeros(20, dtype=np.uint8)
@@ -1530,7 +1519,6 @@ def test_validate_packet_cobs_failure():
 
 def test_scalar_write_success():
     """Test the successful writing of scalar data to the transmission buffer."""
-
     # 버퍼 생성
     target_buffer = np.zeros(10, dtype=np.uint8)
 
@@ -1847,7 +1835,6 @@ def test_repr_with_mocked_serial():
 
 def test_error_logging_and_exceptions():
     """Test that the appropriate error messages are logged and exceptions are raised."""
-
     # Initialize the protocol
     protocol = SerialTransportLayer(
         port="COM7",
@@ -1884,8 +1871,8 @@ def test_error_logging_and_exceptions():
         # Assert that console.error was called with the correct message for the empty array error
         mock_console_error.assert_any_call(
             message=(
-                f"Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
-                f"input data_object. Reading empty arrays is not supported."
+                "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+                "input data_object. Reading empty arrays is not supported."
             ),
             error=ValueError,
         )
@@ -1898,8 +1885,8 @@ def test_error_logging_and_exceptions():
             # Assert that console.error was called with the correct message for unknown error code
             mock_console_error.assert_any_call(
                 message=(
-                    f"Failed to read the data from the reception buffer. Encountered an unknown error code (-3)"
-                    f" returned by the reader method."
+                    "Failed to read the data from the reception buffer. Encountered an unknown error code (-3)"
+                    " returned by the reader method."
                 ),
                 error=RuntimeError,
             )
