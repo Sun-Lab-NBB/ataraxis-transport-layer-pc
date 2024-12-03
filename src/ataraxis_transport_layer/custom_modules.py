@@ -2,8 +2,8 @@
 AtaraxisMicroController library. Primarily, they are included to showcase the correct usage of this library.
 """
 
-import math
 from json import dumps
+import math
 from multiprocessing import Queue as MPQueue
 
 import numpy as np
@@ -352,7 +352,8 @@ class EncoderModule(ModuleInterface):
         # using the precomputed conversion factor. Uses float64 and rounds to 12 decimal places for consistency and
         # precision
         signed_motion = np.round(
-            a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign, decimals=12  # type: ignore
+            a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign,
+            decimals=12,  # type: ignore
         )
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a

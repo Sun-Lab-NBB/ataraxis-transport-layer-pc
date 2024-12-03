@@ -12,6 +12,18 @@ from .helper_modules import (
     _COBSProcessor as _COBSProcessor,
 )
 
+def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
+    """Provides the information about each serial port addressable through the pySerial library.
+
+    This function is intended to be used for discovering and selecting the serial port 'names' to use with
+    TransportLayer and Communication classes.
+
+    Returns:
+        A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
+        port.
+
+    """
+
 class SerialTransportLayer:
     """Provides methods to bidirectionally communicate with Microcontrollers running the C++ version of the
     TransportLayer class over the UART or USB Serial interface.
@@ -143,7 +155,7 @@ class SerialTransportLayer:
     _minimum_packet_size: Incomplete
     _bytes_in_transmission_buffer: int
     _bytes_in_reception_buffer: int
-    _leftover_bytes: Incomplete
+    _leftover_bytes: bytes
     def __init__(
         self,
         port: str,
@@ -164,18 +176,6 @@ class SerialTransportLayer:
         """Ensures proper resource release prior to garbage-collecting class instance."""
     def __repr__(self) -> str:
         """Returns a string representation of the SerialTransportLayer class instance."""
-    @staticmethod
-    def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
-        """Provides the information about each serial port addressable through the pySerial library.
-
-        This method is intended to be used for discovering and selecting the serial port 'names' to use with this
-        class.
-
-        Returns:
-            A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
-            port.
-
-        """
     @property
     def available(self) -> bool:
         """Returns True if enough bytes are available from the serial port to justify attempting to receive a packet."""
@@ -203,14 +203,14 @@ class SerialTransportLayer:
         """Resets the transmission buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
         efficiency and runtime speed.
         """
     def reset_reception_buffer(self) -> None:
         """Resets the reception buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
         efficiency and runtime speed.
         """
     def write_data(
