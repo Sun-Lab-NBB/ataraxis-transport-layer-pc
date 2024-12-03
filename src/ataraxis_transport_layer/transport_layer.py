@@ -15,7 +15,7 @@ protocol. Theoretically, this class can be used for cross-machine communication 
 been tested on the same machine. See method and class docstrings for more information.
 """
 
-from typing import Any, Type, Union, Optional
+from typing import Any
 from dataclasses import fields, is_dataclass
 
 from numba import njit  # type: ignore
@@ -34,6 +34,34 @@ from .helper_modules import (
     _CRCProcessor,
     _COBSProcessor,
 )
+
+
+def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
+    """Provides the information about each serial port addressable through the pySerial library.
+
+    This function is intended to be used for discovering and selecting the serial port 'names' to use with
+    TransportLayer and Communication classes.
+
+    Returns:
+        A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
+        port.
+
+    """
+    # Gets the list of port objects visible to the pySerial library.
+    available_ports = list_ports.comports()
+
+    # Prints the information about each port using terminal.
+    information_list = [
+        {
+            "Name": port.name,
+            "Device": port.device,
+            "PID": port.pid,
+            "Description": port.description,
+        }
+        for port in available_ports
+    ]
+
+    return tuple(information_list)
 
 
 class SerialTransportLayer:
@@ -138,17 +166,17 @@ class SerialTransportLayer:
     """
 
     _accepted_numpy_scalars: tuple[
-        Type[np.uint8],
-        Type[np.uint16],
-        Type[np.uint32],
-        Type[np.uint64],
-        Type[np.int8],
-        Type[np.int16],
-        Type[np.int32],
-        Type[np.int64],
-        Type[np.float32],
-        Type[np.float64],
-        Type[np.bool],
+        type[np.uint8],
+        type[np.uint16],
+        type[np.uint32],
+        type[np.uint64],
+        type[np.int8],
+        type[np.int16],
+        type[np.int32],
+        type[np.int64],
+        type[np.float32],
+        type[np.float64],
+        type[np.bool],
     ] = (
         np.uint8,
         np.uint16,
@@ -167,9 +195,9 @@ class SerialTransportLayer:
         self,
         port: str,
         baudrate: int = 115200,
-        polynomial: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x1021),
-        initial_crc_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0xFFFF),
-        final_crc_xor_value: Union[np.uint8, np.uint16, np.uint32] = np.uint16(0x0000),
+        polynomial: np.uint8 | np.uint16 | np.uint32 = np.uint16(0x1021),
+        initial_crc_value: np.uint8 | np.uint16 | np.uint32 = np.uint16(0xFFFF),
+        final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = np.uint16(0x0000),
         maximum_transmitted_payload_size: int = 254,
         minimum_received_payload_size: int = 1,
         start_byte: int = 129,
@@ -266,7 +294,7 @@ class SerialTransportLayer:
         # Sets up various tracker and temporary storage variables that supplement class runtime.
         self._bytes_in_transmission_buffer: int = 0
         self._bytes_in_reception_buffer: int = 0
-        self._leftover_bytes: bytes = bytes()  # Placeholder, this is re-initialized as needed during data reception.
+        self._leftover_bytes: bytes = b""  # Placeholder, this is re-initialized as needed during data reception.
 
         # Opens (connects to) the serial port. Cycles closing and opening to ensure the port is opened,
         # non-graciously replacing whatever is using the port at the time of instantiating SerialTransportLayer class.
@@ -277,7 +305,6 @@ class SerialTransportLayer:
 
     def __del__(self) -> None:
         """Ensures proper resource release prior to garbage-collecting class instance."""
-
         # Closes the port before deleting the class instance. Not strictly required, but helpful to ensure resources
         # are released
         self._port.close()
@@ -301,38 +328,9 @@ class SerialTransportLayer:
             )
         return representation_string
 
-    @staticmethod
-    def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
-        """Provides the information about each serial port addressable through the pySerial library.
-
-        This method is intended to be used for discovering and selecting the serial port 'names' to use with this
-        class.
-
-        Returns:
-            A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
-            port.
-
-        """
-        # Gets the list of port objects visible to the pySerial library.
-        available_ports = list_ports.comports()
-
-        # Prints the information about each port using terminal.
-        information_list = [
-            {
-                "Name": port.name,
-                "Device": port.device,
-                "PID": port.pid,
-                "Description": port.description,
-            }
-            for port in available_ports
-        ]
-
-        return tuple(information_list)
-
     @property
     def available(self) -> bool:
         """Returns True if enough bytes are available from the serial port to justify attempting to receive a packet."""
-
         # in_waiting is twice as fast as using the read() method. The 'true' outcome of this check is capped at the
         # minimum packet size to minimize the chance of having to call read() more than once. The method counts the
         # bytes available for reading and left over from previous packet parsing operations.
@@ -370,7 +368,7 @@ class SerialTransportLayer:
         """Resets the transmission buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
         efficiency and runtime speed.
         """
         self._bytes_in_transmission_buffer = 0
@@ -379,43 +377,41 @@ class SerialTransportLayer:
         """Resets the reception buffer bytes tracker to 0.
 
         This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation, is chosen for higher memory
+        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
         efficiency and runtime speed.
         """
         self._bytes_in_reception_buffer = 0
 
     def write_data(
         self,
-        data_object: Union[
-            np.uint8,
-            np.uint16,
-            np.uint32,
-            np.uint64,
-            np.int8,
-            np.int16,
-            np.int32,
-            np.int64,
-            np.float32,
-            np.float64,
-            np.bool,
-            NDArray[
-                Union[
-                    np.uint8,
-                    np.uint16,
-                    np.uint32,
-                    np.uint64,
-                    np.int8,
-                    np.int16,
-                    np.int32,
-                    np.int64,
-                    np.float32,
-                    np.float64,
-                    np.bool,
-                ]
-            ],
-            Type[Any],
-        ],
-        start_index: Optional[int] = None,
+        data_object: (
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
+            | NDArray[
+                np.uint8
+                | np.uint16
+                | np.uint32
+                | np.uint64
+                | np.int8
+                | np.int16
+                | np.int32
+                | np.int64
+                | np.float32
+                | np.float64
+                | np.bool
+            ]
+            | type[Any]
+        ),
+        start_index: int | None = None,
     ) -> int:
         """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
         start_index.
@@ -459,7 +455,6 @@ class SerialTransportLayer:
                 transmission buffer boundaries. Also raised when multidimensional or empty numpy arrays are
                 encountered.
         """
-
         end_index = -10  # Initializes to a specific negative value that is not a valid index or runtime error code
 
         # Resolves the start_index input, ensuring it is a valid integer value if start_index is left at the default
@@ -548,8 +543,8 @@ class SerialTransportLayer:
         # running C.
         if end_index == -2:
             message = (
-                f"Failed to write the data to the transmission buffer. Encountered an empty (size 0) numpy array as "
-                f"input data_object. Writing empty arrays is not supported."
+                "Failed to write the data to the transmission buffer. Encountered an empty (size 0) numpy array as "
+                "input data_object. Writing empty arrays is not supported."
             )
             console.error(message=message, error=ValueError)
 
@@ -567,19 +562,19 @@ class SerialTransportLayer:
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
     def _write_scalar_data(
         target_buffer: NDArray[np.uint8],
-        scalar_object: Union[
-            np.uint8,
-            np.uint16,
-            np.uint32,
-            np.uint64,
-            np.int8,
-            np.int16,
-            np.int32,
-            np.int64,
-            np.float32,
-            np.float64,
-            np.bool,
-        ],
+        scalar_object: (
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
+        ),
         start_index: int,
     ) -> int:
         """Converts the input numpy scalar to a sequence of bytes and writes it to the transmission buffer at the
@@ -600,7 +595,6 @@ class SerialTransportLayer:
             which the data was written. Integer code 0, if the buffer does not have enough space to accommodate the data
             written at the start_index.
         """
-
         # Converts the input scalar to a byte array. This is mostly so that Numba can work with the data via the
         # service method calls below. Note, despite the input being scalar, the array object may have multiple elements.
         array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)  # scalar → array → byte array
@@ -625,19 +619,17 @@ class SerialTransportLayer:
     def _write_array_data(
         target_buffer: NDArray[np.uint8],
         array_object: NDArray[
-            Union[
-                np.uint8,
-                np.uint16,
-                np.uint32,
-                np.uint64,
-                np.int8,
-                np.int16,
-                np.int32,
-                np.int64,
-                np.float32,
-                np.float64,
-                np.bool,
-            ]
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
         ],
         start_index: int,
     ) -> int:
@@ -661,7 +653,6 @@ class SerialTransportLayer:
             written at the start_index. Integer code -1, if the input array object is not one-dimensional.
             Integer code -2, if the input array object is empty.
         """
-
         if array_object.ndim != 1:
             return -1  # Returns -1 if the input array is not one-dimensional.
 
@@ -685,35 +676,33 @@ class SerialTransportLayer:
 
     def read_data(
         self,
-        data_object: Union[
-            np.uint8,
-            np.uint16,
-            np.uint32,
-            np.uint64,
-            np.int8,
-            np.int16,
-            np.int32,
-            np.int64,
-            np.float32,
-            np.float64,
-            np.bool,
-            NDArray[
-                Union[
-                    np.uint8,
-                    np.uint16,
-                    np.uint32,
-                    np.uint64,
-                    np.int8,
-                    np.int16,
-                    np.int32,
-                    np.int64,
-                    np.float32,
-                    np.float64,
-                    np.bool,
-                ]
-            ],
-            Type[Any],
-        ],
+        data_object: (
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
+            | NDArray[
+                np.uint8
+                | np.uint16
+                | np.uint32
+                | np.uint64
+                | np.int8
+                | np.int16
+                | np.int32
+                | np.int64
+                | np.float32
+                | np.float64
+                | np.bool
+            ]
+            | type[Any]
+        ),
         start_index: int = 0,
     ) -> tuple[Any, int]:
         """Recreates the input data_object using the data read from the payload stored inside the class reception
@@ -755,7 +744,6 @@ class SerialTransportLayer:
                 available from the start_index to fill the requested object. Also, if the input object is a
                 multidimensional or empty numpy array.
         """
-
         end_index = -10  # Initializes to a specific negative value that is not a valid index or runtime error code
 
         # If the input object is a supported numpy scalar, converts it to a numpy array and calls the read method.
@@ -823,7 +811,7 @@ class SerialTransportLayer:
 
         # If the index is set to code 0, this indicates that the payload did not have sufficient data starting from the
         # start_index to recreate the object.
-        elif end_index == 0:
+        if end_index == 0:
             message = (
                 f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
                 f"bytes available to fully fill the object starting at the index {start_index}. Specifically, given "
@@ -847,8 +835,8 @@ class SerialTransportLayer:
         # not make sense and therefore is likely an error.
         elif end_index == -2:
             message = (
-                f"Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
-                f"input data_object. Reading empty arrays is not supported."
+                "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
+                "input data_object. Reading empty arrays is not supported."
             )
             console.error(message=message, error=ValueError)
 
@@ -868,19 +856,17 @@ class SerialTransportLayer:
     def _read_array_data(
         source_buffer: NDArray[np.uint8],
         array_object: NDArray[
-            Union[
-                np.uint8,
-                np.uint16,
-                np.uint32,
-                np.uint64,
-                np.int8,
-                np.int16,
-                np.int32,
-                np.int64,
-                np.float32,
-                np.float64,
-                np.bool,
-            ]
+            np.uint8
+            | np.uint16
+            | np.uint32
+            | np.uint64
+            | np.int8
+            | np.int16
+            | np.int32
+            | np.int64
+            | np.float32
+            | np.float64
+            | np.bool
         ],
         start_index: int,
         payload_size: int,
@@ -912,7 +898,6 @@ class SerialTransportLayer:
             data. Returns integer code -1 if the input array is not one-dimensional. Returns integer code -2 if the
             input array is empty.
         """
-
         # Calculates the end index for the read operation. This is based on how many bytes are required to represent the
         # object and the start_index for the read operation.
         required_size = start_index + array_object.nbytes
@@ -922,11 +907,11 @@ class SerialTransportLayer:
             return np.empty(0, dtype=array_object.dtype), 0
 
         # Prevents reading multidimensional numpy arrays.
-        elif array_object.ndim > 1:
+        if array_object.ndim > 1:
             return np.empty(0, dtype=array_object.dtype), -1
 
         # Prevents reading empty numpy arrays
-        elif array_object.size == 0:
+        if array_object.size == 0:
             return np.empty(0, dtype=array_object.dtype), -2
 
         # Generates a new array using the input data_object datatype and a slice of the byte-buffer that corresponds to
@@ -955,7 +940,6 @@ class SerialTransportLayer:
         Raises:
             ValueError: If the method encounters an error during the packet construction.
         """
-
         # Constructs the serial packet to be sent. This is a fast inline aggregation of all packet construction steps,
         # using JIT compilation to increase runtime speed. To maximize compilation benefits, it has to access the
         # inner jitclasses instead of using the python COBS and CRC class wrappers.
@@ -1222,7 +1206,6 @@ class SerialTransportLayer:
                 to packet corruption, the mismatch between TransportLayer class configurations, or the packet
                 transmission staling.
         """
-
         # Checks whether class buffers contain enough bytes to justify parsing the packet. If not, returns False to
         # indicate graceful (non-error) runtime failure.
         if not self._bytes_available(required_bytes_count=self._minimum_packet_size):
@@ -1316,7 +1299,7 @@ class SerialTransportLayer:
                 return False  # Non-error, non-success return code
 
             # Start byte was not discovered among the available bytes.
-            elif status == 102:
+            if status == 102:
                 message = (
                     f"Failed to parse the incoming serial packet data. Unable to find the start_byte "
                     f"({self._start_byte}) value among the bytes stored inside the serial buffer."
@@ -1397,7 +1380,6 @@ class SerialTransportLayer:
         Returns:
             True if enough bytes are available at the end of this method runtime to justify parsing the packet.
         """
-
         # Tracks the number of bytes available from the leftover_bytes buffer
         available_bytes = len(self._leftover_bytes)
 
@@ -1525,7 +1507,6 @@ class SerialTransportLayer:
             bytes' object that stores any unprocessed bytes that remain after method runtime. The fourth element
             is the uint8 array that stores some or all of the packet's bytes.
         """
-
         # Converts the input 'bytes' object to a numpy array to optimize further buffer manipulations
         total_bytes = unparsed_bytes.size  # Calculates the total number of bytes available for parsing
         processed_bytes = 0  # Tracks how many input bytes are processed during method runtime
@@ -1646,9 +1627,8 @@ class SerialTransportLayer:
         if parsed_bytes.size == parsed_byte_count:
             remaining_bytes = unparsed_bytes[processed_bytes:].copy()
             return 1, parsed_byte_count, remaining_bytes, parsed_bytes
-        else:
-            # Otherwise, determines how many CRC bytes are left to parse
-            remaining_crc_bytes = parsed_bytes.size - parsed_byte_count
+        # Otherwise, determines how many CRC bytes are left to parse
+        remaining_crc_bytes = parsed_bytes.size - parsed_byte_count
 
         # Stage 4: Resolves the CRC checksum postamble. This is the static portion of the stream that follows the
         # encoded payload. This is used for payload data integrity verification.

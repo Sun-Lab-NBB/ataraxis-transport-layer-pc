@@ -69,7 +69,6 @@ def error_format(message: str) -> str:
 )
 def test_cobs_processor_encode_decode(input_buffer, encoded_buffer) -> None:
     """Verifies the functioning of the COBSProcessor class encode_payload() and decode_payload() methods."""
-
     # Instantiates the tested class
     processor = COBSProcessor()
     delimiter = np.uint8(0)
@@ -120,7 +119,6 @@ def test_serial_mock_repr():
 
 def test_cobs_processor_encode_decode_errors():
     """Verifies the error-handling behavior of the COBSProcessor class encode_payload() and decode_payload() methods."""
-
     # Instantiates the tested class
     processor = COBSProcessor()
     payload = np.array([1, 2, 3, 4, 5], dtype=np.uint8)
@@ -1118,7 +1116,6 @@ def test_crc_processor(polynomial, initial_crc, final_xor, test_data, expected_c
     """Verifies the functioning of the CRCProcessor class calculate_crc_checksum(),
     convert_checksum_to_bytes(), and convert_bytes_to_checksum() methods for CRC8, CRC16, and CRC32 polynomials.
     """
-
     # Instantiates the CRCProcessor with the given parameters
     crc_processor = CRCProcessor(crc_type(polynomial), crc_type(initial_crc), crc_type(final_xor))
 
@@ -1157,7 +1154,6 @@ def test_crc_processor_errors():
     """Tests error handling behavior of COBSProcessor class initialization, calculate_packet_crc_checksum(),
     convert_crc_checksum_to_bytes() and convert_crc_checksum_to_integer() methods.
     """
-
     # Instantiates tested class
     polynomial = np.uint16(0x1021)
     initial_crc_value = np.uint16(0xFFFF)
@@ -1279,7 +1275,6 @@ def test_crc_processor_errors():
 
 def test_serial_mock():
     """Verifies the functioning and error-handling behavior of all SerialMock class methods."""
-
     # Creates an instance of SerialMock to test
     mock_serial = SerialMock()
 
