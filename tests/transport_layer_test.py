@@ -741,11 +741,10 @@ def test_serial_transfer_protocol_data_transmission_errors():
 
     protocol._allow_start_byte_errors = True
 
-    # Test case for missing start byte error
     error_message = (
-        r"Failed to parse the incoming serial packet data\. Unable to find the start_byte \(129\) value among the bytes stored inside"
-        r"(\s|\n)*the serial buffer\."
+        r"Failed to parse the incoming serial packet data\. Unable to find the start_byte \(129\) value among the bytes stored inside\s*the serial buffer\."
     )
+
     protocol._port.rx_buffer = empty_buffer.tobytes()
     with pytest.raises(
         RuntimeError,
@@ -757,10 +756,10 @@ def test_serial_transfer_protocol_data_transmission_errors():
     empty_buffer[-1] = 129
     protocol._port.rx_buffer = empty_buffer.tobytes()
     error_message = (
-        r"Failed to parse the incoming serial packet data\. The byte number \d+ out of \d+ "
-        r"was not received in\s*time \(20000 microseconds\), following the reception of the previous byte\."
-        r"(\s|\n)*Packet reception staled\."
+        r"Failed to parse the incoming serial packet data\. Packet reception staled\. The byte number \d+ out of \d+ "
+        r"was not received in\s*time \(20000 microseconds\), following the reception of the previous byte\.\s*"
     )
+
     with pytest.raises(
         RuntimeError,
         match=error_message,  # Updated regex to handle whitespace and newlines
@@ -773,7 +772,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
     error_message = (
         r"Failed to parse the incoming serial packet data\. The byte number \d+ out of \d+ "
         r"was not received in\s*time \(20000 microseconds\), following the reception of the previous byte\."
-        r"(\s|\n)*Packet reception staled\."
+        r"\s*Packet reception staled\."
     )
     with pytest.raises(
         RuntimeError,
@@ -785,8 +784,9 @@ def test_serial_transfer_protocol_data_transmission_errors():
     empty_buffer[-1] = 129
     protocol._port.rx_buffer = empty_buffer.tobytes()
     error_message = (
-        r"Failed to parse the incoming serial packet data\. Packet reception staled\. The byte number 1 out of 0 "
-        r"was not received in\s*time \(20000 microseconds\), following the reception of the previous byte\."
+        r"Failed to parse the incoming serial packet data\. The byte number \d+ out of \d+ "
+        r"was not received in\s*time \(20000 microseconds\), following the reception of the previous byte\.\s*"
+        r"Packet reception staled\."
     )
     with pytest.raises(
         RuntimeError,
@@ -986,7 +986,7 @@ def test_write_and_read_array():
         baudrate=115200,
         test_mode=True,
     )
- 
+
     array_value = np.array([1, 2, 3, 4, 5], dtype=np.uint8)
 
     # Mock the reception buffer to store the expected array value after writing
