@@ -117,17 +117,17 @@ class ModuleInterface:
     """
 
     def __init__(
-            self,
-            module_type: np.uint8,
-            type_name: str,
-            type_description: str,
-            module_id: np.uint8,
-            instance_name: str,
-            instance_description: str,
-            unity_input_topics: tuple[str, ...] | None,
-            *,
-            unity_output: bool = False,
-            queue_output: bool = False,
+        self,
+        module_type: np.uint8,
+        type_name: str,
+        type_description: str,
+        module_id: np.uint8,
+        instance_name: str,
+        instance_description: str,
+        unity_input_topics: tuple[str, ...] | None,
+        *,
+        unity_output: bool = False,
+        queue_output: bool = False,
     ) -> None:
         # Verifies input byte-codes for validity.
         if module_type < 1:
@@ -177,7 +177,7 @@ class ModuleInterface:
 
     @abstractmethod
     def get_from_unity(
-            self, topic: str, payload: bytes | bytearray
+        self, topic: str, payload: bytes | bytearray
     ) -> OneOffModuleCommand | RepeatedModuleCommand | None:
         """Packages and returns a command message structure to send to the microcontroller, based on the input Unity
         message topic and payload.
@@ -206,7 +206,10 @@ class ModuleInterface:
 
         Returns:
             An initialized OneOffModuleCommand or RepeatedModuleCommand class instance that stores the message payload
-            to be sent to the microcontroller.
+            to be sent to the microcontroller. While the signature contains None as a return, None is NOT a valid
+            return value. MicroControllerInterface class is designed to ONLY call this method if it expects a non-None
+            return. Make sure this method is properly implemented if your module includes a list of Unity topics to
+            listen for.
         """
         # While abstract method should prompt the user to implement this method, the default error-condition is also
         # included for additional safety.
@@ -251,9 +254,9 @@ class ModuleInterface:
 
     @abstractmethod
     def send_to_queue(
-            self,
-            message: ModuleData | ModuleState,
-            queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
     ) -> None:
         """Checks the input message data and, if necessary, sends a message to other processes via the provided
         multiprocessing Queue instance.
@@ -312,10 +315,54 @@ class ModuleInterface:
             dictionary). Note, if this method is not implemented properly, it may be challenging to decode the logged
             data in the future.
 
+        Args:
+            code_map: The shared NestedDictionary instance that aggregates all information from a single
+                MicroControllerInterface class, including the information from all ModuleInterface instances managed by
+                the class.
+
+        Returns:
+            The updated NestedDictionary instance. It is assumed that all valid modules always update the input
+            dictionary as part of this method runtime.
+
         """
         raise NotImplementedError(
             f"write_code_map method for {self._type_name} module interface must be implemented when subclassing the "
             f"base ModuleInterface class."
+        )
+
+    @abstractmethod
+    def write_instance_variables(self, code_map: NestedDictionary) -> NestedDictionary:
+        """Updates the input code_map dictionary with module-instance-specific runtime variables.
+
+        This method allows writing instance-specific variables to the global code map. For example, this method can
+        be used to store specific conversion factors used to translate pulses from a specific EncoderModule into
+        centimeters. At the very least, each module has to use this method to write whether it uses unity input / output
+        queue output, as well as any other instance variables that may be helpful when parsing the logged data.
+
+        Notes:
+            This method functions identically to write_code_map(), except that it is called for every instance with the
+            same module_type.
+
+            Make sure all data is written under modulename_module.instancename.instance_variables root path. Otherwise,
+            some parser features available for all instances (for example, parsing unity input / output boolean flags)
+            will not work correctly.
+
+            See one of the default custom ModuleInterface classes for examples on how to implement this method, both
+            for modules that do and do not use this functionality.
+
+        Args:
+            code_map: The shared NestedDictionary instance that aggregates all information from a single
+                MicroControllerInterface class, including the information from all ModuleInterface instances managed by
+                the class.
+
+        Returns:
+            An updated NestedDictionary instance. All valid module instances are expected to use this method to at least
+            write whether they use unity input / output and queue output flags.
+
+        """
+        raise NotImplementedError(
+            f"write_instance_variables method for {self._type_name} module interface must be implemented when "
+            f"subclassing the base ModuleInterface class."
         )
 
     def dequeue_command(self) -> DequeueModuleCommand:
@@ -510,18 +557,18 @@ class MicroControllerInterface:
     )
 
     def __init__(
-            self,
-            controller_id: np.uint8,
-            controller_name: str,
-            controller_description: str,
-            controller_usb_port: str,
-            logger_queue: MPQueue,  # type: ignore
-            modules: tuple[ModuleInterface, ...],
-            baudrate: int = 115200,
-            maximum_transmitted_payload_size: int = 254,
-            unity_broker_ip: str = "127.0.0.1",
-            unity_broker_port: int = 1883,
-            verbose: bool = False,
+        self,
+        controller_id: np.uint8,
+        controller_name: str,
+        controller_description: str,
+        controller_usb_port: str,
+        logger_queue: MPQueue,  # type: ignore
+        modules: tuple[ModuleInterface, ...],
+        baudrate: int = 115200,
+        maximum_transmitted_payload_size: int = 254,
+        unity_broker_ip: str = "127.0.0.1",
+        unity_broker_port: int = 1883,
+        verbose: bool = False,
     ):
         # Controller (kernel) ID information. Follows the same code-name-description format as module type and instance
         # values do.
@@ -649,41 +696,14 @@ class MicroControllerInterface:
                 section = f"{module_section}.description"
                 code_dict.write_nested_value(variable_path=section, value=module.type_description)
 
-                # Adds placeholder variables to store instance ID codes, names, and descriptions. All instances are
-                # combined into lists for more optimized handling. These placeholders are then iteratively filled with
-                # information as the method loops through instances of the same type.
-                section = f"{module_section}.instance_ids"
-                code_dict.write_nested_value(variable_path=section, value=[])
-                section = f"{module_section}.instance_names"
-                code_dict.write_nested_value(variable_path=section, value=[])
-                section = f"{module_section}.instance_descriptions"
-                code_dict.write_nested_value(variable_path=section, value=[])
+            # For each module instance, adds its instance-specific information to the dictionary.
+            section = f"{module_section}.{module.instance_name}.code"
+            code_dict.write_nested_value(variable_path=section, value=module.module_id)
+            section = f"{module_section}.{module.instance_name}.description"
+            code_dict.write_nested_value(variable_path=section, value=module.instance_description)
 
-            # If the type information for the processed module has already been handled, adds its instance-specific
-            # information to the dictionary. Note, this is ALSO done for the module instance that was used to parse the
-            # type information.
-            section = f"{module_section}.instance_ids"
-            existing_values: list[np.uint8] = code_dict.read_nested_value(variable_path=section)
-            existing_values.append(module.module_id)
-            code_dict.write_nested_value(variable_path=section, value=existing_values)
-
-            section = f"{module_section}.instance_names"
-            existing_strings: list[str] = code_dict.read_nested_value(variable_path=section)
-            existing_strings.append(module.instance_name)
-            code_dict.write_nested_value(variable_path=section, value=existing_strings)
-
-            section = f"{module_section}.instance_descriptions"
-            existing_strings = code_dict.read_nested_value(variable_path=section)
-            existing_strings.append(module.instance_description)
-            code_dict.write_nested_value(variable_path=section, value=existing_strings)
-
-            # Also, for each instance, records whether additional processing flags were used for that instance.
-            section = f"{module_section}.unity_input"
-            code_dict.write_nested_value(variable_path=section, value=module.unity_input)
-            section = f"{module_section}.unity_output"
-            code_dict.write_nested_value(variable_path=section, value=module.unity_output)
-            section = f"{module_section}.queue_output"
-            code_dict.write_nested_value(variable_path=section, value=module.queue_output)
+            # Finally, adds the custom variables section for each instance by calling the appropriate method.
+            code_dict = module.write_instance_variables(code_dict)
 
         # Returns filled section dictionary to caller
         return code_dict
@@ -778,15 +798,15 @@ class MicroControllerInterface:
         self._input_queue.put(self._disable_locks)
 
     def send_message(
-            self,
-            message: (
-                    ModuleParameters
-                    | OneOffModuleCommand
-                    | RepeatedModuleCommand
-                    | DequeueModuleCommand
-                    | KernelParameters
-                    | KernelCommand
-            ),
+        self,
+        message: (
+            ModuleParameters
+            | OneOffModuleCommand
+            | RepeatedModuleCommand
+            | DequeueModuleCommand
+            | KernelParameters
+            | KernelCommand
+        ),
     ) -> None:
         """Sends the input arbitrary message structure to the connected Microcontroller.
 
@@ -952,18 +972,18 @@ class MicroControllerInterface:
 
     @staticmethod
     def _runtime_cycle(
-            controller_id: np.uint8,
-            modules: tuple[ModuleInterface, ...],
-            input_queue: MPQueue,  # type: ignore
-            output_queue: MPQueue,  # type: ignore
-            logger_queue: MPQueue,  # type: ignore
-            terminator_array: SharedMemoryArray,
-            usb_port: str,
-            baudrate: int,
-            payload_size: int,
-            unity_ip: str,
-            unity_port: int,
-            verbose: bool = False,
+        controller_id: np.uint8,
+        modules: tuple[ModuleInterface, ...],
+        input_queue: MPQueue,  # type: ignore
+        output_queue: MPQueue,  # type: ignore
+        logger_queue: MPQueue,  # type: ignore
+        terminator_array: SharedMemoryArray,
+        usb_port: str,
+        baudrate: int,
+        payload_size: int,
+        unity_ip: str,
+        unity_port: int,
+        verbose: bool = False,
     ) -> None:
         """The main communication loop runtime of the class.
 
@@ -2163,7 +2183,7 @@ class MicroControllerInterface:
         class remote Process from being started again. This method allows manually removing that buffer to reset the
         system.
 
-        This method is designed to do nothing, if the buffer with the same name as the microcontroller does not exist.
+        This method is designed to do nothing if the buffer with the same name as the microcontroller does not exist.
         """
         try:
             buffer = SharedMemory(name=f"{self._controller_name}_terminator_array", create=False)

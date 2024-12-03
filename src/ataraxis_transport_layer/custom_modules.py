@@ -1,6 +1,7 @@
 """This module provides ModuleInterface implementations for teh default modules shipped with the
 AtaraxisMicroController library. Primarily, they are included to showcase the correct usage of this library.
 """
+
 import math
 from json import dumps
 from multiprocessing import Queue as MPQueue
@@ -24,7 +25,7 @@ class TTLModule(ModuleInterface):
     """The class that exposes methods for interfacing with TTLModule instances running on Ataraxis MicroControllers.
 
     TTLModule facilitates exchanging Transistor-to-Transistor Logic (TTL) signals between various hardware systems, such
-    as microcontrollers, cameras and other hardware. The module contains methods for both sending and receiving the TTL
+    as microcontrollers, cameras, and other hardware. The module contains methods for both sending and receiving the TTL
     pulses, but each TTLModule instance can only do one of these functions at a time.
 
     Args:
@@ -58,9 +59,9 @@ class TTLModule(ModuleInterface):
         return
 
     def send_to_queue(
-            self,
-            message: ModuleData | ModuleState,
-            queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -142,7 +143,7 @@ class TTLModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-            self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
+        self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
     ) -> ModuleParameters:
         """Sets PC-addressable runtime parameters of the module instance running on the microcontroller.
 
@@ -164,7 +165,7 @@ class TTLModule(ModuleInterface):
         )
 
     def send_pulse(
-            self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
+        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Sends a one-off or recurrent (repeating) TTL pulse using the digital pin managed by the module instance.
 
@@ -276,30 +277,35 @@ class EncoderModule(ModuleInterface):
         unity_output: Determines whether the EncoderModule instance should send the motion data to Unity.
         motion_topic: The MQTT topic to which the instance should send the motion data received from the
             microcontroller.
-        encoder_ppr: The resolution of the managed quadrature encoder, in Pulses per Revolution (PPR). Specifically,
+        encoder_ppr: The resolution of the managed quadrature encoder, in Pulses Per Revolution (PPR). Specifically,
             this is the number of quadrature pulses the encoder emits per full 360-degree rotation. If this number is
-            not known, provide a 'dummy' value and use get_ppr() command to estimate the PPR using the index channel
+            not known, provide a placeholder value and use get_ppr() command to estimate the PPR using the index channel
             of the encoder.
-        motion_diameter: The diameter of the rotating object connected to the encoder, in cm. This is used to
+        object_diameter: The diameter of the rotating object connected to the encoder, in cm. This is used to
             convert encoder pulses into rotated distance in cm.
+        cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the circular object
+             into the Unity units. This value works together with object_diameter and encoder_ppr to translate raw
+             encoder pulses received from the microcontroller into Unity-compatible units, used by the game engine to
+             move the VirtualReality agent.
 
     Attributes:
         _motion_topic: Stores the MQTT motion topic.
         _ppr: Stores the resolution of the managed quadrature encoder.
-        _circumference: Stores the circumference of the object connected to the encoder.
-        _cm_per_pulse: Stores the conversion factor to translate encoder pulses into centimeters traveled by the
-            object.
+        _object_diameter: Stores the diameter of the object connected to the encoder.
+        _cm_per_unity_unit: Stores the conversion factor that translates centimeters into Unity units.
+        _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
     """
 
     def __init__(
-            self,
-            module_id: np.uint8,
-            instance_name: str,
-            instance_description: str,
-            unity_output: bool = True,
-            motion_topic: str = "LinearTreadmill/Data",
-            encoder_ppr: int = 8192,
-            motion_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
+        self,
+        module_id: np.uint8,
+        instance_name: str,
+        instance_description: str,
+        unity_output: bool = True,
+        motion_topic: str = "LinearTreadmill/Data",
+        encoder_ppr: int = 8192,
+        object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
+        cm_per_unity_unit: float = 10.0,
     ) -> None:
         # Statically defines the module type description.
         type_description = (
@@ -323,10 +329,15 @@ class EncoderModule(ModuleInterface):
         # Saves additional data to class attributes.
         self._motion_topic = motion_topic
         self._ppr = encoder_ppr
-        self._circumference = math.pi * motion_diameter
+        self._object_diameter = object_diameter
+        self._cm_per_unity_unit = cm_per_unity_unit
 
-        # Computes the circumference of the motion
-        self._cm_per_pulse = math.pi * motion_diameter / encoder_ppr
+        # Computes the conversion factor to translate encoder pulses into unity units. Round to 12 decimal places for
+        # consistency and uses 12 decimal places to ensure repeatability and precision.
+        self._unity_unit_per_pulse = np.round(
+            a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
+            decimals=12,
+        )
 
     def send_to_unity(self, message: ModuleState | ModuleData, unity_communication: UnityCommunication) -> None:
         # If the incoming message is not a CCW or CW motion report, aborts processing
@@ -337,9 +348,12 @@ class EncoderModule(ModuleInterface):
         # and CCW as positive.
         sign = 1 if message.event == np.uint8(51) else -1
 
-        # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to degrees using the
-        # PPR.
-        signed_motion = ((float(message.data_object) * self._cm_per_pulse)/10) * sign  # type: ignore
+        # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to Unity units
+        # using the precomputed conversion factor. Uses float64 and rounds to 12 decimal places for consistency and
+        # precision
+        signed_motion = np.round(
+            a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign, decimals=12  # type: ignore
+        )
 
         # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
         # byte-string.
@@ -350,9 +364,9 @@ class EncoderModule(ModuleInterface):
         unity_communication.send_data(topic=self._motion_topic, payload=byte_array)
 
     def send_to_queue(
-            self,
-            message: ModuleData | ModuleState,
-            queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -455,11 +469,79 @@ class EncoderModule(ModuleInterface):
 
         return code_map
 
+    def write_instance_variables(self, code_map: NestedDictionary) -> NestedDictionary:
+        # Instance variables section
+        module_section = f"{self.type_name}_module.{self.instance_name}.instance_variables"
+
+        # Unity input
+        section = f"{module_section}.unity_input.value"
+        code_map.write_nested_value(variable_path=section, value=self.unity_input)
+        section = f"{module_section}.unity_input.description"
+        description = (
+            "Determines whether the module instance was configured to receive and process commands sent from Unity "
+            "game engine running the Virtual Reality task."
+        )
+        code_map.write_nested_value(variable_path=section, value=description)
+        section = f"{module_section}.unity_input.topics"
+        code_map.write_nested_value(variable_path=section, value=self.unity_input_topics)
+
+        # Unity output
+        section = f"{module_section}.unity_output.value"
+        code_map.write_nested_value(variable_path=section, value=self.unity_output)
+        section = f"{module_section}.unity_output.description"
+        description = (
+            "Determines whether the module instance was configured to send received data to Unity game engine running "
+            "the Virtual Reality task."
+        )
+        code_map.write_nested_value(variable_path=section, value=description)
+
+        # Queue output
+        section = f"{module_section}.queue_output.value"
+        code_map.write_nested_value(variable_path=section, value=self.queue_output)
+        section = f"{module_section}.queue_output.description"
+        description = (
+            "Determines whether the module instance was configured to send received data to other concurrently active "
+            "processes via the output_queue of the managing MicroControllerInterface class."
+        )
+        code_map.write_nested_value(variable_path=section, value=description)
+
+        # Encoder ppr
+        section = f"{module_section}.encoder_ppr.value"
+        code_map.write_nested_value(variable_path=section, value=self._ppr)
+        section = f"{module_section}.encoder_ppr.description"
+        description = "The number of pulses the encoder makes per 360-degree (full) revolution of the connected object."
+        code_map.write_nested_value(variable_path=section, value=description)
+
+        # Object diameter
+        section = f"{module_section}.object_diameter.value"
+        code_map.write_nested_value(variable_path=section, value=self._object_diameter)
+        section = f"{module_section}.object_diameter.description"
+        description = "The diameter of the connected object, whose rotation is tracked via the encoder."
+        code_map.write_nested_value(variable_path=section, value=description)
+
+        # Centimeters per Unity Unit
+        section = f"{module_section}.cm_per_unity_unit.value"
+        code_map.write_nested_value(variable_path=section, value=self._cm_per_unity_unit)
+        section = f"{module_section}.cm_per_unity_unit.description"
+        description = "The number of centimeters represented by each Unity dimension unit."
+        code_map.write_nested_value(variable_path=section, value=description)
+
+        # Pulse to Unity unit conversion factor
+        section = f"{module_section}.unity_unit_per_pulse.value"
+        code_map.write_nested_value(variable_path=section, value=self._unity_unit_per_pulse)
+        section = f"{module_section}.unity_unit_per_pulse.description"
+        description = (
+            "The number of Unity units that correspond to a single encoder pulse. This is the conversion factor used "
+            "to translate encoder pulses into Unity units."
+        )
+        code_map.write_nested_value(variable_path=section, value=description)
+        return code_map
+
     def set_parameters(
-            self,
-            report_ccw: np.bool = np.bool(True),
-            report_cw: np.bool = np.bool(True),
-            delta_threshold: np.uint32 = np.uint32(10),
+        self,
+        report_ccw: np.bool | bool = np.bool(True),
+        report_cw: np.bool | bool = np.bool(True),
+        delta_threshold: np.uint32 | int = np.uint32(10),
     ) -> ModuleParameters:
         """Sets PC-addressable parameters of the module instance running on the microcontroller.
 
@@ -469,7 +551,8 @@ class EncoderModule(ModuleInterface):
             delta_threshold: The minimum number of pulses required for the motion to be reported. Depending on encoder
                 resolution, this allows setting the 'minimum rotation distance' threshold for reporting. Note, if the
                 change is 0 (the encoder readout did not change), it will not be reported, regardless of the
-                value of this parameter.
+                value of this parameter. Sub-threshold motion will be aggregated (summed) across readouts until a
+                significant overall change in position is reached to justify reporting it to the PC.
 
         Returns:
             The ModuleParameters message to be sent to the microcontroller.
@@ -478,7 +561,7 @@ class EncoderModule(ModuleInterface):
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
-            parameter_data=(report_ccw, report_cw, delta_threshold),
+            parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
         )
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
@@ -516,7 +599,7 @@ class EncoderModule(ModuleInterface):
             return_code=np.uint8(0),
             command=np.uint8(1),
             noblock=np.bool(False),
-            cycle_delay=repetition_delay,
+            cycle_delay=np.uint32(repetition_delay),
         )
 
     def reset_pulse_count(self) -> OneOffModuleCommand:
@@ -555,8 +638,8 @@ class EncoderModule(ModuleInterface):
             The command is optimized for the object to be rotated with a human hand at a steady rate, so it delays
             further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, the object
             should not make more than 10 rotations per second and ideally should stay within 1-3 rotations per second.
-            It is also possible to evaluate motor-assisted rotation, provided that the motor does not leak the
-            magnetic field that would interfere with the index signalling from the encoder and spins the object at the
+            It is also possible to evaluate motor-assisted rotation if the motor does not leak the
+            magnetic field that would interfere with the index signaling from the encoder and spins the object at the
             speed discussed above.
         """
         return OneOffModuleCommand(
@@ -607,9 +690,9 @@ class BreakModule(ModuleInterface):
         return
 
     def send_to_queue(
-            self,
-            message: ModuleData | ModuleState,
-            queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -757,12 +840,12 @@ class SensorModule(ModuleInterface):
     """
 
     def __init__(
-            self,
-            module_id: np.uint8,
-            instance_name: str,
-            instance_description: str,
-            unity_output: bool = True,
-            sensor_topic: str = "LickPort/",
+        self,
+        module_id: np.uint8,
+        instance_name: str,
+        instance_description: str,
+        unity_output: bool = True,
+        sensor_topic: str = "LickPort/",
     ) -> None:
         # Statically defines the TTLModule type description.
         type_description = (
@@ -793,9 +876,9 @@ class SensorModule(ModuleInterface):
         unity_communication.send_data(topic=self._sensor_topic, payload=None)
 
     def send_to_queue(
-            self,
-            message: ModuleData | ModuleState,
-            queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -843,11 +926,11 @@ class SensorModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-            self,
-            lower_threshold: np.uint16 = np.uint16(0),
-            upper_threshold: np.uint16 = np.uint16(65535),
-            delta_threshold: np.uint16 = np.uint16(1),
-            averaging_pool_size: np.uint8 = np.uint8(0),
+        self,
+        lower_threshold: np.uint16 = np.uint16(0),
+        upper_threshold: np.uint16 = np.uint16(65535),
+        delta_threshold: np.uint16 = np.uint16(1),
+        averaging_pool_size: np.uint8 = np.uint8(0),
     ) -> ModuleParameters:
         """Sets PC-addressable parameters of the module instance running on the microcontroller.
 
@@ -935,11 +1018,11 @@ class ValveModule(ModuleInterface):
     """
 
     def __init__(
-            self,
-            module_id: np.uint8,
-            instance_name: str,
-            instance_description: str,
-            input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
+        self,
+        module_id: np.uint8,
+        instance_name: str,
+        instance_description: str,
+        input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
     ) -> None:
         # Statically defines the TTLModule type description.
         type_description = (
@@ -965,9 +1048,9 @@ class ValveModule(ModuleInterface):
         return
 
     def send_to_queue(
-            self,
-            message: ModuleData | ModuleState,
-            queue: MPQueue,  # type: ignore
+        self,
+        message: ModuleData | ModuleState,
+        queue: MPQueue,  # type: ignore
     ) -> None:
         """Not used."""
         return
@@ -1045,10 +1128,10 @@ class ValveModule(ModuleInterface):
         return code_map
 
     def set_parameters(
-            self,
-            pulse_duration: np.uint32 = np.uint32(10000),
-            calibration_delay: np.uint32 = np.uint32(10000),
-            calibration_count: np.uint16 = np.uint16(1000),
+        self,
+        pulse_duration: np.uint32 = np.uint32(10000),
+        calibration_delay: np.uint32 = np.uint32(10000),
+        calibration_count: np.uint16 = np.uint16(1000),
     ) -> ModuleParameters:
         """Sets PC-addressable runtime parameters of the module instance running on the microcontroller.
 
@@ -1072,7 +1155,7 @@ class ValveModule(ModuleInterface):
         )
 
     def send_pulse(
-            self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
+        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Delivers the predetermined amount of gas or fluid once or repeatedly (recurrently) by opening and closing
         (pulsing) teh valve.
