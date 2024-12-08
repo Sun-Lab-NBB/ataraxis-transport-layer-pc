@@ -1,46 +1,14 @@
 """Contains tests for classes and methods stored inside the helper_modules module."""
 
-import re
-from enum import Enum
-import textwrap
-
 import numpy as np
 import pytest
+from ataraxis_base_utilities import error_format
 
 from ataraxis_transport_layer.helper_modules import (
     SerialMock,
     CRCProcessor,
     COBSProcessor,
 )
-
-
-class StatusCode(Enum):
-    STANDBY = 11
-    PAYLOAD_TOO_SMALL_ERROR = 12
-    PAYLOAD_TOO_LARGE_ERROR = 13
-    INVALID_PAYLOAD_DATATYPE_ERROR = 14
-    PAYLOAD_ENCODED = 15
-    PACKET_TOO_SMALL_ERROR = 16
-    PACKET_TOO_LARGE_ERROR = 17
-    DELIMITER_NOT_FOUND_ERROR = 18
-    DELIMITER_FOUND_TOO_EARLY_ERROR = 19
-    INVALID_PACKET_DATATYPE_ERROR = 20
-    PAYLOAD_DECODED = 21
-
-
-def error_format(message: str) -> str:
-    """Formats the input message to match the default Console format and escapes it using re, so that it can be used to
-    verify raised exceptions.
-
-    This method is used to set up pytest 'match' clauses to verify raised exceptions.
-
-    Args:
-        message: The message to format and escape, according to standard Ataraxis testing parameters.
-
-    Returns:
-        Formatted and escape message that can be used as the 'match' argument of pytest.raises() method.
-    """
-    return re.escape(textwrap.fill(message, width=120, break_long_words=False, break_on_hyphens=False))
 
 
 @pytest.mark.parametrize(
@@ -85,7 +53,11 @@ def test_cobs_processor_encode_decode(input_buffer, encoded_buffer) -> None:
 def test_cobs_processor_repr() -> None:
     """Verifies the __repr__ method of the COBSProcessor class."""
     processor = COBSProcessor()
-    assert repr(processor) == "COBSProcessor()"
+    message = (
+        "COBSProcessor(status=11, maximum_payload_size=254, minimum_payload_size=1, maximum_packet_size=256, "
+        "minimum_packet_size=3)"
+    )
+    assert repr(processor) == message
 
 
 def test_crc_processor_repr():

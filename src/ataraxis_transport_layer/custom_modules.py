@@ -16,7 +16,6 @@ from .communication import (
     UnityCommunication,
     OneOffModuleCommand,
     RepeatedModuleCommand,
-    prototypes,
 )
 from .microcontroller import ModuleInterface
 

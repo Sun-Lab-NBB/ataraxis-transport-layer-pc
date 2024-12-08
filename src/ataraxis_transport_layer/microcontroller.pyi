@@ -17,8 +17,14 @@ from .communication import (
     SerialCommunication as SerialCommunication,
     DequeueModuleCommand as DequeueModuleCommand,
     RepeatedModuleCommand as RepeatedModuleCommand,
+<<<<<<< HEAD
+<<<<<<< HEAD
     protocols as protocols,
     prototypes as prototypes,
+=======
+>>>>>>> 5b8062e (Added Communication module tests)
+=======
+>>>>>>> origin/main
 )
 
 class ModuleInterface:
@@ -468,6 +474,8 @@ class MicroControllerInterface:
             The NestedDictionary class instance that contains the microcontroller-specific information. This dictionary
             can be retrieved by accessing the microcontroller_map_section attribute.
         """
+<<<<<<< HEAD
+<<<<<<< HEAD
     @property
     def general_map_section(self) -> NestedDictionary:
         """Returns the NestedDictionary instance that stores the general information about the byte-codes used by
@@ -490,6 +498,10 @@ class MicroControllerInterface:
         Notes:
             This method needs to be called once for each microcontroller.
         """
+=======
+>>>>>>> 5b8062e (Added Communication module tests)
+=======
+>>>>>>> origin/main
     def identify_controller(self) -> None:
         """Prompts the connected MicroController to identify itself by returning its id code."""
     def reset_controller(self) -> None:
@@ -586,6 +598,8 @@ class MicroControllerInterface:
             verbose: A flag that determines whether the contents of the incoming and outgoing messages should be
                 printed to console. This is only used during debugging and should be disabled during most runtimes.
         """
+<<<<<<< HEAD
+<<<<<<< HEAD
     @classmethod
     def _write_kernel_status_codes(cls, code_dictionary: NestedDictionary) -> NestedDictionary:
         """Fills the kernel.status_codes section of the core_codes_map dictionary with data.
@@ -740,6 +754,10 @@ class MicroControllerInterface:
         Returns:
             The updated dictionary with Communication status codes information filled.
         """
+=======
+>>>>>>> 5b8062e (Added Communication module tests)
+=======
+>>>>>>> origin/main
     def _vacate_shared_memory_buffer(self) -> None:
         """Clears the SharedMemory buffer with the same name as the one used by the class.
 
