@@ -12,9 +12,12 @@ from .communication import (
     OneOffModuleCommand as OneOffModuleCommand,
     RepeatedModuleCommand as RepeatedModuleCommand,
 <<<<<<< HEAD
+<<<<<<< HEAD
     prototypes as prototypes,
 =======
 >>>>>>> 5b8062e (Added Communication module tests)
+=======
+>>>>>>> origin/main
 )
 from .microcontroller import ModuleInterface as ModuleInterface
 
