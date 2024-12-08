@@ -740,9 +740,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
 
     protocol._allow_start_byte_errors = True
 
-    error_message = (
-        r"Failed to parse the incoming serial packet data\. Unable to find the start_byte \(129\) value among the bytes stored inside\s*the serial buffer\."
-    )
+    error_message = r"Failed to parse the incoming serial packet data\. Unable to find the start_byte \(129\) value among the bytes stored inside\s*the serial buffer\."
 
     protocol._port.rx_buffer = empty_buffer.tobytes()
     with pytest.raises(
@@ -1434,6 +1432,7 @@ def test_data_with_start_byte_and_delimiter():
 
 
 from ataraxis_transport_layer.helper_modules import CRCProcessor, COBSProcessor
+
 
 def test_validate_packet_success():
     """Test that _validate_packet successfully validates and decodes a packet."""

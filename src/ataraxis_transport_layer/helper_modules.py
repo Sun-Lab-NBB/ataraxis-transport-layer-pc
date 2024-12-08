@@ -1188,10 +1188,9 @@ class SerialMock:
     class that are relevant to testing, such as reading and writing data, while simplifying the overall behavior.
 
     Key differences from `Serial`:
-        - The `tx_buffer` and `rx_buffer` attributes are exposed directly, allowing test cases to verify the state of
-        transmitted and received data.
-        - The class only supports methods used by `SerialTransportLayer` for testing, and omits other methods not
-        relevant to this specific use case.
+        The `tx_buffer` and `rx_buffer` attributes are exposed directly, allowing test cases to verify the state of
+        transmitted and received data. The class only supports methods used by `SerialTransportLayer` for testing, and
+        omits other methods not relevant to this specific use case.
 
     Attributes:
         is_open: Boolean flag indicating if the mock serial port is open.

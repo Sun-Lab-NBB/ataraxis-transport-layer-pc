@@ -14,3 +14,10 @@ Helper Modules
    :members:
    :undoc-members:
    :show-inheritance:
+
+Communication
+=============
+.. automodule:: ataraxis_transport_layer.communication
+   :members:
+   :undoc-members:
+   :show-inheritance:
