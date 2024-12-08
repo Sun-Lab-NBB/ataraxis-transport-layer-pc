@@ -11,7 +11,10 @@ from .communication import (
     UnityCommunication as UnityCommunication,
     OneOffModuleCommand as OneOffModuleCommand,
     RepeatedModuleCommand as RepeatedModuleCommand,
+<<<<<<< HEAD
     prototypes as prototypes,
+=======
+>>>>>>> 5b8062e (Added Communication module tests)
 )
 from .microcontroller import ModuleInterface as ModuleInterface
 

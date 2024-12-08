@@ -11,9 +11,8 @@ if __name__ == "__main__":
     # Initializes and starts the logger
     output_directory = Path("/home/cybermouse/Desktop/TestLog")
 
-    DataLogger._vacate_shared_memory_buffer()
-
     logger = DataLogger(output_directory)
+    logger._vacate_shared_memory_buffer()
     logger.start()
 
     # Initializes the tested module interface
@@ -56,7 +55,7 @@ if __name__ == "__main__":
 
     # Shuts down the communication interface and the logger
     interface.stop()
-    logger.shutdown()
+    logger.stop()
 
     # Compresses and lists the logged data. This is done mostly to verify the integrity of the logs by printing them to
     # terminal.
