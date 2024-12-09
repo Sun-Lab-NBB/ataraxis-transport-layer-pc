@@ -44,56 +44,58 @@ from .communication import (
 class ModuleInterface:
     """The base class from which all custom ModuleInterface classes should inherit.
 
-    ModuleInterface classes encapsulate module-specific parameters and data handling methods which are used by the
-    MicroControllerInterface class to communicate with individual hardware-controlling modules running on the
-    microcontroller. Overall, this arrangement is similar to how custom modules inherit from the (base) Module class in
-    the AtaraxisMicroController (AXMC) library.
-
-    Due to a high degree of custom module variability, it is currently not possible to provide a 'one-fits-all' Module
-    interface that is also highly efficient for real time communication. Therefore, similar to AXMC library, the
-    interface for each custom module has to be implemented separately on a need-base method. The (base) class exposes
-    the static API that MicroControllerInterface class can use to integrate each custom interface implementation with
-    the general communication runtime cycle. To make this integration possible, this class declares a number of
-    abstract (pure virtual) methods that developers have to implement for their interfaces. Follow the implementation
-    guidelines in the docstrings of each abstract method and check the default modules included with the library
-    distribution for guidance.
+    Inheriting from this class grants all subclasses the static API that the MicroControllerInterface class uses to
+    interface with specific modules. In addition to the inherited API, each ModuleInterface subclass should encapsulate
+    module-specific parameters and data handling methods unique for each module family. See Notes for more details.
 
     Notes:
+        Due to a high degree of custom module variability, it is currently not possible to provide a 'one-fits-all'
+        Module interface that is also highly efficient for real time communication. Therefore, similar to
+        ataraxis-micro-controller (AXMC) library, the interface for each custom module has to be implemented separately
+        on a need-base method. The (base) class exposes the static API that MicroControllerInterface class can use to
+        integrate each custom interface implementation with the general communication runtime cycle. To make this
+        integration possible, this class defines some abstract (pure virtual) methods that developers have to implement
+        for their interfaces. Follow the implementation guidelines in the docstrings of each abstract method and check
+        the default modules included with the library distribution for guidance.
+
         When inheriting from this class, remember to call the parent's init method in the child class init method by
         using 'super().__init__()'! If this is not done, the MicroControllerInterface class will likely not be able to
         properly interact with your ModuleInterface!
 
         All data received from or sent to the microcontroller is automatically logged as byte-serialized numpy arrays.
-        Therefore, if you do not need any other processing steps, such as sending to or receiving data from Unity,
+        Therefore, if you do not need any additional processing steps, such as sending to or receiving data from Unity,
         do not enable any custom processing flags. You will, however, have to implement all abstract methods, even if
         the class instance does not use them due to its flag-configuration.
 
     Args:
-        module_type: The byte id-code of the type (family) of Modules managed by this interface. This has to match the
-            code used by the module implementation in AXMC. Note, valid byte-codes range from 1 to 255.
-        type_name: The name of the Module type (family) managed by this interface, 'e.g.: Rotary_Encoder'. This name is
-            mostly used to better identify the module type to humans.
-        module_id: The instance byte-code ID of the module. This is used to identify unique instances of the same
-            module type, such as different rotary encoders if more than one is used concurrently. Note, valid
-            byte-codes range from 1 to 255.
-        instance_name: The name of the specific module instance, e.g.: 'Left_Corner_Touch_Sensor'. These names are used
-            to better identify different type instances to human operators that will work with the collected runtime
-            data.
-        unity_input_topics: A list of MQTT topics to which this module should subscribe to receive commands from Unity.
-            If the module should not receive commands from Unity, set to None. This list will be used to initialize the
-            UnityCommunication class instance to listen to the requested topics. If the list is provided, it is
-            expected that get_from_unity() method implements the logic for accessing and handling the incoming commands.
-        unity_output: Determines whether to send received data to Unity via the MQTT protocol. If this flag is True, it
-            is expected that send_to_unity() method implements the logic for sending the necessary data to Unity.
-        queue_output: Determines whether to send received data to other processes. If this flag is True, it is expected
-            that send_to_queue() method implements the logic for sending the necessary data to the multiprocessing queue
-            which pipes it to other processes.
+        module_type: The id-code that describes the broad type (family) of Modules managed by this interface class. This
+            value has to match the code used by the module implementation on the microcontroller. Valid byte-codes range
+            from 1 to 255.
+        type_name: The human-readable name for the type (family) of Modules managed by this interface class, e.g.:
+            'Rotary_Encoder'. This name is used in messages and some log files to help human operators in identifying
+            the module family.
+        module_id: The code that identifies the specific Module instance managed by the Interface class instance. This
+            is used to identify unique instances of the same module family, such as different rotary encoders if more
+            than one is used at the same time. Valid byte-codes range from 1 to 255.
+        instance_name: The human-readable name for the specific module instance, e.g.: 'Left_Corner_Touch_Sensor'. This
+            name is used in messages and some log files to help human operators in identifying the module instance.
+        unity_input_topics: A list of MQTT topics used by Unity to send commands to the module accessible through this
+            Interface instance. If the module should not receive commands from Unity, set to None. This list will be
+            used to initialize the UnityCommunication class instance to monitor the requested topics. If the module
+            supports receiving commands from Unity, use get_from_unity() method to implement the logic for accessing
+            and handling the incoming commands.
+        unity_output: Determines whether the module accessible through this Interface instance sends data to Unity. If
+            the module supports sending data to Unity, use send_to_unity() method to implement the logic for
+            pre-processing and sending data to Unity.
+        queue_output: Determines whether the module accessible through this Interface instance sends data to other
+            processes. If the module supports sending data to other processes, use send_to_queue() method to implement
+            the logic for pre-processing and sending data to other processes.
 
     Attributes:
         _module_type: Stores the type (family) of the interfaced module.
-        _type_name: Stores a name of the module type (family).
-        _module_id: Stores specific id of the interfaced module within the broader type (family).
-        _instance_name: Stores the name of the specific module instance.
+        _type_name: Stores the human-readable name of the module type (family).
+        _module_id: Stores the specific module instance ID within the broader type (family).
+        _instance_name: Stores the human-readable name of the specific module instance.
         _type_id: Stores the type and id combined into a single uint16 value. This value should be unique for all
             possible type-id pairs and is used to ensure that each used module instance has a unique ID-type
             combination.
@@ -103,7 +105,7 @@ class ModuleInterface:
         _unity_input_topics: Stores the list of Unity topics to monitor for incoming commands.
 
     Raises:
-        ValueError: if the input module_type and module_id codes are outside the valid range of values.
+        TypeError: If module_type or module_id are not unsigned integers or are set to invalid byte values.
     """
 
     def __init__(
@@ -117,36 +119,37 @@ class ModuleInterface:
         unity_output: bool = False,
         queue_output: bool = False,
     ) -> None:
-        # Verifies input byte-codes for validity.
-        if module_type < 1:
+        # Ensures that input byte-codes use valid value ranges
+        if not isinstance(module_type, np.uint8) or not 1 <= module_type <= 255:
             message = (
-                f"Invalid 'module_type' argument value {module_type} encountered when initializing the ModuleInterface "
-                f"class for {type_name} Modules. Valid type-codes range from 1 to 255."
+                f"Unable to initialize the ModuleInterface instance for module {instance_name} of type {type_name}. "
+                f"Expected an unsigned integer value between 1 and 255 for 'module_type' argument, but encountered "
+                f"{module_type} of type {type(module_type).__name__}."
             )
-            console.error(message=message, error=ValueError)
-        if module_id < 1:
+            console.error(message=message, error=TypeError)
+        if not isinstance(module_id, np.uint8) or not 1 <= module_id <= 255:
             message = (
-                f"Invalid 'module_id' argument value {module_id} encountered when initializing the ModuleInterface "
-                f"class for {type_name} Modules. Valid id-codes range from 1 to 255."
+                f"Unable to initialize the ModuleInterface instance for module {instance_name} of type {type_name}. "
+                f"Expected an unsigned integer value between 1 and 255 for 'module_id' argument, but encountered "
+                f"{module_id} of type {type(module_id).__name__}."
             )
-            console.error(message=message, error=ValueError)
+            console.error(message=message, error=TypeError)
 
-        # Module Type. Should be the same for all instances of this type
+        # Saves type and ID data into class attributes
         self._module_type: np.uint8 = module_type
         self._type_name: str = type_name
-
-        # Module Instance. This should be unique for each instance within the same type
         self._module_id: np.uint8 = module_id
         self._instance_name: str = instance_name
 
-        # Combines type and ID into a 16-bit value. This is used to ensure every module instance has a unique
-        # ID + Type combination. This method is position-aware, which avoids the issue of reverse pairs giving the same
-        # resultant value(e.g.: 4-5 != 5-4)
+        # Combines type and ID codes into a 16-bit value. This is used to ensure every module instance has a unique
+        # ID + Type combination. This method is position-aware, so inverse type-id pairs will be coded as different
+        # values e.g.: 4-5 != 5-4
         self._type_id: np.uint16 = np.uint16(
             (self._module_type.astype(np.uint16) << 8) | self._module_id.astype(np.uint16)
         )
 
-        # Additional processing flags. Unity input is set based on whether there are input / output topics
+        # Additional processing flags. Unity input is set based on whether there are input topics, other flags are
+        # boolean and obtained from input arguments.
         self._unity_input_topics: tuple[str, ...] = unity_input_topics if unity_input_topics is not None else tuple()
         self._unity_input: bool = True if len(self._unity_input_topics) > 0 else False
         self._unity_output: bool = unity_output if isinstance(unity_output, bool) else False
@@ -155,9 +158,10 @@ class ModuleInterface:
     def __repr__(self) -> str:
         """Returns the string representation of the ModuleInterface instance."""
         message = (
-            f"ModuleInterface(type_code={self._module_type}, type_name={self._type_name}, id_code={self._module_id}, "
-            f"instance_name={self._instance_name}, unity_output={self._unity_output}, unity_input={self._unity_input}, "
-            f"queue_output={self._queue_output}, unity_input_topics={self._unity_input_topics})"
+            f"ModuleInterface(type_code={self._module_type}, type_name={self._type_name}, "
+            f"instance_code={self._module_id}, instance_name={self._instance_name}, unity_output={self._unity_output}, "
+            f"unity_input={self._unity_input}, queue_output={self._queue_output}, "
+            f"unity_input_topics={self._unity_input_topics})"
         )
         return message
 
@@ -165,7 +169,7 @@ class ModuleInterface:
     def get_from_unity(
         self, topic: str, payload: bytes | bytearray
     ) -> OneOffModuleCommand | RepeatedModuleCommand | None:
-        """Packages and returns a command message structure to send to the microcontroller, based on the input Unity
+        """Packages and returns a ModuleCommand message to send to the microcontroller, based on the input Unity
         message topic and payload.
 
         Unity can issue module commands as it resolves the game logic of the Virtual Reality (VR) task. The initialized
@@ -329,11 +333,6 @@ class ModuleInterface:
         return self._type_name
 
     @property
-    def type_description(self) -> str:
-        """Returns the human-readable description of the interfaced module type (family)."""
-        return self._type_description
-
-    @property
     def module_id(self) -> np.uint8:
         """Returns the byte-code identifier (ID) of the specific interfaced module instance."""
         return self._module_id
@@ -342,11 +341,6 @@ class ModuleInterface:
     def instance_name(self) -> str:
         """Returns the human-readable name of the specific interfaced module instance."""
         return self._instance_name
-
-    @property
-    def instance_description(self) -> str:
-        """Returns the human-readable description of the interfaced module instance."""
-        return self._instance_description
 
     @property
     def unity_output(self) -> bool:

@@ -1,11 +1,10 @@
 """This module provides the SerialCommunication and UnityCommunication classes that enable communication between
-the PC, Unity game engine and microcontrollers running Ataraxis software.
+the PC, Unity game engine, and Arduino / Teensy microcontrollers running Ataraxis software.
 
 SerialCommunication supports the PC-MicroController communication over USB / UART interface, while UnityCommunication
 supports the Python-Unity communication over the MQTT protocol (virtual / real TCP sockets).
 
-Additionally, this module exposes the message and helper structure that are used to serialize and deserialize the
-transmitted data.
+Additionally, this module exposes message and helper structures used to serialize and deserialize the transmitted data.
 """
 
 from enum import IntEnum
