@@ -73,18 +73,12 @@ class ModuleInterface:
             code used by the module implementation in AXMC. Note, valid byte-codes range from 1 to 255.
         type_name: The name of the Module type (family) managed by this interface, 'e.g.: Rotary_Encoder'. This name is
             mostly used to better identify the module type to humans.
-        type_description: The description of the module type. This information is saved with other runtime ID
-            information and is primarily intended for human operators that will pwork with collected runtime data.
-            This description can be set to the same string when using multiple instances of the same type.
         module_id: The instance byte-code ID of the module. This is used to identify unique instances of the same
             module type, such as different rotary encoders if more than one is used concurrently. Note, valid
             byte-codes range from 1 to 255.
         instance_name: The name of the specific module instance, e.g.: 'Left_Corner_Touch_Sensor'. These names are used
             to better identify different type instances to human operators that will work with the collected runtime
             data.
-        instance_description: Additional description of the module instance. This can be used to provide further
-            instance information, such as the composition of its hardware or the location within the broader
-            experimental setup.
         unity_input_topics: A list of MQTT topics to which this module should subscribe to receive commands from Unity.
             If the module should not receive commands from Unity, set to None. This list will be used to initialize the
             UnityCommunication class instance to listen to the requested topics. If the list is provided, it is
@@ -98,10 +92,8 @@ class ModuleInterface:
     Attributes:
         _module_type: Stores the type (family) of the interfaced module.
         _type_name: Stores a name of the module type (family).
-        _type_description: Stores the description of the module type (family).
         _module_id: Stores specific id of the interfaced module within the broader type (family).
         _instance_name: Stores the name of the specific module instance.
-        _instance_description: Stores the description of the specific module instance.
         _type_id: Stores the type and id combined into a single uint16 value. This value should be unique for all
             possible type-id pairs and is used to ensure that each used module instance has a unique ID-type
             combination.
@@ -118,10 +110,8 @@ class ModuleInterface:
         self,
         module_type: np.uint8,
         type_name: str,
-        type_description: str,
         module_id: np.uint8,
         instance_name: str,
-        instance_description: str,
         unity_input_topics: tuple[str, ...] | None,
         *,
         unity_output: bool = False,
@@ -144,12 +134,10 @@ class ModuleInterface:
         # Module Type. Should be the same for all instances of this type
         self._module_type: np.uint8 = module_type
         self._type_name: str = type_name
-        self._type_description: str = type_description
 
         # Module Instance. This should be unique for each instance within the same type
         self._module_id: np.uint8 = module_id
         self._instance_name: str = instance_name
-        self._instance_description: str = instance_description
 
         # Combines type and ID into a 16-bit value. This is used to ensure every module instance has a unique
         # ID + Type combination. This method is position-aware, which avoids the issue of reverse pairs giving the same
@@ -161,8 +149,8 @@ class ModuleInterface:
         # Additional processing flags. Unity input is set based on whether there are input / output topics
         self._unity_input_topics: tuple[str, ...] = unity_input_topics if unity_input_topics is not None else tuple()
         self._unity_input: bool = True if len(self._unity_input_topics) > 0 else False
-        self._unity_output: bool = unity_output
-        self._queue_output: bool = queue_output
+        self._unity_output: bool = unity_output if isinstance(unity_output, bool) else False
+        self._queue_output: bool = queue_output if isinstance(queue_output, bool) else False
 
     def __repr__(self) -> str:
         """Returns the string representation of the ModuleInterface instance."""
@@ -287,49 +275,7 @@ class ModuleInterface:
         )
 
     @abstractmethod
-    def write_code_map(self, code_map: NestedDictionary) -> NestedDictionary:
-        """Updates the input code_map dictionary with module-type-specific status_codes, commands, and data_objects
-        sections.
-
-        This method is called by the MicroControllerInterface that manages the ModuleInterface to fill the shared
-        code_map dictionary with module-specific data. The code-map dictionary is a nested dictionary that maps various
-        byte-codes used during serial communication to meaningful names and human-friendly descriptions. In turn, this
-        information is used to transform logged data, which is stored as serialized byte-strings, into a format more
-        suitable for data analysis and long-term storage. Additionally, the map dictionaries act as a form of runtime
-        documentation that should always be included with the runtime-collected data during future data processing.
-
-        Notes:
-            This method should return a one-section dictionary with all data found under the modulename_module section.
-            So, if the name of the module was RotaryEncoder, all data should be saved under RotaryEncoder_module. For
-            this, use a '.'-delimited path which starts with section name, e.g.:
-            'RotaryEncoder_module.status_codes.kIdle'.
-
-            This method has to be the same for all interface of the same module type (family), and it is used to store
-            information expected to be the same for all instances of the same type. Therefore, this method
-            should fill all relevant module-type sections: commands, status_codes, and data_objects. This method will
-            only be called once for each unique module_type.
-
-            See MicroControllerInterface class for examples on how to write this method (and fill the code_map
-            dictionary). Note, if this method is not implemented properly, it may be challenging to decode the logged
-            data in the future.
-
-        Args:
-            code_map: The shared NestedDictionary instance that aggregates all information from a single
-                MicroControllerInterface class, including the information from all ModuleInterface instances managed by
-                the class.
-
-        Returns:
-            The updated NestedDictionary instance. It is assumed that all valid modules always update the input
-            dictionary as part of this method runtime.
-
-        """
-        raise NotImplementedError(
-            f"write_code_map method for {self._type_name} module interface must be implemented when subclassing the "
-            f"base ModuleInterface class."
-        )
-
-    @abstractmethod
-    def write_instance_variables(self, code_map: NestedDictionary) -> NestedDictionary:
+    def log_instance_variables(self, logger_queue: MPQueue) -> None:
         """Updates the input code_map dictionary with module-instance-specific runtime variables.
 
         This method allows writing instance-specific variables to the global code map. For example, this method can
@@ -701,7 +647,7 @@ class MicroControllerInterface:
             code_dict.write_nested_value(variable_path=section, value=module.instance_description)
 
             # Finally, adds the custom variables section for each instance by calling the appropriate method.
-            code_dict = module.write_instance_variables(code_dict)
+            code_dict = module.log_instance_variables(code_dict)
 
         # Returns filled section dictionary to caller
         return code_dict

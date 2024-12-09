@@ -242,7 +242,7 @@ class ModuleInterface:
 
         """
     @abstractmethod
-    def write_instance_variables(self, code_map: NestedDictionary) -> NestedDictionary:
+    def log_instance_variables(self, code_map: NestedDictionary) -> NestedDictionary:
         """Updates the input code_map dictionary with module-instance-specific runtime variables.
 
         This method allows writing instance-specific variables to the global code map. For example, this method can
