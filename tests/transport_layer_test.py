@@ -730,7 +730,7 @@ def test_serial_transfer_protocol_data_transmission_errors():
 
     protocol._port.rx_buffer = empty_buffer.tobytes()
     error_message = (
-        r"Failed to parse the incoming serial packet data\. Unable to find the start_byte "
+        "Failed to parse the incoming serial packet data. Unable to find the start_byte "
         r"\(129\) value among the bytes stored inside\s+the serial buffer\."
     )
     with pytest.raises(
@@ -2263,43 +2263,7 @@ def test_receive_data_success():
             assert protocol._bytes_in_reception_buffer == 10
 
 
-#
-# def test_construct_packet_error():
-#     """Test for handling unexpected errors in the _construct_packet method."""
-#
-#     # Initialize protocol instance for testing
-#     protocol = SerialTransportLayer(port="COM7", baudrate=115200, test_mode=True)
-#
-#     # Mock the _construct_packet to return an empty packet (size = 0), simulating a failure
-#     with patch.object(protocol, "_construct_packet", return_value=np.array([])):
-#         # Mock the COBS processor to return a valid packet after the failure
-#         with patch.object(protocol._cobs_processor, "encode_payload", return_value=np.array([1, 2, 3])):
-#             # Mock the CRC processor to return a valid checksum
-#             with patch.object(protocol._crc_processor, "calculate_crc_checksum", return_value=1234):
-#                 # Patch the Console instance's error method to capture its usage and arguments
-#                 with patch.object(Console, "error") as mock_error:
-#                     # Use pytest.raises to expect a RuntimeError
-#                     with pytest.raises(
-#                         RuntimeError,
-#                         match="Failed to send the payload data. Unexpected error encountered for _construct_packet",
-#                     ):
-#                         protocol.send_data()
-#
-#                     # Construct the expected error messages
-#                     expected_calls = [
-#                         call(
-#                             "Unable to convert the CRC checksum scalar to an array of bytes. A uint8, uint16 or uint32 value expected as 'crc_checksum' argument, but instead encountered 1234 of type int.",
-#                             TypeError,
-#                         ),
-#                         call(
-#                             "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the error. Manual error resolution required.",
-#                             RuntimeError,
-#                         ),
-#                     ]
-#
-#                     # Verify that console.error was called with the correct messages
-#                     mock_error.assert_has_calls(expected_calls, any_order=False)
-from unittest.mock import ANY, call, patch
+from unittest.mock import call, patch
 
 
 def test_construct_packet_error():
