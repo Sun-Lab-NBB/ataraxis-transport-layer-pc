@@ -1262,9 +1262,8 @@ class SerialTransportLayer:
                 # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
                 # reception.
                 message = (
-                    f"Failed to parse the incoming serial packet data. Packet reception staled. "
-                    f"The byte number {parsed_bytes_count + 1} out of {parsed_bytes.size} was not received in time "
-                    f"({self._timeout} microseconds), following the reception of the previous byte."
+                    f"Failed to parse the size of the incoming serial packet. The packet size byte was not received in "
+                    f"time ({self._timeout} microseconds), following the reception of the START byte."
                 )
                 console.error(message=message, error=RuntimeError)
 
@@ -1284,6 +1283,25 @@ class SerialTransportLayer:
                     f"Failed to parse the incoming serial packet data. The byte number {parsed_bytes_count + 1} "
                     f"out of {parsed_bytes.size} was not received in time ({self._timeout} microseconds), "
                     f"following the reception of the previous byte. Packet reception staled."
+                )
+                console.error(message=message, error=RuntimeError)
+
+                # This explicit fallback terminator is here to appease Mypy and will never be reached.
+                raise RuntimeError(message)  # pragma: no cover
+
+            # A separate error message that specifically detects status 3: Not enough bytes to resolve the CRC
+            # postamble. Technically, this error should not be possible (it is the terminal runtime status for the
+            # packet parsing method). However, it is implemented to avoid confusion with status 2 and 0.
+            if status == 3 and not self._bytes_available(
+                required_bytes_count=parsed_bytes.size - parsed_bytes_count, timeout=self._timeout
+            ):
+                # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
+                # reception.
+                message = (
+                    f"Failed to parse the incoming serial packet's CRC postamble. The byte number "
+                    f"{parsed_bytes_count + 1} out of {parsed_bytes.size} was not received in time "
+                    f"({self._timeout} microseconds), following the reception of the previous byte. Packet reception "
+                    f"staled."
                 )
                 console.error(message=message, error=RuntimeError)
 
@@ -1460,6 +1478,8 @@ class SerialTransportLayer:
             1 - Packet fully parsed.
             2 - Not enough bytes read to fully parse the packet. The packet size was resolved, but there were not
             enough bytes to fully parse the packet (encoded payload + crc postamble).
+            3 - Not enough bytes read to fully parse the packet. The packet payload was successfully parsed, but there
+            were not enough bytes to fully parse the CRC postamble.
             101 - No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to
             ignore start byte errors. Usually, this situation is caused by communication line noise generating
             'noise bytes'.
@@ -1579,6 +1599,11 @@ class SerialTransportLayer:
             if processed_bytes == total_bytes:
                 remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
                 return 2, parsed_byte_count, remaining_bytes, parsed_bytes
+            else:
+                # Recalculates the packet size to match the size of the expanded array. Otherwise, if all stages are
+                # resolved as part of the same cycle, the code below will continue working with the assumption that the
+                # packet size is 0.
+                packet_size = max(parsed_bytes.size - int(postamble_size), 0)
 
         # Based on the size of the packet and the number of already parsed packet bytes, calculates the remaining
         # number of bytes. Ensures the resultant value is always non-negative. If this value is 0, stage 3 is skipped.
@@ -1648,7 +1673,7 @@ class SerialTransportLayer:
         # The only way to reach this point is when the CRC parsing loop above escapes due to running out of bytes to
         # process without fully parsing the postamble. Returns with partial success code (2)
         remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
-        return 2, parsed_byte_count, remaining_bytes, parsed_bytes
+        return 3, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover

@@ -9,8 +9,9 @@ Additionally, this module exposes message and helper structures used to serializ
 
 from enum import IntEnum
 from queue import Queue
-from typing import Any, Union, Callable
+from typing import Any
 from dataclasses import field, dataclass
+from collections.abc import Callable
 from multiprocessing import Queue as MPQueue
 
 import numpy as np
@@ -96,7 +97,7 @@ class SerialProtocols(IntEnum):
 
 
 # Defines prototype factories used by the SerialPrototypes enumeration (below) to return prototype objects.
-_PROTOTYPE_FACTORIES: dict[int, Callable[[], Union[NDArray[np.uint8], np.uint8, np.uint16, np.uint32]]] = {
+_PROTOTYPE_FACTORIES: dict[int, Callable[[], NDArray[np.uint8] | np.uint8 | np.uint16 | np.uint32]] = {
     1: lambda: np.uint8(0),
     2: lambda: np.zeros(shape=2, dtype=np.uint8),
     3: lambda: np.zeros(shape=3, dtype=np.uint8),
@@ -145,7 +146,7 @@ class SerialPrototypes(IntEnum):
         """
         return np.uint8(self.value)
 
-    def get_prototype(self) -> Union[NDArray[np.uint8], np.uint8, np.uint16, np.uint32]:
+    def get_prototype(self) -> NDArray[np.uint8] | np.uint8 | np.uint16 | np.uint32:
         """Returns the prototype object associated with this prototype enum value.
 
         The prototype object returned by this method can be passed to the reading method of the SerialTransportLayer
@@ -158,7 +159,7 @@ class SerialPrototypes(IntEnum):
         return _PROTOTYPE_FACTORIES[self.value]()
 
     @classmethod
-    def get_prototype_for_code(cls, code: np.uint8) -> Union[NDArray[np.uint8], np.uint8, np.uint16, np.uint32, None]:
+    def get_prototype_for_code(cls, code: np.uint8) -> NDArray[np.uint8] | np.uint8 | np.uint16 | np.uint32 | None:
         """Returns the prototype object associated with the input prototype code.
 
         The prototype object returned by this method can be passed to the reading method of the SerialTransportLayer
@@ -281,7 +282,8 @@ class DequeueModuleCommand:
     """Instructs the addressed Module to clear (empty) its command queue.
 
     Note, clearing the command queue does not terminate already executing commands, but it prevents recurrent commands
-    from running again."""
+    from running again.
+    """
 
     module_type: np.uint8
     """The type (family) code of the module to which the command is addressed."""
@@ -319,7 +321,8 @@ class DequeueModuleCommand:
 class KernelCommand:
     """Instructs the Kernel to run the specified command exactly once.
 
-    Currently, the Kernel only supports blocking one-off commands."""
+    Currently, the Kernel only supports blocking one-off commands.
+    """
 
     command: np.uint8
     """The code of the command to execute. Valid command codes are in the range between 1 and 255."""
@@ -416,7 +419,8 @@ class KernelParameters:
     """Instructs the Kernel to update the microcontroller-wide parameters with the values included in the message.
 
     These parameters are shared by the Kernel and all custom Modules, and the exact parameter layout is hardcoded. This
-    is in contrast to Module parameters, that differ between module types."""
+    is in contrast to Module parameters, that differ between module types.
+    """
 
     action_lock: np.bool
     """Determines whether the controller allows non-ttl modules to change output pin states.
@@ -1155,10 +1159,9 @@ class UnityCommunication:
             result = self._client.connect(self._ip, self._port)
             if result != mqtt.MQTT_ERR_SUCCESS:
                 # If the result is not the expected code, raises an exception
-                raise Exception()  # pragma: no cover
-            else:
-                # If the broker was successfully connected, disconnects the client until start() method is called
-                self._client.disconnect()
+                raise Exception  # pragma: no cover
+            # If the broker was successfully connected, disconnects the client until start() method is called
+            self._client.disconnect()
         # The exception can also be raised by connect() method raising an exception internally.
         except Exception:
             message = (
@@ -1191,7 +1194,6 @@ class UnityCommunication:
             _userdata: Custom user-defined data. Currently not used.
             message: The received MQTT message.
         """
-
         # Whenever a message is received, it is buffered via the local queue object.
         self._output_queue.put_nowait((message.topic, message.payload))
 
@@ -1244,7 +1246,8 @@ class UnityCommunication:
     @property
     def has_data(self) -> bool:
         """Returns True if the instance received messages from Unity and can output received data via the get_dataq()
-        method."""
+        method.
+        """
         if not self._output_queue.empty():
             return True
         return False

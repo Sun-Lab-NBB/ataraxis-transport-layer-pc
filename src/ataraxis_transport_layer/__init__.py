@@ -11,14 +11,14 @@ from .microcontroller import MicroControllerInterface
 from .transport_layer import SerialTransportLayer, list_available_ports
 
 __all__ = [
-    "SerialTransportLayer",
-    "CRCProcessor",
-    "COBSProcessor",
-    "list_available_ports",
-    "MicroControllerInterface",
-    "TTLModule",
-    "EncoderModule",
     "BreakModule",
+    "COBSProcessor",
+    "CRCProcessor",
+    "EncoderModule",
+    "MicroControllerInterface",
     "SensorModule",
+    "SerialTransportLayer",
+    "TTLModule",
     "ValveModule",
+    "list_available_ports",
 ]

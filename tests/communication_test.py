@@ -406,9 +406,9 @@ def test_module_data_update_error(transport_layer):
     transport_layer._bytes_in_reception_buffer = len(message)
 
     expected_error = (
-        f"Invalid prototype code 255 encountered when extracting the data object from "
-        f"the received ModuleData message sent my module 2 of type 1. All "
-        f"data prototype codes have to be available from the SerialPrototypes class to be resolved."
+        "Invalid prototype code 255 encountered when extracting the data object from "
+        "the received ModuleData message sent my module 2 of type 1. All "
+        "data prototype codes have to be available from the SerialPrototypes class to be resolved."
     )
 
     with pytest.raises(ValueError, match=error_format(expected_error)):
@@ -454,9 +454,9 @@ def test_kernel_data_invalid_prototype(transport_layer):
     transport_layer._bytes_in_reception_buffer = len(message)
 
     expected_error = (
-        f"Invalid prototype code 255 encountered when extracting the data object from "
-        f"the received KernelData message. All data prototype codes have to be available from the "
-        f"SerialPrototypes class to be resolved."
+        "Invalid prototype code 255 encountered when extracting the data object from "
+        "the received KernelData message. All data prototype codes have to be available from the "
+        "SerialPrototypes class to be resolved."
     )
 
     with pytest.raises(ValueError, match=error_format(expected_error)):
@@ -783,7 +783,6 @@ def broker_available() -> bool:
 @pytest.mark.xdist_group(name="group1")
 def test_unity_communication_init_and_repr():
     """Verifies the successful initialization of UnityCommunication __init__() method and the __repr__() method."""
-
     # Skips the test if the test MQTT broker is not available
     if not broker_available():
         pytest.skip(f"Skipping this test as it requires an MQTT broker at ip {BROKER_IP} and port {BROKER_PORT}.")
@@ -813,7 +812,6 @@ def test_unity_communication_init_error():
 @pytest.mark.xdist_group(name="group1")
 def test_unity_communication_send_receive():
     """Verifies bidirectional communication between UnityCommunication and simulated Unity client."""
-
     # Skips the test if the test MQTT broker is not available
     if not broker_available():
         pytest.skip(f"Skipping this test as it requires an MQTT broker at ip {BROKER_IP} and port {BROKER_PORT}.")
@@ -875,7 +873,6 @@ def test_unity_communication_send_receive():
 @pytest.mark.xdist_group(name="group1")
 def test_unity_communication_queue_management():
     """Verifies that UnityCommunication message queue properly handles multiple messages."""
-
     # Skips the test if the test MQTT broker is not available
     if not broker_available():
         pytest.skip(f"Skipping this test as it requires an MQTT broker at ip {BROKER_IP} and port {BROKER_PORT}.")
@@ -909,7 +906,6 @@ def test_unity_communication_queue_management():
 @pytest.mark.xdist_group(name="group1")
 def test_unity_communication_reconnection():
     """Verifies UnityCommunication disconnecting and reconnecting while maintaining subscriptions."""
-
     # Skips the test if the test MQTT broker is not available
     if not broker_available():
         pytest.skip(f"Skipping this test as it requires an MQTT broker at ip {BROKER_IP} and port {BROKER_PORT}.")
@@ -955,7 +951,6 @@ def test_unity_communication_reconnection():
 @pytest.mark.xdist_group(name="group1")
 def test_unity_communication_large_message():
     """Verifies UnityCommunication handling of larger messages."""
-
     # Skips the test if the test MQTT broker is not available
     if not broker_available():
         pytest.skip(f"Skipping this test as it requires an MQTT broker at ip {BROKER_IP} and port {BROKER_PORT}.")

@@ -102,7 +102,6 @@ class TTLModule(ModuleInterface):
         Returns:
             The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
         """
-
         if repetition_delay == 0:
             return OneOffModuleCommand(
                 module_type=self._module_type,
@@ -150,7 +149,7 @@ class TTLModule(ModuleInterface):
         repeat (recur) at a desired interval to continuously monitor the pin state, rather than repeatedly calling it
         as a one-off command for best runtime efficiency.
 
-         Args:
+        Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
                 the command will only run once.
 
@@ -282,7 +281,6 @@ class EncoderModule(ModuleInterface):
 
     def log_variables(self) -> NDArray[np.uint8] | None:
         """Returns serialized instance variable data."""
-
         output_array: NDArray[np.uint8] = np.array(
             [
                 np.bool(self.output_data),
@@ -336,7 +334,7 @@ class EncoderModule(ModuleInterface):
         convert emitted pulses into a meaningful circular distance value. The specific conversion algorithm depends on
         the encoder and the tracker object.
 
-         Args:
+        Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
                 the command will only run once.
 
@@ -424,7 +422,6 @@ class BreakModule(ModuleInterface):
     """
 
     def __init__(self, module_id: np.uint8, instance_name: str) -> None:
-
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             type_name="BreakModule",
@@ -546,8 +543,8 @@ class ValveModule(ModuleInterface):
     ) -> None:
         # Statically defines the TTLModule type description.
         type_description = (
-            f"The family of modules that sends digital signals to open or close the managed solenoid fluid or gas "
-            f"valve."
+            "The family of modules that sends digital signals to open or close the managed solenoid fluid or gas "
+            "valve."
         )
 
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
@@ -641,7 +638,6 @@ class ValveModule(ModuleInterface):
         Returns:
             The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
         """
-
         if repetition_delay == 0:
             return OneOffModuleCommand(
                 module_type=self._module_type,
@@ -812,7 +808,7 @@ class SensorModule(ModuleInterface):
         command to repeat (recur) at a desired interval to continuously monitor the pin state, rather than repeatedly
         calling it as a one-off command for best runtime efficiency.
 
-         Args:
+        Args:
             repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
                 the command will only run once.
 

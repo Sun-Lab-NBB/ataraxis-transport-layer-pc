@@ -240,7 +240,6 @@ class ModuleInterface:  # pragma: no cover
                 data to Unity.
             mp_queue: An instance of the multiprocessing Queue class that allows piping data to parallel processes.
         """
-
         # While abstract method should prompt the user to implement this method, the default error-condition is also
         # included for additional safety.
         raise NotImplementedError(
@@ -305,7 +304,8 @@ class ModuleInterface:  # pragma: no cover
     @property
     def output_data(self) -> bool:
         """Returns True if the class is configured to send the data received from the module instance to Unity or
-        other processes."""
+        other processes.
+        """
         return self._output_data
 
     @property
@@ -321,7 +321,8 @@ class ModuleInterface:  # pragma: no cover
     @property
     def type_id(self) -> np.uint16:
         """Returns the unique 16-bit unsigned integer value that results from combining the type-code and the id-code
-        of the instance."""
+        of the instance.
+        """
         return self._type_id
 
 
@@ -390,7 +391,7 @@ class MicroControllerInterface:
             incoming and outgoing messages, by printing messages to the console. This option is used during debugging
             and should be disabled during production runtimes.
 
-        Attributes:
+    Attributes:
             _controller_id: Stores the id byte-code of the managed microcontroller.
             _controller_name: Stores the human-readable name of the managed microcontroller.
             _controller_description: Stores the longer description of the managed microcontroller.
@@ -526,7 +527,6 @@ class MicroControllerInterface:
             The NestedDictionary class instance that contains the microcontroller-specific information. This dictionary
             can be retrieved by accessing the microcontroller_map_section attribute.
         """
-
         # Seeds dictionary section with the main section description.
         # It is expected that the method building the overall mega-dictionary that integrates information from all
         # microcontrollers correctly extracts and combines each microcontroller-specific section under its
@@ -541,8 +541,8 @@ class MicroControllerInterface:
         code_dict = NestedDictionary(seed_dictionary={"section_description": message})
 
         # Adds the id-code and description of the microcontroller
-        code_dict.write_nested_value(variable_path=f"code", value=self._controller_id)
-        code_dict.write_nested_value(variable_path=f"description", value=self._controller_description)
+        code_dict.write_nested_value(variable_path="code", value=self._controller_id)
+        code_dict.write_nested_value(variable_path="description", value=self._controller_description)
 
         # This set is used to limit certain operations that only need to be performed once for each module type
         processed_types: set[np.uint8] = set()
@@ -638,7 +638,8 @@ class MicroControllerInterface:
     @property
     def output_queue(self) -> MPQueue:  # type: ignore
         """Returns the multiprocessing queue used by the communication process to pipe received data to other
-        concurrently active processes."""
+        concurrently active processes.
+        """
         return self._output_queue
 
     def _watchdog(self) -> None:
@@ -686,7 +687,6 @@ class MicroControllerInterface:
                 of this error is usually one of the numerous subclasses used in the process. Use 'verbose' flag
                 during class initialization to view the detailed error message that aborts the initialization process.
         """
-
         # If the process has already been started, returns without doing anything.
         if self._started:
             return
@@ -755,8 +755,8 @@ class MicroControllerInterface:
 
     def stop(self) -> None:
         """Shuts down the communication process, frees all reserved resources, and discards any unprocessed data stored
-        inside input and output queues."""
-
+        inside input and output queues.
+        """
         # If the process has not been started, returns without doing anything.
         if not self._started:
             return
@@ -832,7 +832,6 @@ class MicroControllerInterface:
             verbose: A flag that determines whether the contents of the incoming and outgoing messages should be
                 printed to console. This is only used during debugging and should be disabled during most runtimes.
         """
-
         # Connects to the terminator array. This is done early, as the terminator_array is used to track the
         # initialization and runtime status of the process.
         terminator_array.connect()
@@ -973,12 +972,12 @@ class MicroControllerInterface:
 
                     # Depending on whether the combined code is inside the unity_output_map, queue_output_map, or both,
                     # executes the necessary module's method to handle data output.
-                    if target_type_id in unity_output_map.keys():
+                    if target_type_id in unity_output_map:
                         modules[unity_output_map[target_type_id]].send_data(
                             message=in_data,
                             unity_communication=unity_communication,
                         )
-                    if target_type_id in queue_output_map.keys():
+                    if target_type_id in queue_output_map:
                         modules[queue_output_map[target_type_id]].send_to_queue(message=in_data, queue=output_queue)
 
                 # Whenever the incoming message is the Identification message, ensures that the received controller_id
