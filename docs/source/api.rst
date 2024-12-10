@@ -21,3 +21,17 @@ Communication
    :members:
    :undoc-members:
    :show-inheritance:
+
+MicroController
+===============
+.. automodule:: ataraxis_transport_layer.microcontroller
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Custom Modules
+==============
+.. automodule:: ataraxis_transport_layer.custom_modules
+   :members:
+   :undoc-members:
+   :show-inheritance:
