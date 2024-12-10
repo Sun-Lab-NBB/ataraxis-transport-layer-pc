@@ -22,6 +22,7 @@ from multiprocessing.managers import SyncManager
 from multiprocessing.shared_memory import SharedMemory
 
 import numpy as np
+from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 from ataraxis_base_utilities import LogLevel, console
 from ataraxis_data_structures import NestedDictionary, SharedMemoryArray
@@ -41,7 +42,7 @@ from .communication import (
 )
 
 
-class ModuleInterface:
+class ModuleInterface:  # pragma: no cover
     """The base class from which all custom ModuleInterface classes should inherit.
 
     Inheriting from this class grants all subclasses the static API that the MicroControllerInterface class uses to
@@ -63,7 +64,7 @@ class ModuleInterface:
         properly interact with your ModuleInterface!
 
         All data received from or sent to the microcontroller is automatically logged as byte-serialized numpy arrays.
-        Therefore, if you do not need any additional processing steps, such as sending to or receiving data from Unity,
+        Therefore, if you do not need any additional processing steps, such as sending or receiving data from Unity,
         do not enable any custom processing flags. You will, however, have to implement all abstract methods, even if
         the class instance does not use them due to its flag-configuration.
 
@@ -77,19 +78,17 @@ class ModuleInterface:
         module_id: The code that identifies the specific Module instance managed by the Interface class instance. This
             is used to identify unique instances of the same module family, such as different rotary encoders if more
             than one is used at the same time. Valid byte-codes range from 1 to 255.
-        instance_name: The human-readable name for the specific module instance, e.g.: 'Left_Corner_Touch_Sensor'. This
-            name is used in messages and some log files to help human operators in identifying the module instance.
+        instance_name: The human-readable name for the specific Module instance managed by the Interface class instance,
+            e.g.: 'Left_Corner_Touch_Sensor'. This name is used in messages and some log files to help human operators
+            in identifying the module instance.
         unity_input_topics: A list of MQTT topics used by Unity to send commands to the module accessible through this
             Interface instance. If the module should not receive commands from Unity, set to None. This list will be
             used to initialize the UnityCommunication class instance to monitor the requested topics. If the module
             supports receiving commands from Unity, use get_from_unity() method to implement the logic for accessing
             and handling the incoming commands.
-        unity_output: Determines whether the module accessible through this Interface instance sends data to Unity. If
-            the module supports sending data to Unity, use send_to_unity() method to implement the logic for
-            pre-processing and sending data to Unity.
-        queue_output: Determines whether the module accessible through this Interface instance sends data to other
-            processes. If the module supports sending data to other processes, use send_to_queue() method to implement
-            the logic for pre-processing and sending data to other processes.
+        output_data: Determines whether the module accessible through this Interface instance sends data to Unity or
+            other processes. If the module is designed to output data in addition to logging it, use send_data()
+            method to implement the logic for pre-processing and sending the data.
 
     Attributes:
         _module_type: Stores the type (family) of the interfaced module.
@@ -99,13 +98,12 @@ class ModuleInterface:
         _type_id: Stores the type and id combined into a single uint16 value. This value should be unique for all
             possible type-id pairs and is used to ensure that each used module instance has a unique ID-type
             combination.
-        _unity_output: Determines whether to send data to Unity.
+        _output_data: Determines whether the instance outputs data to Unity or other processes.
         _unity_input: Determines whether to receive commands from Unity.
-        _queue_output: Determines whether to send data to the output queue.
         _unity_input_topics: Stores the list of Unity topics to monitor for incoming commands.
 
     Raises:
-        TypeError: If module_type or module_id are not unsigned integers or are set to invalid byte values.
+        TypeError: If input arguments are not of the expected type.
     """
 
     def __init__(
@@ -116,10 +114,21 @@ class ModuleInterface:
         instance_name: str,
         unity_input_topics: tuple[str, ...] | None,
         *,
-        unity_output: bool = False,
-        queue_output: bool = False,
+        output_data: bool = False,
     ) -> None:
         # Ensures that input byte-codes use valid value ranges
+        if not isinstance(type_name, str):
+            message = (
+                f"Unable to initialize the ModuleInterface instance. Expected an string for 'type_name' argument, but "
+                f"encountered {type_name} of type {type(type_name).__name__}."
+            )
+            console.error(message=message, error=TypeError)
+        if not isinstance(instance_name, str):
+            message = (
+                f"Unable to initialize the ModuleInterface instance. Expected an string for 'instance_name' argument, "
+                f"but encountered {instance_name} of type {type(instance_name).__name__}."
+            )
+            console.error(message=message, error=TypeError)
         if not isinstance(module_type, np.uint8) or not 1 <= module_type <= 255:
             message = (
                 f"Unable to initialize the ModuleInterface instance for module {instance_name} of type {type_name}. "
@@ -134,12 +143,20 @@ class ModuleInterface:
                 f"{module_id} of type {type(module_id).__name__}."
             )
             console.error(message=message, error=TypeError)
+        if unity_input_topics is not None and not all(isinstance(topic, str) for topic in unity_input_topics):
+            message = (
+                f"Unable to initialize the ModuleInterface instance for module {instance_name} of type {type_name}. "
+                f"Expected a tuple of strings or None for 'unity_input_topics' argument, but encountered "
+                f"{unity_input_topics} of type {type(unity_input_topics).__name__} and / or at least one non-string "
+                f"item."
+            )
+            console.error(message=message, error=TypeError)
 
         # Saves type and ID data into class attributes
         self._module_type: np.uint8 = module_type
-        self._type_name: str = type_name
+        self._type_name: str = str(type_name)
         self._module_id: np.uint8 = module_id
-        self._instance_name: str = instance_name
+        self._instance_name: str = str(instance_name)
 
         # Combines type and ID codes into a 16-bit value. This is used to ensure every module instance has a unique
         # ID + Type combination. This method is position-aware, so inverse type-id pairs will be coded as different
@@ -152,15 +169,13 @@ class ModuleInterface:
         # boolean and obtained from input arguments.
         self._unity_input_topics: tuple[str, ...] = unity_input_topics if unity_input_topics is not None else tuple()
         self._unity_input: bool = True if len(self._unity_input_topics) > 0 else False
-        self._unity_output: bool = unity_output if isinstance(unity_output, bool) else False
-        self._queue_output: bool = queue_output if isinstance(queue_output, bool) else False
+        self._output_data: bool = output_data if isinstance(output_data, bool) else False
 
     def __repr__(self) -> str:
         """Returns the string representation of the ModuleInterface instance."""
         message = (
             f"ModuleInterface(type_code={self._module_type}, type_name={self._type_name}, "
-            f"instance_code={self._module_id}, instance_name={self._instance_name}, unity_output={self._unity_output}, "
-            f"unity_input={self._unity_input}, queue_output={self._queue_output}, "
+            f"instance_code={self._module_id}, instance_name={self._instance_name}, output_data={self._output_data}, "
             f"unity_input_topics={self._unity_input_topics})"
         )
         return message
@@ -172,180 +187,126 @@ class ModuleInterface:
         """Packages and returns a ModuleCommand message to send to the microcontroller, based on the input Unity
         message topic and payload.
 
-        Unity can issue module commands as it resolves the game logic of the Virtual Reality (VR) task. The initialized
-        UnityCommunication class will monitor the MQTT (communication protocol) traffic and process incoming Unity-sent
-        messages in a background thread. The MicroControllerInterface will then read the data received from Unity and
-        pass it to all ModuleInterface instances that declared the MQTT topic at which the message was received as an
-        input topic. Therefore, this method is ONLY called when the topic to which the Unity sent command data exactly
-        matches the topic(s) specified at ModuleInterface instantiation.
+        This method is called by the MicroControllerInterface when Unity sends a message to one of the topics monitored
+        by this ModuleInterface instance. This method then resolves, packages, and returns the appropriate ModuleCommand
+        message structure, based on the input message topic and payload.
 
         Notes:
-            This method should resolve, package, and return the appropriate ModuleCommand message structure, based on
-            the input Unity topic and payload. Since this method is only called for topics declared by the class
-            instance as input topics, it is expected that the method returns a valid command to send every time it is
-            called.
-
-            Remember to provide the class with topics to listen to via the 'unity_input_topics' argument when
-            initializing the interface class if the instance does need this functionality. If the instance does not
-            need this functionality, implement the method by calling an empty return statement and ensure that the
-            'unity_input_topics' argument is set to None.
+            This method is called only if 'unity_input_topics' argument was used to set the monitored topics during
+            class initialization.
 
         Args:
-            topic: The MQTT topic to which the Unity message was sent.
-            payload: The message payload received from Unity.
+            topic: The MQTT topic to which Unity sent the module-addressed message.
+            payload: The payload of the message.
 
         Returns:
-            An initialized OneOffModuleCommand or RepeatedModuleCommand class instance that stores the message payload
-            to be sent to the microcontroller. While the signature contains None as a return, None is NOT a valid
-            return value. MicroControllerInterface class is designed to ONLY call this method if it expects a non-None
-            return. Make sure this method is properly implemented if your module includes a list of Unity topics to
-            listen for.
+            A OneOffModuleCommand or RepeatedModuleCommand instance that stores the message to be sent to the
+            microcontroller. None is a fallback return value used by ModuleInterface instances that are not
+            configured to receive data from Unity.
         """
         # While abstract method should prompt the user to implement this method, the default error-condition is also
         # included for additional safety.
         raise NotImplementedError(
-            f"get_from_unity method for {self._type_name} module interface must be implemented when subclassing the "
+            f"get_from_unity() method for {self._type_name} module interface must be implemented when subclassing the "
             f"base ModuleInterface class."
         )
 
     @abstractmethod
-    def send_to_unity(self, message: ModuleData | ModuleState, unity_communication: UnityCommunication) -> None:
-        """Checks the input message data and, if necessary, sends a message to Unity game engine.
-
-        Unity is used to dynamically control the Virtual Reality (VR) environment used in scientific experiments.
-        Currently, the communication with Unity is handled via the MQTT protocol and this method is used to
-        conditionally transfer the data received from the Module running on the microcontroller to Unity.
-
-        Notes:
-            This method should contain the logic to determine whether the incoming message should be transferred to
-            Unity. If so, this method should call the send_data() method of the input UnityCommunication class and
-            send the data to the appropriate MQTT topic.
-
-            The arguments to this method will be provided by the managing MicroControllerInterface class and, therefore,
-            the UnityCommunication would be connected and appropriately configured to carry out the communication.
-
-            Remember to enable the 'unity_output' flag when initializing the interface class if the instance does need
-            this functionality. If the instance does not need this functionality, implement the method by calling an
-            empty return statement and ensure that the 'unity_output' flag is disabled.
-
-        Args:
-            message: The ModuleState or ModuleData object that stores the parsed message received from the
-                microcontroller.
-            unity_communication: An initialized and connected instance of the UnityCommunication class to use for
-                sending the data to Unity.
-        """
-
-        # While abstract method should prompt the user to implement this method, the default error-condition is also
-        # included for additional safety.
-        raise NotImplementedError(
-            f"send_to_unity method for {self._type_name} module interface must be implemented when subclassing the "
-            f"base ModuleInterface class."
-        )
-
-    @abstractmethod
-    def send_to_queue(
+    def send_data(
         self,
         message: ModuleData | ModuleState,
-        queue: MPQueue,  # type: ignore
+        unity_communication: UnityCommunication,
+        mp_queue: MPQueue,  # type: ignore
     ) -> None:
-        """Checks the input message data and, if necessary, sends a message to other processes via the provided
-        multiprocessing Queue instance.
+        """Pre-processes the input message data and, if necessary, sends it to Unity and / or other processes.
 
-        This method allows sending received data to other processes, running in-parallel with the microcontroller
-        communication process. In turn, this allows the data to be processed online, in addition to being logged to
-        disk. For example, the data received from the module can be used to generate a live data plot for the user to
-        monitor microcontroller runtime.
+        This method is called by the MicroControllerInterface when the ModuleInterface instance receives a message from
+        the microcontroller and is configured to output data to Unity or other processes. This method pre-processes the
+        received message and uses the input UnityCommunication instance or multiprocessing Queue instance to transmit
+        the data.
 
         Notes:
-            This method should contain the logic to determine whether the incoming message should be transferred to
-            other processes. If so, this method should call the put() method of the input queue object to pipe the
-            data to the shared multiprocessing queue.
+            To send the data to Unity, call the send_data() method of the UnityCommunication class. Do not call any
+            other methods as part of this method runtime, unless you know what you are doing. To send the data to other
+            processes, call the put() method of the multiprocessing Queue object to pipe the data to other processes.
 
-            Remember to enable the 'queue_output' flag when initializing the interface class if the instance does need
-            this functionality. If the instance does not need this functionality, implement the method by calling an
-            empty return statement and ensure that the 'queue_output' flag is disabled.
+            This method is called only if 'output_data' flag was enabled during class initialization.
 
         Args:
-            message: The ModuleState or ModuleData object that stores the parsed message received from the
-                microcontroller.
-            queue: An instance of the multiprocessing Queue class that allows piping data to parallel processes.
+            message: The ModuleState or ModuleData object that stores the message received from the microcontroller.
+                This message always originates from the module with the same instance ID and type-code as used by the
+                ModuleInterface instance.
+            unity_communication: A fully configured instance of the UnityCommunication class to use for sending the
+                data to Unity.
+            mp_queue: An instance of the multiprocessing Queue class that allows piping data to parallel processes.
         """
 
         # While abstract method should prompt the user to implement this method, the default error-condition is also
         # included for additional safety.
         raise NotImplementedError(
-            f"send_to_queue method for {self._type_name} module interface must be implemented when subclassing the "
+            f"output_data() method for {self._type_name} module interface must be implemented when subclassing the "
             f"base ModuleInterface class."
         )
 
     @abstractmethod
-    def log_instance_variables(self, logger_queue: MPQueue) -> None:
-        """Updates the input code_map dictionary with module-instance-specific runtime variables.
+    def log_variables(self) -> NDArray[np.uint8] | None:
+        """Serializes module-specific variable data into a byte numpy array.
 
-        This method allows writing instance-specific variables to the global code map. For example, this method can
-        be used to store specific conversion factors used to translate pulses from a specific EncoderModule into
-        centimeters. At the very least, each module has to use this method to write whether it uses unity input / output
-        queue output, as well as any other instance variables that may be helpful when parsing the logged data.
+        This method is called by the MicroControllerInterface during initialization for each ModuleInterface instance
+        it manages. The array returned from this method is bundled with metadata that allows identifying the source of
+        the data, and it is then sent to the DataLogger instance that saves this data to disk.
 
         Notes:
-            This method functions identically to write_code_map(), except that it is called for every instance with the
-            same module_type.
+            This method is used to save instance-specific runtime data, such as conversion factors used to translate
+            microcontroller-received data into a format expected by Unity. Use this method to save any information that
+            may be helpful for post-processing or analyzing the rest of the data logged during runtime. The only
+            requirement is that all data is serialized into a byte numpy array.
 
-            Make sure all data is written under modulename_module.instancename.instance_variables root path. Otherwise,
-            some parser features available for all instances (for example, parsing unity input / output boolean flags)
-            will not work correctly.
-
-            See one of the default custom ModuleInterface classes for examples on how to implement this method, both
-            for modules that do and do not use this functionality.
-
-        Args:
-            code_map: The shared NestedDictionary instance that aggregates all information from a single
-                MicroControllerInterface class, including the information from all ModuleInterface instances managed by
-                the class.
+            If the instance does not need this functionality, implement this method with an empty return statement so
+            that it returns Node.
 
         Returns:
-            An updated NestedDictionary instance. All valid module instances are expected to use this method to at least
-            write whether they use unity input / output and queue output flags.
-
+            A shallow NumPy array that uses uint8 (byte) datatype and stores the serialized data to send to the logger.
+            Note, the instance and type IDs of the module and the ID of the microcontroller will be combined and
+            pre-pended to the data before it is sent to the logger. None, if the instance does not need to log any
+            variable data.
         """
         raise NotImplementedError(
-            f"write_instance_variables method for {self._type_name} module interface must be implemented when "
+            f"log_variables() method for {self._type_name} module interface must be implemented when "
             f"subclassing the base ModuleInterface class."
         )
 
     def dequeue_command(self) -> DequeueModuleCommand:
-        """Returns the command that, upon being sent to the microcontroller, will clear all queued commands for this
-        module instance.
-
-        Since these Dequeue commands are universal, the method that packages and returns these command messages is
-        defined as a non-abstract base ModuleInterface class method.
+        """Returns the command that instructs the microcontroller to clear all queued commands for the specific module
+        instance managed by this ModuleInterface.
         """
         return DequeueModuleCommand(module_type=self._module_type, module_id=self._module_id, return_code=np.uint8(0))
 
     @property
     def module_type(self) -> np.uint8:
-        """Returns the byte-code of the interfaced module type (family)."""
+        """Returns the id-code that describes the broad type (family) of Modules managed by this interface class."""
         return self._module_type
 
     @property
     def type_name(self) -> str:
-        """Returns the human-readable name of the interfaced module type (family)."""
+        """Returns the human-readable name for the type (family) of Modules managed by this interface class."""
         return self._type_name
 
     @property
     def module_id(self) -> np.uint8:
-        """Returns the byte-code identifier (ID) of the specific interfaced module instance."""
+        """Returns the code that identifies the specific Module instance managed by the Interface class instance."""
         return self._module_id
 
     @property
     def instance_name(self) -> str:
-        """Returns the human-readable name of the specific interfaced module instance."""
+        """Returns the human-readable name for the specific Module instance managed by the Interface class instance."""
         return self._instance_name
 
     @property
-    def unity_output(self) -> bool:
-        """Returns True if the class is configured to send the data received from the module instance to Unity."""
-        return self._unity_output
+    def output_data(self) -> bool:
+        """Returns True if the class is configured to send the data received from the module instance to Unity or
+        other processes."""
+        return self._output_data
 
     @property
     def unity_input(self) -> bool:
@@ -353,20 +314,14 @@ class ModuleInterface:
         return self._unity_input
 
     @property
-    def queue_output(self) -> bool:
-        """Returns True if the class is configured to send the data received from the module instance to other
-        processes."""
-        return self._queue_output
-
-    @property
     def unity_input_topics(self) -> tuple[str, ...]:
-        """Returns the tuple of MQTT topics that should be monitored for incoming Unity commands."""
+        """Returns the tuple of MQTT topics this instance monitors for incoming Unity commands."""
         return self._unity_input_topics
 
     @property
     def type_id(self) -> np.uint16:
-        """Returns the unique unsigned integer value that results from combining the type-code and the id-code of the
-        module instance."""
+        """Returns the unique 16-bit unsigned integer value that results from combining the type-code and the id-code
+        of the instance."""
         return self._type_id
 
 
@@ -482,7 +437,7 @@ class MicroControllerInterface:
 
     # Also pre-packages the two most used parameter configurations (all-locked and all-unlocked). The class can
     # also send messages with partial locks (e.g.: TTl ON, Action OFF), but those are usually not used outside
-    # specific debugging and testing scenarios, so are not really worth to pre-package.
+    # specific debugging and testing scenarios.
     _disable_locks = KernelParameters(
         action_lock=np.bool(False),
         ttl_lock=np.bool(False),
@@ -641,7 +596,7 @@ class MicroControllerInterface:
             code_dict.write_nested_value(variable_path=section, value=module.instance_description)
 
             # Finally, adds the custom variables section for each instance by calling the appropriate method.
-            code_dict = module.log_instance_variables(code_dict)
+            code_dict = module.log_variables(code_dict)
 
         # Returns filled section dictionary to caller
         return code_dict
@@ -913,7 +868,7 @@ class MicroControllerInterface:
             # If the module is configured to output data to Unity or other processes, maps its type+id combined code
             # to its index number. This is used to quickly find the module interface instance addressed by incoming
             # data, so that they can then send the data to the appropriate output stream.
-            if module.unity_output:
+            if module.output_data:
                 unity_output_map[module.type_id] = num
 
             if module.queue_output:
@@ -1019,7 +974,7 @@ class MicroControllerInterface:
                     # Depending on whether the combined code is inside the unity_output_map, queue_output_map, or both,
                     # executes the necessary module's method to handle data output.
                     if target_type_id in unity_output_map.keys():
-                        modules[unity_output_map[target_type_id]].send_to_unity(
+                        modules[unity_output_map[target_type_id]].send_data(
                             message=in_data,
                             unity_communication=unity_communication,
                         )
