@@ -20,6 +20,239 @@ from .communication import (
 from .microcontroller import ModuleInterface
 
 
+class EncoderModule(ModuleInterface):
+    """The class that exposes methods for interfacing with EncoderModule instances running on Ataraxis MicroControllers.
+
+    EncoderModule allows interfacing with quadrature encoders used to monitor the direction and magnitude of connected
+    object's rotation. To achieve the highest resolution, the module relies on hardware interrupt pins to detect and
+    handle the pulses sent by the two encoder channels. Overall, the EncoderModule is tasked with determining how much
+    the tracked rotating object has moved since the last check and to which direction.
+
+    Notes:
+        This interface comes pre-configured to send incoming motion data to Unity. If you do not need this
+        functionality, override the unity_output flag at class instantiation!
+
+    Args:
+        module_id: The unique identifier code of the managed EncoderModule instance.
+        instance_name: The human-readable name of the EncoderModule instance.
+        output_data: Determines whether the EncoderModule instance should send the motion data to Unity.
+        motion_topic: The MQTT topic to which the instance should send the motion data received from the
+            microcontroller.
+        encoder_ppr: The resolution of the managed quadrature encoder, in Pulses Per Revolution (PPR). Specifically,
+            this is the number of quadrature pulses the encoder emits per full 360-degree rotation. If this number is
+            not known, provide a placeholder value and use get_ppr() command to estimate the PPR using the index channel
+            of the encoder.
+        object_diameter: The diameter of the rotating object connected to the encoder, in cm. This is used to
+            convert encoder pulses into rotated distance in cm.
+        cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the circular object
+             into the Unity units. This value works together with object_diameter and encoder_ppr to translate raw
+             encoder pulses received from the microcontroller into Unity-compatible units, used by the game engine to
+             move the VirtualReality agent.
+
+    Attributes:
+        _motion_topic: Stores the MQTT motion topic.
+        _ppr: Stores the resolution of the managed quadrature encoder.
+        _object_diameter: Stores the diameter of the object connected to the encoder.
+        _cm_per_unity_unit: Stores the conversion factor that translates centimeters into Unity units.
+        _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
+    """
+
+    def __init__(
+        self,
+        module_id: np.uint8,
+        instance_name: str,
+        output_data: bool = True,
+        motion_topic: str = "LinearTreadmill/Data",
+        encoder_ppr: int = 8192,
+        object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
+        cm_per_unity_unit: float = 10.0,
+    ) -> None:
+        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
+        super().__init__(
+            type_name="EncoderModule",
+            module_type=np.uint8(2),
+            module_id=module_id,
+            instance_name=instance_name,
+            unity_input_topics=None,
+            output_data=output_data,
+        )
+
+        # Saves additional data to class attributes.
+        self._motion_topic = motion_topic
+        self._ppr = encoder_ppr
+        self._object_diameter = object_diameter
+        self._cm_per_unity_unit = cm_per_unity_unit
+
+        # Computes the conversion factor to translate encoder pulses into unity units. Round to 12 decimal places for
+        # consistency and uses 12 decimal places to ensure repeatability and precision.
+        self._unity_unit_per_pulse = np.round(
+            a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
+            decimals=12,
+        )
+
+    def send_data(
+        self,
+        message: ModuleState | ModuleData,
+        unity_communication: UnityCommunication,
+        _mp_queue: MPQueue,  # type: ignore
+    ) -> None:
+        # If the incoming message is not a CCW or CW motion report, aborts processing
+        if message.event != np.uint8(51) and message.event != np.uint8(52) or isinstance(message, ModuleState):
+            return
+
+        # The rotation direction is encoded via the message event code. CW rotation (code 51) is interpreted as negative
+        # and CCW as positive.
+        sign = 1 if message.event == np.uint8(51) else -1
+
+        # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to Unity units
+        # using the precomputed conversion factor. Uses float64 and rounds to 12 decimal places for consistency and
+        # precision
+        signed_motion = np.round(
+            a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign,
+            decimals=12,
+        )
+
+        # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
+        # byte-string.
+        json_string = dumps(obj={"movement": signed_motion})
+        byte_array = json_string.encode("utf-8")
+
+        # Publishes the motion to the appropriate MQTT topic.
+        unity_communication.send_data(topic=self._motion_topic, payload=byte_array)
+
+    def get_from_unity(self, topic: str, payload: bytes | bytearray) -> None:
+        """Not used."""
+        return
+
+    def log_variables(self) -> NDArray[np.uint8] | None:
+        """Returns serialized instance variable data."""
+        output_array: NDArray[np.uint8] = np.array(
+            [
+                np.bool(self.output_data),
+                np.uint32(self._ppr),
+                np.float64(self._object_diameter),
+                np.float64(self._cm_per_unity_unit),
+                self._unity_unit_per_pulse,
+            ],
+            dtype=np.uint8,
+        )
+
+        return output_array
+
+    def set_parameters(
+        self,
+        report_ccw: np.bool | bool = np.bool(True),
+        report_cw: np.bool | bool = np.bool(True),
+        delta_threshold: np.uint32 | int = np.uint32(10),
+    ) -> ModuleParameters:
+        """Sets PC-addressable parameters of the module instance running on the microcontroller.
+
+        Args:
+            report_ccw: Determines whether to report rotation in the CCW (positive) direction.
+            report_cw: Determines whether to report rotation in the CW (negative) direction.
+            delta_threshold: The minimum number of pulses required for the motion to be reported. Depending on encoder
+                resolution, this allows setting the 'minimum rotation distance' threshold for reporting. Note, if the
+                change is 0 (the encoder readout did not change), it will not be reported, regardless of the
+                value of this parameter. Sub-threshold motion will be aggregated (summed) across readouts until a
+                significant overall change in position is reached to justify reporting it to the PC.
+
+        Returns:
+            The ModuleParameters message to be sent to the microcontroller.
+        """
+        return ModuleParameters(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
+            parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
+        )
+
+    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+        """Checks the number and direction of pulses recorded by the encoder since the last readout or module reset.
+
+        If there has been a significant change in the absolute count of pulses, reports the change and direction to the
+        PC. It is highly advised to issue this command to repeat (recur) at a desired interval to continuously monitor
+        the pin state, rather than repeatedly calling it as a one-off command for best runtime efficiency.
+
+        This command allows continuously monitoring the rotation of the object connected to the encoder. It is designed
+        to return the absolute raw count of pulses emitted by the encoder in response to the object ration. This allows
+        avoiding floating-point arithmetic on the microcontroller, but requires it to be implemented on the PC to
+        convert emitted pulses into a meaningful circular distance value. The specific conversion algorithm depends on
+        the encoder and the tracker object.
+
+        Args:
+            repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
+                the command will only run once.
+
+        Returns:
+            The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
+        """
+        if repetition_delay == 0:
+            return OneOffModuleCommand(
+                module_type=self._module_type,
+                module_id=self._module_id,
+                return_code=np.uint8(0),
+                command=np.uint8(1),
+                noblock=np.bool(False),
+            )
+
+        return RepeatedModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            command=np.uint8(1),
+            noblock=np.bool(False),
+            cycle_delay=np.uint32(repetition_delay),
+        )
+
+    def reset_pulse_count(self) -> OneOffModuleCommand:
+        """Resets the current pulse tracker of the encoder to 0, clearing any currently stored rotation data.
+
+        Primarily, this command is helpful if you need to reset the encoder without evaluating its current pulse count.
+        For example, this would be the case if there is a delay between the initialization of the module and the start
+        of the encoder monitoring. Resetting the encoder before evaluating its pulse count for the first time discards
+        a nonsensical pulse count aggregated before the monitoring has started. Similarly, this can be used to re-base
+        the encoder pulse count without reading the aggregate data.
+        """
+        return OneOffModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            command=np.uint8(2),
+            noblock=np.bool(False),
+        )
+
+    def get_ppr(self) -> OneOffModuleCommand:
+        """Uses the index channel of the encoder to estimate its Pulse-per-Revolution (PPR).
+
+        The PPR allows converting raw pulse counts reported by other commands of this module to real life circular
+        distances. This is a service command not intended to be used during most production runtimes if the PPR is
+        already known. It relies on the encoder completing up to 11 full rotations and uses the index channel of the
+        encoder to detect each revolution completion.
+
+        Notes:
+            Make sure the calibrated encoder rotates at a steady slow speed until this command completes. Similar to
+            other service commands, it is designed to deadlock the controller until the command completes. Since this
+            interface exclusive works with the encoder, you have to provide the encoder rotation separately (manually).
+
+            The direction of the rotation is not relevant for this command, as long as it make the full 360-degree
+            revolution.
+
+            The command is optimized for the object to be rotated with a human hand at a steady rate, so it delays
+            further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, the object
+            should not make more than 10 rotations per second and ideally should stay within 1-3 rotations per second.
+            It is also possible to evaluate motor-assisted rotation if the motor does not leak the
+            magnetic field that would interfere with the index signaling from the encoder and spins the object at the
+            speed discussed above.
+        """
+        return OneOffModuleCommand(
+            module_type=self._module_type,
+            module_id=self._module_id,
+            return_code=np.uint8(0),
+            command=np.uint8(3),
+            noblock=np.bool(False),
+        )
+
+
 class TTLModule(ModuleInterface):
     """The class that exposes methods for interfacing with TTLModule instances running on Ataraxis MicroControllers.
 
@@ -172,239 +405,6 @@ class TTLModule(ModuleInterface):
             command=np.uint8(4),
             noblock=np.bool(False),
             cycle_delay=repetition_delay,
-        )
-
-
-class EncoderModule(ModuleInterface):
-    """The class that exposes methods for interfacing with EncoderModule instances running on Ataraxis MicroControllers.
-
-    EncoderModule allows interfacing with quadrature encoders used to monitor the direction and magnitude of connected
-    object's rotation. To achieve the highest resolution, the module relies on hardware interrupt pins to detect and
-    handle the pulses sent by the two encoder channels. Overall, the EncoderModule is tasked with determining how much
-    the tracked rotating object has moved since the last check and to which direction.
-
-    Notes:
-        This interface comes pre-configured to send incoming motion data to Unity. If you do not need this
-        functionality, override the unity_output flag at class instantiation!
-
-    Args:
-        module_id: The unique identifier code of the managed EncoderModule instance.
-        instance_name: The human-readable name of the EncoderModule instance.
-        output_data: Determines whether the EncoderModule instance should send the motion data to Unity.
-        motion_topic: The MQTT topic to which the instance should send the motion data received from the
-            microcontroller.
-        encoder_ppr: The resolution of the managed quadrature encoder, in Pulses Per Revolution (PPR). Specifically,
-            this is the number of quadrature pulses the encoder emits per full 360-degree rotation. If this number is
-            not known, provide a placeholder value and use get_ppr() command to estimate the PPR using the index channel
-            of the encoder.
-        object_diameter: The diameter of the rotating object connected to the encoder, in cm. This is used to
-            convert encoder pulses into rotated distance in cm.
-        cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the circular object
-             into the Unity units. This value works together with object_diameter and encoder_ppr to translate raw
-             encoder pulses received from the microcontroller into Unity-compatible units, used by the game engine to
-             move the VirtualReality agent.
-
-    Attributes:
-        _motion_topic: Stores the MQTT motion topic.
-        _ppr: Stores the resolution of the managed quadrature encoder.
-        _object_diameter: Stores the diameter of the object connected to the encoder.
-        _cm_per_unity_unit: Stores the conversion factor that translates centimeters into Unity units.
-        _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
-    """
-
-    def __init__(
-        self,
-        module_id: np.uint8,
-        instance_name: str,
-        output_data: bool = True,
-        motion_topic: str = "LinearTreadmill/Data",
-        encoder_ppr: int = 8192,
-        object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
-        cm_per_unity_unit: float = 10.0,
-    ) -> None:
-        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
-        super().__init__(
-            type_name="EncoderModule",
-            module_type=np.uint8(2),
-            module_id=module_id,
-            instance_name=instance_name,
-            unity_input_topics=None,
-            output_data=output_data,
-        )
-
-        # Saves additional data to class attributes.
-        self._motion_topic = motion_topic
-        self._ppr = encoder_ppr
-        self._object_diameter = object_diameter
-        self._cm_per_unity_unit = cm_per_unity_unit
-
-        # Computes the conversion factor to translate encoder pulses into unity units. Round to 12 decimal places for
-        # consistency and uses 12 decimal places to ensure repeatability and precision.
-        self._unity_unit_per_pulse = np.round(
-            a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
-            decimals=12,
-        )
-
-    def send_data(
-        self,
-        message: ModuleState | ModuleData,
-        unity_communication: UnityCommunication,
-        _mp_queue: MPQueue,  # type: ignore
-    ) -> None:
-        # If the incoming message is not a CCW or CW motion report, aborts processing
-        if message.event != np.uint8(51) and message.event != np.uint8(52):
-            return
-
-        # The rotation direction is encoded via the message event code. CW rotation (code 51) is interpreted as negative
-        # and CCW as positive.
-        sign = 1 if message.event == np.uint8(51) else -1
-
-        # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to Unity units
-        # using the precomputed conversion factor. Uses float64 and rounds to 12 decimal places for consistency and
-        # precision
-        signed_motion = np.round(
-            a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign,
-            decimals=12,  # type: ignore
-        )
-
-        # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
-        # byte-string.
-        json_string = dumps(obj={"movement": signed_motion})
-        byte_array = json_string.encode("utf-8")
-
-        # Publishes the motion to the appropriate MQTT topic.
-        unity_communication.send_data(topic=self._motion_topic, payload=byte_array)
-
-    def get_from_unity(self, topic: str, payload: bytes | bytearray) -> None:
-        """Not used."""
-        return
-
-    def log_variables(self) -> NDArray[np.uint8] | None:
-        """Returns serialized instance variable data."""
-        output_array: NDArray[np.uint8] = np.array(
-            [
-                np.bool(self.output_data),
-                np.uint32(self._ppr),
-                np.float64(self._object_diameter),
-                np.float64(self._cm_per_unity_unit),
-                self._unity_unit_per_pulse,
-            ],
-            dtype=np.uint8,
-        )
-
-        return output_array
-
-    def set_parameters(
-        self,
-        report_ccw: np.bool | bool = np.bool(True),
-        report_cw: np.bool | bool = np.bool(True),
-        delta_threshold: np.uint32 | int = np.uint32(10),
-    ) -> ModuleParameters:
-        """Sets PC-addressable parameters of the module instance running on the microcontroller.
-
-        Args:
-            report_ccw: Determines whether to report rotation in the CCW (positive) direction.
-            report_cw: Determines whether to report rotation in the CW (negative) direction.
-            delta_threshold: The minimum number of pulses required for the motion to be reported. Depending on encoder
-                resolution, this allows setting the 'minimum rotation distance' threshold for reporting. Note, if the
-                change is 0 (the encoder readout did not change), it will not be reported, regardless of the
-                value of this parameter. Sub-threshold motion will be aggregated (summed) across readouts until a
-                significant overall change in position is reached to justify reporting it to the PC.
-
-        Returns:
-            The ModuleParameters message to be sent to the microcontroller.
-        """
-        return ModuleParameters(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
-            parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
-        )
-
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
-        """Checks the number and direction of pulses recorded by the encoder since the last readout or module reset.
-
-        If there has been a significant change in the absolute count of pulses, reports the change and direction to the
-        PC. It is highly advised to issue this command to repeat (recur) at a desired interval to continuously monitor
-        the pin state, rather than repeatedly calling it as a one-off command for best runtime efficiency.
-
-        This command allows continuously monitoring the rotation of the object connected to the encoder. It is designed
-        to return the absolute raw count of pulses emitted by the encoder in response to the object ration. This allows
-        avoiding floating-point arithmetic on the microcontroller, but requires it to be implemented on the PC to
-        convert emitted pulses into a meaningful circular distance value. The specific conversion algorithm depends on
-        the encoder and the tracker object.
-
-        Args:
-            repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
-                the command will only run once.
-
-        Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
-        """
-        if repetition_delay == 0:
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(1),
-                noblock=np.bool(False),
-            )
-
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),
-            cycle_delay=np.uint32(repetition_delay),
-        )
-
-    def reset_pulse_count(self) -> OneOffModuleCommand:
-        """Resets the current pulse tracker of the encoder to 0, clearing any currently stored rotation data.
-
-        Primarily, this command is helpful if you need to reset the encoder without evaluating its current pulse count.
-        For example, this would be the case if there is a delay between the initialization of the module and the start
-        of the encoder monitoring. Resetting the encoder before evaluating its pulse count for the first time discards
-        a nonsensical pulse count aggregated before the monitoring has started. Similarly, this can be used to re-base
-        the encoder pulse count without reading the aggregate data.
-        """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(2),
-            noblock=np.bool(False),
-        )
-
-    def get_ppr(self) -> OneOffModuleCommand:
-        """Uses the index channel of the encoder to estimate its Pulse-per-Revolution (PPR).
-
-        The PPR allows converting raw pulse counts reported by other commands of this module to real life circular
-        distances. This is a service command not intended to be used during most production runtimes if the PPR is
-        already known. It relies on the encoder completing up to 11 full rotations and uses the index channel of the
-        encoder to detect each revolution completion.
-
-        Notes:
-            Make sure the calibrated encoder rotates at a steady slow speed until this command completes. Similar to
-            other service commands, it is designed to deadlock the controller until the command completes. Since this
-            interface exclusive works with the encoder, you have to provide the encoder rotation separately (manually).
-
-            The direction of the rotation is not relevant for this command, as long as it make the full 360-degree
-            revolution.
-
-            The command is optimized for the object to be rotated with a human hand at a steady rate, so it delays
-            further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, the object
-            should not make more than 10 rotations per second and ideally should stay within 1-3 rotations per second.
-            It is also possible to evaluate motor-assisted rotation if the motor does not leak the
-            magnetic field that would interfere with the index signaling from the encoder and spins the object at the
-            speed discussed above.
-        """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(3),
-            noblock=np.bool(False),
         )
 
 
@@ -699,7 +699,7 @@ class ValveModule(ModuleInterface):
         )
 
 
-class SensorModule(ModuleInterface):
+class VoltageModule(ModuleInterface):
     """The class that exposes methods for interfacing with SensorModule instances running on Ataraxis MicroControllers.
 
     SensorModule facilitates receiving data recorded by any sensor that outputs analog unidirectional logic signals.
@@ -832,3 +832,7 @@ class SensorModule(ModuleInterface):
             noblock=np.bool(False),
             cycle_delay=repetition_delay,
         )
+
+
+# class TorqueModule(ModuleInterface):
+#     pass

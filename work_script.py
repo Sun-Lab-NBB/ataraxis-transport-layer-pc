@@ -16,17 +16,14 @@ if __name__ == "__main__":
     logger.start()
 
     # Initializes the tested module interface
-    module = EncoderModule(
-        module_id=np.uint8(1), instance_name="TestEncoder", instance_description="You test encoders!"
-    )
+    module = EncoderModule(module_id=np.uint8(1), instance_name="TestEncoder")
 
     # Initializes and starts the microcontroller interface. Provides it with the tested module instance initialized
     # above.
     interface = MicroControllerInterface(
         controller_id=np.uint8(123),
         controller_name="TestController",
-        controller_description="The controller used to test our code and hardware assembly.",
-        logger_queue=logger.input_queue,
+        data_logger=logger,
         modules=(module,),
         controller_usb_port="/dev/ttyACM0",
         baudrate=115200,
@@ -35,7 +32,7 @@ if __name__ == "__main__":
         unity_broker_port=1883,
         verbose=True,
     )
-    interface._vacate_shared_memory_buffer()
+    interface.vacate_shared_memory_buffer()
     interface.start()
     interface.unlock_controller()
 
@@ -45,6 +42,7 @@ if __name__ == "__main__":
 
     # Sends out the tested command
     check_command = module.check_state(repetition_delay=np.uint32(1000))
+    # noinspection PyTypeChecker
     interface.send_message(check_command)
 
     # calibrate = module.get_ppr()

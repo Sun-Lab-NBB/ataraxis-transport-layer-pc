@@ -855,7 +855,8 @@ class SerialCommunication:
     running AtaraxisMicroController firmware using the USB or UART protocol.
 
     This class is built on top of the SerialTransportLayer, designed to provide the microcontroller communication
-    interface (API) for other Ataraxis libraries.
+    interface (API) for other Ataraxis libraries. This class is not designed to be instantiated directly and
+    should instead be used through the MicroControllerInterface class available through this library!
 
     Notes:
         This class is explicitly designed to use the same parameters as the Communication class used by the
@@ -1105,7 +1106,9 @@ class UnityCommunication:
     Unity side to establish bidirectional communication between Python and Virtual Reality (VR) game world. Primarily,
     the class is intended to be used together with SerialCommunication class to transfer data between microcontrollers
     and Unity. Usually, both communication classes will be managed by the same process (core) that handles the necessary
-    transformations to bridge MQTT and Serial communication protocols used by this library.
+    transformations to bridge MQTT and Serial communication protocols used by this library. This class is not designed
+    to be instantiated directly and should instead be used through the MicroControllerInterface class available through
+    this library!
 
     Notes:
         In the future, this class may be phased out in favor of a unified communication protocol that would use
