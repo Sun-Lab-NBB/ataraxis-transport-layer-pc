@@ -717,7 +717,7 @@ class ValveInterface(ModuleInterface):
         )
 
 
-class VoltageModule(ModuleInterface):
+class LickInterface(ModuleInterface):
     """The class that exposes methods for interfacing with SensorModule instances running on Ataraxis MicroControllers.
 
     SensorModule facilitates receiving data recorded by any sensor that outputs analog unidirectional logic signals.
@@ -852,5 +852,5 @@ class VoltageModule(ModuleInterface):
         )
 
 
-# class TorqueModule(ModuleInterface):
+# class TorqueInterface(ModuleInterface):
 #     pass
