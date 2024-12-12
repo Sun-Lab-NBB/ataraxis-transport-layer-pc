@@ -9,7 +9,7 @@ from multiprocessing import Queue as MPQueue
 
 import numpy as np
 from numpy.typing import NDArray
-
+from numpy.polynomial.polynomial import polyfit
 from .communication import (
     ModuleData,
     ModuleState,
@@ -19,6 +19,7 @@ from .communication import (
     RepeatedModuleCommand,
 )
 from .microcontroller import ModuleInterface
+from ataraxis_base_utilities import console
 
 
 class EncoderInterface(ModuleInterface):
@@ -35,12 +36,6 @@ class EncoderInterface(ModuleInterface):
 
         This interface comes pre-configured to send incoming motion data to Unity. If you do not need this
         functionality, override the unity_output flag at class instantiation!
-
-        The class log_variables() method is configured to serialize the conversion factors and encoder / object
-        parameters. The data received from the microcontroller is logged as-is, so all received values will be in
-        pulses. However, since all conversion factors are also logged, it is possible to translate the data from
-        pulses to cms or unity units during post-processing. The conversion factors are cast to float 64 types and
-        rounded to 12 decimal places to make them reproducible.
 
     Args:
         module_id: The identifier code of the interfaced EncoderModule instance.
@@ -139,7 +134,7 @@ class EncoderInterface(ModuleInterface):
         return
 
     def log_variables(self) -> NDArray[np.uint8] | None:
-        # Serializes and returns the PPR, Object Diameter and conversion factors used to translate pulses to cm and
+        # Serializes and returns the PPR, Object Diameter, and conversion factors used to translate pulses to cm and
         # cm to Unity units. Jointly, these values are enough to translate raw encoder pulses (which are logged to
         # disk) to other distance measurements.
         output_array: NDArray[np.uint8] = np.array(
@@ -433,19 +428,41 @@ class TTLInterface(ModuleInterface):
 
 
 class BreakInterface(ModuleInterface):
-    """The class that exposes methods for interfacing with BreakModule instances running on Ataraxis MicroControllers.
+    """Interfaces with BreakModule instances running on Ataraxis MicroControllers.
 
-    BreakModule allows interfacing with a wide range of breaks attached to rotating objects. To enable this, the class
-    is designed to be connected to a Field-Effect-Transistor (FET) gated relay that controls the delivery of voltage to
-    the break. The module can be used to either fully engage or disengage the breaks or to output a PWM signal to
-    engage the break with the desired strength.
+    BreakModule allows interfacing with a break to dynamically control the motion of break-coupled objects. The module
+    is designed to send PWM signals that trigger Field-Effect-Transistor (FET) gated relay hardware to deliver voltage
+    that variably engages the break. The module can be used to either fully engage or disengage the breaks or to output
+    a PWM signal to engage the break with the desired strength.
 
     Args:
-        module_id: The unique identifier code of the managed BreakModule instance.
-        instance_name: The human-readable name of the BreakModule instance.
+        module_id: The identifier code of the interfaced BreakModule instance.
+        instance_name: The human-readable name of the interfaced BreakModule instance.
+        minimum_break_strength: The minimum torque applied by the break in grams / centimeter. This is the torque the
+            break delivers at minimum voltage (break is disabled).
+        maximum_break_strength: The maximum torque applied by the break in grams / centimeter. This is the torque the
+            break delivers at maximum voltage (break is fully engaged).
+        object_diameter: The diameter of the objected coupled to the break, in centimeters. This is used to
+            estimate the torque applied by the break to the edge of the object and to estimate breaking force for each
+            pwm level.
+
+    Attributes:
+        _minimum_break_strength: The minimum torque the break delivers at minimum voltage (break is disabled).
+        _maximum_break_strength: The maximum torque the break delivers at maximum voltage (break is fully engaged).
+        _object_diameter: The diameter of the objected coupled to the break, in centimeters.
+        _newton_per_gram_centimeter: Conversion factor from torque force in g/cm to N/cm.
+        _torque_per_pwm: Conversion factor from break pwm levels to breaking force in N/cm.
     """
 
-    def __init__(self, module_id: np.uint8, instance_name: str) -> None:
+    def __init__(
+        self,
+        module_id: np.uint8,
+        instance_name: str,
+        minimum_break_strength: float = 43.2,  # 0.6 in iz
+        maximum_break_strength: float = 1152.13,  # 16 in oz
+        object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
+    ) -> None:
+
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             type_name="BreakModule",
@@ -454,6 +471,28 @@ class BreakInterface(ModuleInterface):
             instance_name=instance_name,
             unity_input_topics=None,
             output_data=False,
+        )
+
+        # Hardcodes the conversion factor used to translate torque force in g/cm to N/cm
+        self._newton_per_gram_centimeter: float = 0.0000981
+
+        # Stores additional data into class attributes. Rounds to 12 decimal places for consistency and to ensure
+        # repeatability.
+        self._minimum_break_strength: np.float64 = np.round(
+            a=minimum_break_strength / self._newton_per_gram_centimeter,
+            decimals=12,
+        )
+        self._maximum_break_strength: np.float64 = np.round(
+            a=maximum_break_strength / self._newton_per_gram_centimeter,
+            decimals=12,
+        )
+        self._object_diameter: float = object_diameter
+
+        # Computes the conversion factor to translate break pwm levels into breaking force in Newtons per cm. Rounds
+        # to 12 decimal places for consistency and to ensure repeatability.
+        self._torque_per_pwm = np.round(
+            a=(self._maximum_break_strength - self._minimum_break_strength) / 255,
+            decimals=12,
         )
 
     def send_data(
@@ -470,44 +509,90 @@ class BreakInterface(ModuleInterface):
         return
 
     def log_variables(self) -> NDArray[np.uint8] | None:
-        """Not used."""
-        return None
+        # Saves break data and conversion factors used to translate pwm values into torque force.
+        output_array: NDArray[np.uint8] = np.array(
+            [
+                self._minimum_break_strength,
+                self._maximum_break_strength,
+                np.float64(self._object_diameter),
+                np.float64(self._newton_per_gram_centimeter),
+                self._torque_per_pwm,
+            ],
+            dtype=np.uint8,
+        )
+        return output_array
 
-    def set_parameters(self, pwm_strength: np.uint8 = np.uint8(255)) -> ModuleParameters:
-        """Sets PC-addressable parameters of the module instance running on the microcontroller.
+    def get_pwm_from_force(self, target_force_n_cm: float) -> np.uint8:
+        """Converts the desired breaking force in Newtons to the required PWM value (0-255) to be delivered to the break
+        hardware by the BreakModule.
 
-        Notes:
-            When the manage BreakModule is running the set_power() command, updating the pwm_strength parameter will
-            tune the strength at which the managed break is engaged.
+        Use this method to convert the desired breaking force into the PWM value that can be submitted to the
+        BreakModule via the set_parameters() class method.
 
         Args:
-            pwm_strength: The Pulse-Width-Modulation (PWM) value to use when the module is triggered to deliver variable
-                breaking power. Depending on this value, the breaking power can be adjusted from none (0) to maximum
-                (255). This is only used when the break is engaged via set_power() command.
+            target_force_n_cm: Desired force in Newtons per centimeter at the edge of the object.
 
         Returns:
-            The ModuleParameters message to be sent to the microcontroller.
+            The byte PWM value that would generate the desired amount of torque.
+
+        Raises:
+            ValueError: If the input force is not within the valid range for the BreakModule.
+        """
+        if self._maximum_break_strength > target_force_n_cm or self._minimum_break_strength < target_force_n_cm:
+            message = (
+                f"The requested force {target_force_n_cm} N/cm is outside the valid range for the BreakModule "
+                f"{self._instance_name} with id {self._module_id}. Valid breaking force range is from "
+                f"{self._minimum_break_strength} to {self._maximum_break_strength}."
+            )
+            console.error(message=message, error=ValueError)
+
+            # Calculates PWM using the pre-computed torque_per_pwm conversion factor
+            pwm_value = np.uint8(round((target_force_n_cm - self._minimum_break_strength) / self._torque_per_pwm))
+
+            return pwm_value
+
+    def set_parameters(self, breaking_strength: np.uint8 = np.uint8(255)) -> ModuleParameters:
+        """Changes the PC-addressable runtime parameters of the BreakModule instance.
+
+        Use this method to package and apply new PC-addressable parameters to the BreakModule instance managed by this
+        Interface class.
+
+        Notes:
+            Use set_breaking_power() command to apply the breaking-strength transmitted in this parameter message to the
+            break. Until the command is called, the new breaking_strength will not be applied to the break hardware.
+
+        Args:
+            breaking_strength: The Pulse-Width-Modulation (PWM) value to use when the BreakModule delivers adjustable
+                breaking power. Depending on this value, the breaking power can be adjusted from none (0) to maximum
+                (255). Use get_pwm_from_force() to translate desired breaking force into the required PWM value.
+
+        Returns:
+            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
         """
         return ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
             return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
-            parameter_data=(pwm_strength,),
+            parameter_data=(breaking_strength,),
         )
 
     def toggle(self, state: bool) -> OneOffModuleCommand:
-        """Toggles the managed break to be constantly engaged at maximum strength or disengaged.
+        """Triggers the BreakModule to be permanently engaged at maximum strength or permanently disengaged.
+
+        This command locks the BreakModule managed by this Interface into the desired state.
 
         Notes:
-            This command does not the pwm_strength parameter and always uses either maximum or minimum breaking power.
-            To set the break to a specific power level, use the set_power() command.
+            This command does NOT use the breaking_strength parameter and always uses either maximum or minimum breaking
+            power. To set the break to a specific torque level, set the level via the set_parameters() method and then
+            switch the break into the variable torque mode by using the set_breaking_power() method.
 
         Args:
-            state: The desired state of the break. Set to True to permanently enable the break with maximum power, or to
-                False to permanently disable the break.
+            state: The desired state of the break. True means the break is engaged; False means the break is disengaged.
 
         Returns:
-            The OneOffModuleCommand message to be sent to the microcontroller.
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
+            MicroControllerInterface class.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,
@@ -517,20 +602,23 @@ class BreakInterface(ModuleInterface):
             noblock=np.bool(False),
         )
 
-    def set_power(self) -> OneOffModuleCommand:
-        """Sets the managed break to engage with the desired strength, depending on the pwm_strength module parameter.
+    def set_breaking_power(self) -> OneOffModuleCommand:
+        """Triggers the BreakModule to engage with the strength (torque) defined by the breaking_strength runtime
+        parameter.
 
-        Unlike the toggle() command, this command allows precisely controlling the power applied by the break by using
-        a PWM signal to adjust the power. Depending on your specific use case, this command may either be very useful or
-        not useful at all. For binary engage / disengage control the toggle() command is a more efficient choice.
+        Unlike the toggle() method, this method allows precisely controlling the torque applied by the break. This
+        is achieved by pulsing the break control pin at the PWM level specified by breaking_strength runtime parameter
+        stored in BreakModule's memory (on the microcontroller).
 
         Notes:
-            This command switches the break to run in the variable strength mode, but it does not determine the breaking
-            power. To control the power, adjust the pwm_strength parameter by sending a ModuleParameters message with
-            the new pwm_strength value. By default, the break power is set to engage the break with maximum power.
+            This command switches the break to run in the variable strength mode and applies the current value of the
+            breaking_strength parameter to the break, but it does not determine the breaking power. To adjust the power,
+            use the set_parameters() class method to issue updated breaking_strength value. By default, the break power
+            is set to 50% (PWM value 128).
 
         Returns:
-            The OneOffModuleCommand message to be sent to the microcontroller.
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
+            MicroControllerInterface class.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,
@@ -542,12 +630,13 @@ class BreakInterface(ModuleInterface):
 
 
 class ValveInterface(ModuleInterface):
-    """The class that exposes methods for interfacing with ValveModule instances running on Ataraxis MicroControllers.
+    """Interfaces with ValveModule instances running on Ataraxis MicroControllers.
 
-    ValveModule allows interfacing with a wide range of solenoid fluid or gas valves. To enable this, the class is
-    designed to be connected to a Field-Effect-Transistor (FET) gated relay that controls the delivery of voltage to
-    the valve. The module can be used to either permanently open or close the valve or to cycle opening and closing in
-    a way that ensures a specific amount of gas or fluid passes through the valve.
+    ValveModule allows interfacing with a solenoid valve to controllably dispense precise amounts of fluid. The module
+    is designed to send digital signals that trigger Field-Effect-Transistor (FET) gated relay hardware to deliver
+    voltage that opens or closes the controlled valve. The module can be used to either permanently open or close the
+    valve or to cycle opening and closing in a way that ensures a specific amount of fluid passes through the
+    valve.
 
     Notes:
         This interface comes pre-configured to receive valve pulse triggers from Unity. If you do not need this
@@ -556,15 +645,26 @@ class ValveInterface(ModuleInterface):
     Args:
         module_id: The unique identifier code of the managed ValveModule instance.
         instance_name: The human-readable name of the ValveModule instance.
+        valve_calibration_data: A tuple of tuples that contains the data required to map pulse duration to delivered
+            fluid volume. Each sub-tuple should contain the integer that specifies the pulse duration in microseconds
+            and a float that specifies the delivered fluid volume in microliters. If you do not know this data,
+            initialize the class using a placeholder calibration tuple and use calibration() class method to collect
+            this data using the ValveModule.
         input_unity_topics: A tuple of Unity topics that the module should monitor to receive activation triggers.
+
+    Attributes:
+        _microliters_per_microsecond: The conversion factor from desired fluid volume in microliters to the pulse
+            valve duration in microseconds.
     """
 
     def __init__(
         self,
         module_id: np.uint8,
         instance_name: str,
+        valve_calibration_data: tuple[tuple[int, float], ...],
         input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
     ) -> None:
+
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             type_name="ValveModule",
@@ -574,6 +674,16 @@ class ValveInterface(ModuleInterface):
             unity_input_topics=input_unity_topics,
             output_data=False,
         )
+
+        # Extracts pulse durations and fluid volumes into separate arrays
+        pulse_durations: NDArray[np.float64] = np.array([x[0] for x in valve_calibration_data], dtype=np.float64)
+        fluid_volumes: NDArray[np.float64] = np.array([x[1] for x in valve_calibration_data], dtype=np.float64)
+        # noinspection PyTypeChecker
+
+        # Computes the conversion factor by finding the slope of the calibration curve.
+        # Rounds to 12 decimal places for consistency and to ensure repeatability
+        slope: np.float64 = polyfit(x=pulse_durations, y=fluid_volumes, deg=1)[0]  # type: ignore
+        self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=12)
 
     def send_data(
         self,
@@ -600,61 +710,86 @@ class ValveInterface(ModuleInterface):
         )
 
     def log_variables(self) -> NDArray[np.uint8] | None:
-        """Not used."""
-        return None
+        # Saves the valve calibration factor
+        output_array: NDArray[np.uint8] = np.array(
+            [self._microliters_per_microsecond],
+            dtype=np.uint8,
+        )
+        return output_array
+    
+    def get_duration_from_volume(self, volume: float) -> np.uint32:
+        """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
+        will use to deliver that fluid volume.
 
+        Use this method to convert the desired fluid volume into the pulse_duration value that can be submitted to the
+        ValveModule via the set_parameters() class method.
+
+        Args:
+            volume: Desired fluid volume in microliters.
+
+        Returns:
+            The microsecond pulse duration that would be used to deliver the specified volume.
+        """
+        return np.uint32(np.round(volume / self._microliters_per_microsecond))
+    
     def set_parameters(
         self,
         pulse_duration: np.uint32 = np.uint32(10000),
         calibration_delay: np.uint32 = np.uint32(10000),
-        calibration_count: np.uint16 = np.uint16(1000),
+        calibration_count: np.uint16 = np.uint16(100),
     ) -> ModuleParameters:
-        """Sets PC-addressable runtime parameters of the module instance running on the microcontroller.
+        """Changes the PC-addressable runtime parameters of the ValveModule instance.
+
+        Use this method to package and apply new PC-addressable parameters to the ValveModule instance managed by this
+        Interface class.
 
         Args:
-            pulse_duration: The time, in microseconds, the valve stays open during pulsing. This is used during the
-                execution of send_pulse() command to control the amount of dispensed gas or fluid.
+            pulse_duration: The time, in microseconds, the valve stays open when it is pulsed (opened and closed). This
+                is used during the execution of send_pulse() command to control the amount of dispensed fluid. Use
+                get_duration_from_volume() method to convert the desired fluid volume into the pulse_duration value.
             calibration_delay: The time, in microseconds, to wait between consecutive pulses during calibration.
                 Calibration works by repeatedly pulsing the valve the requested number of times. Delaying after closing
-                the valve ensures the valve hardware has enough time to respond to the inactivation phase, before the
-                activation phase of the next pulse starts.
-            calibration_count: The number of times to pulse the valve during calibration.
+                the valve (ending the pulse) ensures the valve hardware has enough time to respond to the inactivation
+                phase before starting the next calibration cycle.
+            calibration_count: The number of times to pulse the valve during calibration. A number between 10 and 100 is
+                enough for most use cases.
 
         Returns:
-            The ModuleParameters message to be sent to the microcontroller.
+            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
         """
         return ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
-            return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
+            return_code=np.uint8(0),
             parameter_data=(pulse_duration, calibration_delay, calibration_count),
         )
 
     def send_pulse(
         self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
-        """Delivers the predetermined amount of gas or fluid once or repeatedly (recurrently) by opening and closing
-        (pulsing) teh valve.
+        """Triggers ValveModule to deliver a precise amount of fluid by cycling opening and closing the valve once or
+        repetitively (recurrently).
 
-        After calibration, this command allows delivering precise amounts of fluid accurate in the microliter and,
-        depending on the used valve and relay hardware, even nanoliter ranges. Generally, this is the most common way
-        of using the solenoid valves. If you need to pulse the valve over even intervals, issue a repeating (recurrent)
-        command to maximize the repetition precision.
+        After calibration, this command allows delivering precise amounts of fluid with, depending on the used valve and
+        relay hardware microliter or nanoliter precision. This command is optimized to change valve states at a
+        comparatively low frequency in the 10-200 Hz range.
 
         Notes:
-            To ensure the accuracy of fluid or gas delivery, it is recommended to run the valve in the blocking mode
-            and, if possible, isolate it to a controller that is not busy with running other modules.
+            To ensure the accuracy of fluid delivery, it is recommended to run the valve in the blocking mode
+            and, if possible, isolate it to a controller that is not busy with running other tasks.
 
         Args:
-            repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
-                the command will only run once. Note, the exact repetition delay will be further affected by other
-                modules managed by the same microcontroller and may not be perfectly accurate.
+            repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
+                will only run once. The exact repetition delay will be further affected by other modules managed by the
+                same microcontroller and may not be perfectly accurate.
             noblock: Determines whether the command should block the microcontroller while the valve is kept open or
-                not. Blocking ensures precise pulse duration, non-blocking allows the microcontroller to perform other
-                operations while waiting, increasing its throughput.
+                not. Blocking ensures precise pulse duration and, by extension, delivered fluid volume. Non-blocking
+                allows the microcontroller to perform other operations while waiting, increasing its throughput.
 
         Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
+            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
+            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
             return OneOffModuleCommand(
@@ -675,14 +810,16 @@ class ValveInterface(ModuleInterface):
         )
 
     def toggle(self, state: bool) -> OneOffModuleCommand:
-        """Toggles the managed valve to be constantly opened or closed.
+        """Triggers the ValveModule to be permanently open or closed.
+
+        This command locks the ValveModule managed by this Interface into the desired state.
 
         Args:
-            state: The desired state of the valve. Set to True to permanently open the valve, or to False to permanently
-                close the valve.
+            state: The desired state of the valve. True means the valve is open; False means the valve is closed.
 
         Returns:
-            The OneOffModuleCommand message to be sent to the microcontroller.
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
+            MicroControllerInterface class.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,
@@ -693,20 +830,26 @@ class ValveInterface(ModuleInterface):
         )
 
     def calibrate(self) -> OneOffModuleCommand:
-        """Calibrates the valve by repeatedly pulsing it a certain number of times.
+        """Triggers ValveModule to repeatedly pulse the valve using the duration defined by the pulse_duration runtime
+        parameter.
 
-        This command is used to build the calibration map of the valve that matches pulse_durations to the amount of
-        fluid or gas dispensed during the opened phase of the pulse. To do so, the command repeatedly issues a high
-        number of pulses to dispense a large volume of fluid or gas. The number of pulses carried out during this
-        command is specified by the calibration_count parameter, and the delay between pulses is specified by the
-        calibration_delay parameter.
+        This command is used to build the calibration map of the valve that matches pulse_duration to the volume of
+        fluid dispensed during the time the valve is open. To do so, the command repeatedly pulses the valve to dispense
+        a large volume of fluid which can be measured and averaged to get the volume of fluid delivered during each
+        pulse. The number of pulses carried out during this command is specified by the calibration_count parameter, and
+        the delay between pulses is specified by the calibration_delay parameter.
 
         Notes:
             When activated, this command will block in-place until the calibration cycle is completed. Currently, there
             is no way to interrupt the command, and it may take a prolonged period of time (minutes) to complete.
 
+            This command does not set any of the parameters involved in the calibration process. Make sure the
+            parameters are submitted to the ValveModule's hardware memory via the set_parameters() class method before
+            running the calibration() command.
+
         Returns:
-            The OneOffModuleCommand message to be sent to the microcontroller.
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,
