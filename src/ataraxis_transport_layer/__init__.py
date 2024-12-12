@@ -5,20 +5,20 @@ API documentation: https://ataraxis-transport-layer-api-docs.netlify.app/
 Author: Ivan Kondratyev (Inkaros)
 """
 
-from .custom_modules import TTLModule, BreakModule, ValveModule, VoltageModule, EncoderModule
+from .custom_modules import TTLInterface, BreakInterface, ValveInterface, VoltageModule, EncoderInterface
 from .helper_modules import CRCProcessor, COBSProcessor
 from .microcontroller import MicroControllerInterface
 from .transport_layer import SerialTransportLayer, list_available_ports
 
 __all__ = [
-    "BreakModule",
+    "BreakInterface",
     "COBSProcessor",
     "CRCProcessor",
-    "EncoderModule",
+    "EncoderInterface",
     "MicroControllerInterface",
     "VoltageModule",
     "SerialTransportLayer",
-    "TTLModule",
-    "ValveModule",
+    "TTLInterface",
+    "ValveInterface",
     "list_available_ports",
 ]

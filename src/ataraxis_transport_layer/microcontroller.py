@@ -46,7 +46,7 @@ class ModuleInterface:  # pragma: no cover
 
     Notes:
         Due to a high degree of custom module variability, it is currently not possible to provide a 'one-fits-all'
-        Module interface that is also highly efficient for real time communication. Therefore, similar to
+        module Interface that is also highly efficient for real time communication. Therefore, similar to
         ataraxis-micro-controller (AXMC) library, the interface for each custom module has to be implemented separately
         on a need-base method. The (base) class exposes the static API that MicroControllerInterface class can use to
         integrate each custom interface implementation with the general communication runtime cycle. To make this
@@ -856,8 +856,8 @@ class MicroControllerInterface:  # pragma: no cover
         if not self._started:
             return
 
-        # Resets the controller. This automatically prevents all modules from changing pin states and resets modules
-        # and hardware states.
+        # Resets the controller. This automatically prevents all modules from changing pin states (locks the controller)
+        # and resets module and hardware states.
         self.reset_controller()
 
         # There is no need for additional delays as the communication loop will make sure the reset command is sent

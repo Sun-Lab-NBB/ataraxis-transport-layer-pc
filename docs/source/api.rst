@@ -29,9 +29,9 @@ MicroController
    :undoc-members:
    :show-inheritance:
 
-Custom Modules
-==============
-.. automodule:: ataraxis_transport_layer.custom_modules
+Custom Interfaces
+=================
+.. automodule:: ataraxis_transport_layer.custom_interfaces
    :members:
    :undoc-members:
    :show-inheritance:

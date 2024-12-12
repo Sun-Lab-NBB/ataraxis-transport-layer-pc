@@ -1,5 +1,6 @@
-"""This module provides ModuleInterface implementations for teh default modules shipped with the
-AtaraxisMicroController library. Primarily, they are included to showcase the correct usage of this library.
+"""This module provides ModuleInterface implementations for the default hardware modules shipped with the
+AtaraxisMicroController library. Primarily, these classes are intended to serve as examples for how to implement
+custom module Interfaces.
 """
 
 from json import dumps
@@ -20,34 +21,42 @@ from .communication import (
 from .microcontroller import ModuleInterface
 
 
-class EncoderModule(ModuleInterface):
-    """The class that exposes methods for interfacing with EncoderModule instances running on Ataraxis MicroControllers.
+class EncoderInterface(ModuleInterface):
+    """Interfaces with EncoderModule instances running on Ataraxis MicroControllers.
 
     EncoderModule allows interfacing with quadrature encoders used to monitor the direction and magnitude of connected
     object's rotation. To achieve the highest resolution, the module relies on hardware interrupt pins to detect and
-    handle the pulses sent by the two encoder channels. Overall, the EncoderModule is tasked with determining how much
-    the tracked rotating object has moved since the last check and to which direction.
+    handle the pulses sent by the two encoder channels.
 
     Notes:
+        By default, EncoderModule instances are configured to interfere with any other library or class that uses
+        AttachInterrupt() function. Usually it is advised to isolate EncoderModule onto a separate microcontroller
+        board, if possible, to ensure maximum performance.
+
         This interface comes pre-configured to send incoming motion data to Unity. If you do not need this
         functionality, override the unity_output flag at class instantiation!
 
+        The class log_variables() method is configured to serialize the conversion factors and encoder / object
+        parameters. The data received from the microcontroller is logged as-is, so all received values will be in
+        pulses. However, since all conversion factors are also logged, it is possible to translate the data from
+        pulses to cms or unity units during post-processing. The conversion factors are cast to float 64 types and
+        rounded to 12 decimal places to make them reproducible.
+
     Args:
-        module_id: The unique identifier code of the managed EncoderModule instance.
-        instance_name: The human-readable name of the EncoderModule instance.
-        output_data: Determines whether the EncoderModule instance should send the motion data to Unity.
+        module_id: The identifier code of the interfaced EncoderModule instance.
+        instance_name: The human-readable name of the interfaced EncoderModule instance.
+        output_data: Determines whether the instance should send motion data to Unity.
         motion_topic: The MQTT topic to which the instance should send the motion data received from the
             microcontroller.
-        encoder_ppr: The resolution of the managed quadrature encoder, in Pulses Per Revolution (PPR). Specifically,
-            this is the number of quadrature pulses the encoder emits per full 360-degree rotation. If this number is
-            not known, provide a placeholder value and use get_ppr() command to estimate the PPR using the index channel
-            of the encoder.
-        object_diameter: The diameter of the rotating object connected to the encoder, in cm. This is used to
+        encoder_ppr: The resolution of the managed quadrature encoder, in Pulses Per Revolution (PPR). This is the
+            number of quadrature pulses the encoder emits per full 360-degree rotation. If this number is not known,
+            provide a placeholder value and use get_ppr() command to estimate the PPR using the index channel of the
+            encoder.
+        object_diameter: The diameter of the rotating object connected to the encoder, in centimeters. This is used to
             convert encoder pulses into rotated distance in cm.
         cm_per_unity_unit: The conversion factor to translate the distance traveled by the edge of the circular object
-             into the Unity units. This value works together with object_diameter and encoder_ppr to translate raw
-             encoder pulses received from the microcontroller into Unity-compatible units, used by the game engine to
-             move the VirtualReality agent.
+             into Unity units. This value works together with object_diameter and encoder_ppr to translate raw
+             encoder pulses received from the microcontroller into Unity-compatible units.
 
     Attributes:
         _motion_topic: Stores the MQTT motion topic.
@@ -83,8 +92,8 @@ class EncoderModule(ModuleInterface):
         self._object_diameter = object_diameter
         self._cm_per_unity_unit = cm_per_unity_unit
 
-        # Computes the conversion factor to translate encoder pulses into unity units. Round to 12 decimal places for
-        # consistency and uses 12 decimal places to ensure repeatability and precision.
+        # Computes the conversion factor to translate encoder pulses into unity units. Rounds to 12 decimal places for
+        # consistency and to ensure repeatability.
         self._unity_unit_per_pulse = np.round(
             a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
             decimals=12,
@@ -96,8 +105,13 @@ class EncoderModule(ModuleInterface):
         unity_communication: UnityCommunication,
         _mp_queue: MPQueue,  # type: ignore
     ) -> None:
-        # If the incoming message is not a CCW or CW motion report, aborts processing
-        if message.event != np.uint8(51) and message.event != np.uint8(52) or isinstance(message, ModuleState):
+
+        # ModuleState messages do not communicate any data that needs to be sent to Unity.
+        if isinstance(message, ModuleState):
+            return
+
+        # If the incoming message is not a CCW or CW motion report, aborts processing:
+        if message.event != np.uint8(51) and message.event != np.uint8(52):
             return
 
         # The rotation direction is encoded via the message event code. CW rotation (code 51) is interpreted as negative
@@ -125,10 +139,11 @@ class EncoderModule(ModuleInterface):
         return
 
     def log_variables(self) -> NDArray[np.uint8] | None:
-        """Returns serialized instance variable data."""
+        # Serializes and returns the PPR, Object Diameter and conversion factors used to translate pulses to cm and
+        # cm to Unity units. Jointly, these values are enough to translate raw encoder pulses (which are logged to
+        # disk) to other distance measurements.
         output_array: NDArray[np.uint8] = np.array(
             [
-                np.bool(self.output_data),
                 np.uint32(self._ppr),
                 np.float64(self._object_diameter),
                 np.float64(self._cm_per_unity_unit),
@@ -136,7 +151,6 @@ class EncoderModule(ModuleInterface):
             ],
             dtype=np.uint8,
         )
-
         return output_array
 
     def set_parameters(
@@ -145,7 +159,10 @@ class EncoderModule(ModuleInterface):
         report_cw: np.bool | bool = np.bool(True),
         delta_threshold: np.uint32 | int = np.uint32(10),
     ) -> ModuleParameters:
-        """Sets PC-addressable parameters of the module instance running on the microcontroller.
+        """Changes the PC-addressable runtime parameters of the EncoderModule instance.
+
+        Use this method to package and apply new PC-addressable parameters to the EncoderModule instance managed by
+        this Interface class.
 
         Args:
             report_ccw: Determines whether to report rotation in the CCW (positive) direction.
@@ -157,34 +174,35 @@ class EncoderModule(ModuleInterface):
                 significant overall change in position is reached to justify reporting it to the PC.
 
         Returns:
-            The ModuleParameters message to be sent to the microcontroller.
+            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
         """
         return ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
-            return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
+            return_code=np.uint8(0),
             parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
         )
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
-        """Checks the number and direction of pulses recorded by the encoder since the last readout or module reset.
+        """Returns the number of pulses accumulated by the EncoderModule since the last check or reset.
 
         If there has been a significant change in the absolute count of pulses, reports the change and direction to the
         PC. It is highly advised to issue this command to repeat (recur) at a desired interval to continuously monitor
-        the pin state, rather than repeatedly calling it as a one-off command for best runtime efficiency.
+        the encoder state, rather than repeatedly calling it as a one-off command for best runtime efficiency.
 
         This command allows continuously monitoring the rotation of the object connected to the encoder. It is designed
         to return the absolute raw count of pulses emitted by the encoder in response to the object ration. This allows
-        avoiding floating-point arithmetic on the microcontroller, but requires it to be implemented on the PC to
-        convert emitted pulses into a meaningful circular distance value. The specific conversion algorithm depends on
-        the encoder and the tracker object.
+        avoiding floating-point arithmetic on the microcontroller and relies on the PC to convert pulses to standard
+        units,s uch as centimeters. The specific conversion algorithm depends on the encoder and motion diameter.
 
         Args:
-            repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
-                the command will only run once.
+            repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the
+            command will only run once.
 
         Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
+            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
+            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
             return OneOffModuleCommand(
@@ -205,13 +223,14 @@ class EncoderModule(ModuleInterface):
         )
 
     def reset_pulse_count(self) -> OneOffModuleCommand:
-        """Resets the current pulse tracker of the encoder to 0, clearing any currently stored rotation data.
+        """Resets the EncoderModule pulse tracker to 0.
 
-        Primarily, this command is helpful if you need to reset the encoder without evaluating its current pulse count.
-        For example, this would be the case if there is a delay between the initialization of the module and the start
-        of the encoder monitoring. Resetting the encoder before evaluating its pulse count for the first time discards
-        a nonsensical pulse count aggregated before the monitoring has started. Similarly, this can be used to re-base
-        the encoder pulse count without reading the aggregate data.
+        This command allows resetting the encoder without evaluating its current pulse count. Currently, this command
+        is designed ot only run once.
+
+        Returns:
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,
@@ -222,27 +241,28 @@ class EncoderModule(ModuleInterface):
         )
 
     def get_ppr(self) -> OneOffModuleCommand:
-        """Uses the index channel of the encoder to estimate its Pulse-per-Revolution (PPR).
+        """Uses the index channel of the EncoderModule to estimate its Pulse-per-Revolution (PPR).
 
-        The PPR allows converting raw pulse counts reported by other commands of this module to real life circular
-        distances. This is a service command not intended to be used during most production runtimes if the PPR is
-        already known. It relies on the encoder completing up to 11 full rotations and uses the index channel of the
-        encoder to detect each revolution completion.
+        The PPR allows converting raw pulse counts the EncoderModule sends to the PC to accurate displacement in
+        standard distance units, such as centimeters. This is a service command not intended to be used during most
+        runtimes if the PPR is already known. It relies on the object tracked by the encoder completing up to 11 full
+        revolutions and uses the index channel of the encoder to measure the number of pulses per each revolution.
 
         Notes:
-            Make sure the calibrated encoder rotates at a steady slow speed until this command completes. Similar to
-            other service commands, it is designed to deadlock the controller until the command completes. Since this
-            interface exclusive works with the encoder, you have to provide the encoder rotation separately (manually).
+            Make sure the evaluated encoder rotates at a slow and stead speed until this command completes. Similar to
+            other service commands, it is designed to deadlock the controller until the command completes. Note, the
+            EncoderModule does not provide the rotation, this needs to be done manually.
 
-            The direction of the rotation is not relevant for this command, as long as it make the full 360-degree
-            revolution.
+            The direction of the rotation is not relevant for this command, as long as the object makes the full
+            360-degree revolution.
 
             The command is optimized for the object to be rotated with a human hand at a steady rate, so it delays
-            further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, the object
-            should not make more than 10 rotations per second and ideally should stay within 1-3 rotations per second.
-            It is also possible to evaluate motor-assisted rotation if the motor does not leak the
-            magnetic field that would interfere with the index signaling from the encoder and spins the object at the
-            speed discussed above.
+            further index pin polling for 100 milliseconds each time the index pin is triggered. Therefore, if the
+            object is moving too fast (or too slow), the command will not work as intended.
+
+        Returns:
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,
@@ -253,16 +273,16 @@ class EncoderModule(ModuleInterface):
         )
 
 
-class TTLModule(ModuleInterface):
-    """The class that exposes methods for interfacing with TTLModule instances running on Ataraxis MicroControllers.
+class TTLInterface(ModuleInterface):
+    """Interfaces with TTLModule instances running on Ataraxis MicroControllers.
 
     TTLModule facilitates exchanging Transistor-to-Transistor Logic (TTL) signals between various hardware systems, such
-    as microcontrollers, cameras, and other hardware. The module contains methods for both sending and receiving the TTL
-    pulses, but each TTLModule instance can only do one of these functions at a time.
+    as microcontrollers, cameras and recording devices. The module contains methods for both sending and receiving TTL
+    pulses, but each TTLModule instance can only perform one of these functions at a time.
 
     Args:
-        module_id: The unique identifier code of the managed TTLModule instance.
-        instance_name: The human-readable name of the TTLModule instance.
+        module_id: The identifier code of the interfaced TTLModule instance.
+        instance_name: The human-readable name of the interfaced TTLModule instance.
     """
 
     def __init__(self, module_id: np.uint8, instance_name: str) -> None:
@@ -296,44 +316,49 @@ class TTLModule(ModuleInterface):
     def set_parameters(
         self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
     ) -> ModuleParameters:
-        """Sets PC-addressable runtime parameters of the module instance running on the microcontroller.
+        """Changes the PC-addressable runtime parameters of the TTLModule instance.
+
+        Use this method to package and apply new PC-addressable parameters to the TTLModule instance managed by
+        this Interface class.
 
         Args:
-            pulse_duration: The time, in microseconds, for the HIGH phase of emitted TTL pulses. This is used during the
-                execution of send_pulse() command to control the length of emitted pulses.
+            pulse_duration: The duration, in microseconds, of each emitted TTL pulse HIGH phase. This determines
+                how long the TTL pin stays ON when emitting a pulse.
             averaging_pool_size: The number of digital pin readouts to average together when checking pin state. This
-                is used during the execution of check_state() command to smooth the pin readout. This should be disabled
-                for most use cases as digital logic signals are already comparatively jitter-free.
+                is used during the execution of check_state() command to debounce the pin readout and acts in addition
+                to any built-in debouncing.
 
         Returns:
-            The ModuleParameters message to be sent to the microcontroller.
+            The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
+            the MicroControllerInterface class.
         """
         return ModuleParameters(
             module_type=self._module_type,
             module_id=self._module_id,
-            return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
+            return_code=np.uint8(0),
             parameter_data=(pulse_duration, averaging_pool_size),
         )
 
     def send_pulse(
         self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
-        """Sends a one-off or recurrent (repeating) TTL pulse using the digital pin managed by the module instance.
+        """Triggers TTLModule to deliver a one-off or recurrent (repeating) digital TTL pulse.
 
-        Generally, this command is well-suited to carry out most forms of TTL communication. It is, however, adapted for
-        comparatively low-frequency communication of 10-200 Hz, compared to PWM outputs capable of mHz or even Khz pulse
+        This command is well-suited to carry out most forms of TTL communication, but it is adapted for comparatively
+        low-frequency communication at 10-200 Hz. This is in-contrast to PWM outputs capable of mHz or even Khz pulse
         oscillation frequencies.
 
         Args:
-            repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
-                the command will only run once. Note, the exact repetition delay will be further affected by other
-                modules managed by the same microcontroller and may not be perfectly accurate.
+            repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
+                will only run once. The exact repetition delay will be further affected by other modules managed by the
+                same microcontroller and may not be perfectly accurate.
             noblock: Determines whether the command should block the microcontroller while emitting the high phase of
                 the pulse or not. Blocking ensures precise pulse duration, non-blocking allows the microcontroller to
                 perform other operations while waiting, increasing its throughput.
 
         Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
+            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
+            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
             return OneOffModuleCommand(
@@ -354,16 +379,16 @@ class TTLModule(ModuleInterface):
         )
 
     def toggle(self, state: bool) -> OneOffModuleCommand:
-        """Sets the digital pin managed by the module instance to continuously output the desired signal level.
+        """Triggers the TTLModule to continuously deliver a digital HIGH or LOW signal.
 
-        Use this to permanently activate or inactivate the pin. Since this is a lock-in command, it does not make sense
-        to make it recurrent.
+        This command locks the TTLModule managed by this Interface into delivering the desired logical signal.
 
         Args:
             state: The signal to output. Set to True for HIGH and False for LOW.
 
         Returns:
-            The OneOffModuleCommand message to be sent to the microcontroller.
+            The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
+            MicroControllerInterface class.
         """
         return OneOffModuleCommand(
             module_type=self._module_type,
@@ -374,20 +399,19 @@ class TTLModule(ModuleInterface):
         )
 
     def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
-        """Checks the state of the digital pin managed by the module.
+        """Checks the state of the TTL signal received by the TTLModule.
 
-        This command will evaluate the state of the digital pin and, if it is significantly different from the state
-        recorded during a previous check, report it to the PC. This approach ensures that only significant changes are
-        communicated to the PC, preserving communication bandwidth. It is highly advised to issue this command to
-        repeat (recur) at a desired interval to continuously monitor the pin state, rather than repeatedly calling it
-        as a one-off command for best runtime efficiency.
+        This command evaluates the state of the TTLModule's input pin and, if it is different from the previous state,
+        reports it to the PC. This approach ensures that the module only reports signal level shifts (edges), preserving
+        communication bandwidth.
 
         Args:
-            repetition_delay: The time, in microseconds, to delay before repeating the command. If this is set to 0,
-                the command will only run once.
+            repetition_delay: The time, in microseconds, to delay before repeating the command. If set to 0, the command
+            will only run once.
 
         Returns:
-            The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
+            The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
+            send_message() method of the MicroControllerInterface class.
         """
         if repetition_delay == 0:
             return OneOffModuleCommand(
@@ -408,7 +432,7 @@ class TTLModule(ModuleInterface):
         )
 
 
-class BreakModule(ModuleInterface):
+class BreakInterface(ModuleInterface):
     """The class that exposes methods for interfacing with BreakModule instances running on Ataraxis MicroControllers.
 
     BreakModule allows interfacing with a wide range of breaks attached to rotating objects. To enable this, the class
@@ -517,7 +541,7 @@ class BreakModule(ModuleInterface):
         )
 
 
-class ValveModule(ModuleInterface):
+class ValveInterface(ModuleInterface):
     """The class that exposes methods for interfacing with ValveModule instances running on Ataraxis MicroControllers.
 
     ValveModule allows interfacing with a wide range of solenoid fluid or gas valves. To enable this, the class is
@@ -541,12 +565,6 @@ class ValveModule(ModuleInterface):
         instance_name: str,
         input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
     ) -> None:
-        # Statically defines the TTLModule type description.
-        type_description = (
-            "The family of modules that sends digital signals to open or close the managed solenoid fluid or gas "
-            "valve."
-        )
-
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             type_name="ValveModule",
