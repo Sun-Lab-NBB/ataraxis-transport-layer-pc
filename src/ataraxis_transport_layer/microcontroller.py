@@ -5,6 +5,7 @@ Each microcontroller module that manages physical hardware should be matched to 
 the base ModuleInterface class. Similarly, for each concurrently active microcontroller, there has to be a specific
 MicroControllerInterface instance that manages the ModuleInterface instances for the modules of that controller.
 """
+
 from abc import abstractmethod
 import sys
 from threading import Thread
@@ -20,7 +21,7 @@ import numpy as np
 from numpy.typing import NDArray
 from ataraxis_time import PrecisionTimer
 from ataraxis_base_utilities import LogLevel, console
-from ataraxis_data_structures import SharedMemoryArray, LogPackage, DataLogger
+from ataraxis_data_structures import DataLogger, LogPackage, SharedMemoryArray
 
 from .communication import (
     ModuleData,
@@ -573,15 +574,10 @@ class MicroControllerInterface:  # pragma: no cover
             # human-readable name for the type and a list used to aggregate the code-name serialized data for all
             # instances of this module type.
             if module_type not in processed_type_codes:
-                processed_type_codes[module_type] = (
-                    module.type_name,
-                    []
-                )
+                processed_type_codes[module_type] = (module.type_name, [])
 
             # Adds each module instance id-name serialization to its type's list inside the tracker dictionary
-            processed_type_codes[module_type][1].append(
-                self._serialize_code_name_pair(module_id, module.instance_name)
-            )
+            processed_type_codes[module_type][1].append(self._serialize_code_name_pair(module_id, module.instance_name))
 
             # For each module instance, calls the method that returns the serialized variable data and logs it by
             # sending the data to the DataLogger
@@ -651,7 +647,7 @@ class MicroControllerInterface:  # pragma: no cover
         form human-readable datasets.
         """
         # Converts string to bytes
-        name_bytes = name.encode('utf-8')
+        name_bytes = name.encode("utf-8")
         name_length = len(name_bytes)
         if name_length > 65535:  # uint16 max
             message = (

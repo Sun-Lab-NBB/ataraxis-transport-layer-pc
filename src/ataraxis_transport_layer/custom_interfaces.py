@@ -9,7 +9,9 @@ from multiprocessing import Queue as MPQueue
 
 import numpy as np
 from numpy.typing import NDArray
+from ataraxis_base_utilities import console
 from numpy.polynomial.polynomial import polyfit
+
 from .communication import (
     ModuleData,
     ModuleState,
@@ -19,7 +21,6 @@ from .communication import (
     RepeatedModuleCommand,
 )
 from .microcontroller import ModuleInterface
-from ataraxis_base_utilities import console
 
 
 class EncoderInterface(ModuleInterface):
@@ -100,7 +101,6 @@ class EncoderInterface(ModuleInterface):
         unity_communication: UnityCommunication,
         _mp_queue: MPQueue,  # type: ignore
     ) -> None:
-
         # ModuleState messages do not communicate any data that needs to be sent to Unity.
         if isinstance(message, ModuleState):
             return
@@ -462,7 +462,6 @@ class BreakInterface(ModuleInterface):
         maximum_break_strength: float = 1152.13,  # 16 in oz
         object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
     ) -> None:
-
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             type_name="BreakModule",
@@ -664,7 +663,6 @@ class ValveInterface(ModuleInterface):
         valve_calibration_data: tuple[tuple[int, float], ...],
         input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
     ) -> None:
-
         # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
         super().__init__(
             type_name="ValveModule",
@@ -716,7 +714,7 @@ class ValveInterface(ModuleInterface):
             dtype=np.uint8,
         )
         return output_array
-    
+
     def get_duration_from_volume(self, volume: float) -> np.uint32:
         """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
         will use to deliver that fluid volume.
@@ -731,7 +729,7 @@ class ValveInterface(ModuleInterface):
             The microsecond pulse duration that would be used to deliver the specified volume.
         """
         return np.uint32(np.round(volume / self._microliters_per_microsecond))
-    
+
     def set_parameters(
         self,
         pulse_duration: np.uint32 = np.uint32(10000),
