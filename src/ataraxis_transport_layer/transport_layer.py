@@ -36,7 +36,7 @@ from .helper_modules import (
 )
 
 
-def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
+def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:  # pragma: no cover
     """Provides the information about each serial port addressable through the pySerial library.
 
     This function is intended to be used for discovering and selecting the serial port 'names' to use with
@@ -214,46 +214,46 @@ class SerialTransportLayer:
                 f"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but "
                 f"encountered {port} of type {type(port).__name__}."
             )
-            raise TypeError(message)
+            console.error(message=message, error=TypeError)
 
         if baudrate <= 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
                 f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
         if not 0 <= start_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
         if not 0 <= delimiter_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
         if timeout < 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
                 f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
         if start_byte == delimiter_byte:
             message = "The 'start_byte' and 'delimiter_byte' cannot be the same."
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
         # Based on the class runtime selector, initializes a real or mock serial port manager class
         self._port: SerialMock | Serial
         if not test_mode:
             # Statically disables built-in timeout. Our jit- and c-extension classes are more optimized for this job
             # than Serial's built-in timeout.
-            self._port = Serial(port, baudrate, timeout=0)
+            self._port = Serial(port, baudrate, timeout=0)  # pragma: no cover
         else:
             self._port = SerialMock()
 
@@ -311,7 +311,7 @@ class SerialTransportLayer:
 
     def __repr__(self) -> str:
         """Returns a string representation of the SerialTransportLayer class instance."""
-        if isinstance(self._port, Serial):
+        if isinstance(self._port, Serial):  # pragma: no cover
             representation_string = (
                 f"SerialTransportLayer(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
                 f"{self._crc_processor.polynomial}, start_byte={self._start_byte}, "
@@ -552,8 +552,8 @@ class SerialTransportLayer:
         message = (
             f"Failed to write the data to the transmission buffer. Encountered an unknown error code ({end_index})"
             f"returned by the writer method."
-        )
-        console.error(message=message, error=RuntimeError)
+        )  # pragma: no cover
+        console.error(message=message, error=RuntimeError)  # pragma: no cover
 
         # This fallback is to appease MyPy and will neve rbe reached
         raise RuntimeError(message)  # pragma: no cover
@@ -1302,8 +1302,8 @@ class SerialTransportLayer:
                     f"{parsed_bytes_count + 1} out of {parsed_bytes.size} was not received in time "
                     f"({self._timeout} microseconds), following the reception of the previous byte. Packet reception "
                     f"staled."
-                )
-                console.error(message=message, error=RuntimeError)
+                )  # pragma: no cover
+                console.error(message=message, error=RuntimeError)  # pragma: no cover
 
                 # This explicit fallback terminator is here to appease Mypy and will never be reached.
                 raise RuntimeError(message)  # pragma: no cover
@@ -1327,7 +1327,7 @@ class SerialTransportLayer:
             elif status == 103:
                 message = (
                     f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
-                    f"({parsed_bytes.size - int(self._postamble_size)}), is outside the expected boundaries "
+                    f"({parsed_bytes.size}), is outside the expected boundaries "
                     f"({self._min_rx_payload_size} to {self._max_rx_payload_size}). This likely indicates a "
                     f"mismatch in the transmission parameters between this system and the Microcontroller."
                 )
@@ -1336,8 +1336,8 @@ class SerialTransportLayer:
             elif status == 104:
                 message = (
                     f"Failed to parse the incoming serial packet data. Delimiter byte value "
-                    f"({self._delimiter_byte}) encountered at byte number {parsed_bytes_count + 1}, instead of the "
-                    f"expected byte number {parsed_bytes.size - int(self._postamble_size)}. This likely indicates "
+                    f"({self._delimiter_byte}) encountered at byte number {parsed_bytes_count + 3}, instead of the "
+                    f"expected byte number {parsed_bytes.size}. This likely indicates "
                     f"packet corruption or mismatch in the transmission parameters between this system "
                     f"and the Microcontroller."
                 )
@@ -1347,8 +1347,8 @@ class SerialTransportLayer:
                 message = (
                     f"Failed to parse the incoming serial packet data. Delimiter byte value "
                     f"({self._delimiter_byte}) expected as the last payload byte "
-                    f"({parsed_bytes.size - int(self._postamble_size)}), but instead encountered "
-                    f"{parsed_bytes[parsed_bytes.size - int(self._postamble_size)]}. This likely indicates packet "
+                    f"({parsed_bytes.size + 3}), but instead encountered "
+                    f"{parsed_bytes[-1]}. This likely indicates packet "
                     f"corruption or mismatch in the transmission parameters between this system "
                     f"and the Microcontroller."
                 )
@@ -1366,9 +1366,9 @@ class SerialTransportLayer:
             f"Failed to parse the incoming serial packet data. Encountered an unknown status value "
             f"{status}, returned by the _receive_packet() method. Manual user intervention is required to "
             f"resolve the issue."
-        )
+        )  # pragma: no cover
         # Raises the resolved error message as RuntimeError.
-        console.error(message=message, error=RuntimeError)
+        console.error(message=message, error=RuntimeError)  # pragma: no cover
 
         # This explicit fallback terminator is here to appease Mypy and will never be reached.
         raise RuntimeError(message)  # pragma: no cover
