@@ -1,27 +1,18 @@
-"""This module provides ModuleInterface implementations for the default hardware modules shipped with the
-AtaraxisMicroController library. Primarily, these classes are intended to serve as examples for how to implement
-custom module Interfaces.
-"""
-
-from json import dumps
-import math
 from multiprocessing import Queue as MPQueue
 
 import numpy as np
+from _typeshed import Incomplete
 from numpy.typing import NDArray
-from ataraxis_base_utilities import console
-from numpy.polynomial.polynomial import polyfit
 
 from .communication import (
-    ModuleData,
-    ModuleState,
-    ModuleParameters,
-    UnityCommunication,
-    OneOffModuleCommand,
-    RepeatedModuleCommand,
+    ModuleData as ModuleData,
+    ModuleState as ModuleState,
+    ModuleParameters as ModuleParameters,
+    UnityCommunication as UnityCommunication,
+    OneOffModuleCommand as OneOffModuleCommand,
+    RepeatedModuleCommand as RepeatedModuleCommand,
 )
-from .microcontroller import ModuleInterface
-
+from .microcontroller import ModuleInterface as ModuleInterface
 
 class EncoderInterface(ModuleInterface):
     """Interfaces with EncoderModule instances running on Ataraxis MicroControllers.
@@ -62,6 +53,11 @@ class EncoderInterface(ModuleInterface):
         _unity_unit_per_pulse: Stores the conversion factor to translate encoder pulses into Unity units.
     """
 
+    _motion_topic: Incomplete
+    _ppr: Incomplete
+    _object_diameter: Incomplete
+    _cm_per_unity_unit: Incomplete
+    _unity_unit_per_pulse: Incomplete
     def __init__(
         self,
         module_id: np.uint8,
@@ -69,90 +65,17 @@ class EncoderInterface(ModuleInterface):
         output_data: bool = True,
         motion_topic: str = "LinearTreadmill/Data",
         encoder_ppr: int = 8192,
-        object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
+        object_diameter: float = 15.0333,
         cm_per_unity_unit: float = 10.0,
-    ) -> None:
-        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
-        super().__init__(
-            type_name="EncoderModule",
-            module_type=np.uint8(2),
-            module_id=module_id,
-            instance_name=instance_name,
-            unity_input_topics=None,
-            output_data=output_data,
-        )
-
-        # Saves additional data to class attributes.
-        self._motion_topic = motion_topic
-        self._ppr = encoder_ppr
-        self._object_diameter = object_diameter
-        self._cm_per_unity_unit = cm_per_unity_unit
-
-        # Computes the conversion factor to translate encoder pulses into unity units. Rounds to 12 decimal places for
-        # consistency and to ensure repeatability.
-        self._unity_unit_per_pulse = np.round(
-            a=np.float64((math.pi * object_diameter) / (encoder_ppr * cm_per_unity_unit)),
-            decimals=12,
-        )
-
+    ) -> None: ...
     def send_data(
-        self,
-        message: ModuleState | ModuleData,
-        unity_communication: UnityCommunication,
-        _mp_queue: MPQueue,  # type: ignore
-    ) -> None:
-        # ModuleState messages do not communicate any data that needs to be sent to Unity.
-        if isinstance(message, ModuleState):
-            return
-
-        # If the incoming message is not a CCW or CW motion report, aborts processing:
-        if message.event != np.uint8(51) and message.event != np.uint8(52):
-            return
-
-        # The rotation direction is encoded via the message event code. CW rotation (code 51) is interpreted as negative
-        # and CCW as positive.
-        sign = 1 if message.event == np.uint8(51) else -1
-
-        # Translates the absolute motion into the CW / CCW vector and converts from raw pulse count to Unity units
-        # using the precomputed conversion factor. Uses float64 and rounds to 12 decimal places for consistency and
-        # precision
-        signed_motion = np.round(
-            a=np.float64(message.data_object) * self._unity_unit_per_pulse * sign,
-            decimals=12,
-        )
-
-        # Encodes the motion data into the format expected by the GIMBL Unity module and serializes it into a
-        # byte-string.
-        json_string = dumps(obj={"movement": signed_motion})
-        byte_array = json_string.encode("utf-8")
-
-        # Publishes the motion to the appropriate MQTT topic.
-        unity_communication.send_data(topic=self._motion_topic, payload=byte_array)
-
+        self, message: ModuleState | ModuleData, unity_communication: UnityCommunication, _mp_queue: MPQueue
+    ) -> None: ...
     def get_from_unity(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
-        return
-
-    def log_variables(self) -> NDArray[np.uint8] | None:
-        # Serializes and returns the PPR, Object Diameter, and conversion factors used to translate pulses to cm and
-        # cm to Unity units. Jointly, these values are enough to translate raw encoder pulses (which are logged to
-        # disk) to other distance measurements.
-        output_array: NDArray[np.uint8] = np.array(
-            [
-                np.uint32(self._ppr),
-                np.float64(self._object_diameter),
-                np.float64(self._cm_per_unity_unit),
-                self._unity_unit_per_pulse,
-            ],
-            dtype=np.uint8,
-        )
-        return output_array
-
+    def log_variables(self) -> NDArray[np.uint8] | None: ...
     def set_parameters(
-        self,
-        report_ccw: np.bool | bool = np.bool(True),
-        report_cw: np.bool | bool = np.bool(True),
-        delta_threshold: np.uint32 | int = np.uint32(10),
+        self, report_ccw: np.bool | bool = ..., report_cw: np.bool | bool = ..., delta_threshold: np.uint32 | int = ...
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the EncoderModule instance.
 
@@ -172,14 +95,7 @@ class EncoderInterface(ModuleInterface):
             The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
             the MicroControllerInterface class.
         """
-        return ModuleParameters(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            parameter_data=(np.bool(report_ccw), np.bool(report_cw), np.uint32(delta_threshold)),
-        )
-
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def check_state(self, repetition_delay: np.uint32 = ...) -> OneOffModuleCommand | RepeatedModuleCommand:
         """Returns the number of pulses accumulated by the EncoderModule since the last check or reset.
 
         If there has been a significant change in the absolute count of pulses, reports the change and direction to the
@@ -199,24 +115,6 @@ class EncoderInterface(ModuleInterface):
             The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
             send_message() method of the MicroControllerInterface class.
         """
-        if repetition_delay == 0:
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(1),
-                noblock=np.bool(False),
-            )
-
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),
-            cycle_delay=np.uint32(repetition_delay),
-        )
-
     def reset_pulse_count(self) -> OneOffModuleCommand:
         """Resets the EncoderModule pulse tracker to 0.
 
@@ -227,14 +125,6 @@ class EncoderInterface(ModuleInterface):
             The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
             the MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(2),
-            noblock=np.bool(False),
-        )
-
     def get_ppr(self) -> OneOffModuleCommand:
         """Uses the index channel of the EncoderModule to estimate its Pulse-per-Revolution (PPR).
 
@@ -259,14 +149,6 @@ class EncoderInterface(ModuleInterface):
             The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
             the MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(3),
-            noblock=np.bool(False),
-        )
-
 
 class TTLInterface(ModuleInterface):
     """Interfaces with TTLModule instances running on Ataraxis MicroControllers.
@@ -279,38 +161,16 @@ class TTLInterface(ModuleInterface):
         module_id: The identifier code of the interfaced TTLModule instance.
         instance_name: The human-readable name of the interfaced TTLModule instance.
     """
-
-    def __init__(self, module_id: np.uint8, instance_name: str) -> None:
-        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
-        super().__init__(
-            type_name="TTLModule",
-            module_type=np.uint8(1),
-            module_id=module_id,
-            instance_name=instance_name,
-            unity_input_topics=None,
-            output_data=False,
-        )
-
+    def __init__(self, module_id: np.uint8, instance_name: str) -> None: ...
     def send_data(
-        self,
-        message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
-        mp_queue: MPQueue,  # type: ignore
+        self, message: ModuleData | ModuleState, unity_communication: UnityCommunication, mp_queue: MPQueue
     ) -> None:
         """Not used."""
-        return
-
     def get_from_unity(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
-        return
-
     def log_variables(self) -> NDArray[np.uint8] | None:
         """Not used."""
-        return None
-
-    def set_parameters(
-        self, pulse_duration: np.uint32 = np.uint32(10000), averaging_pool_size: np.uint8 = np.uint8(0)
-    ) -> ModuleParameters:
+    def set_parameters(self, pulse_duration: np.uint32 = ..., averaging_pool_size: np.uint8 = ...) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the TTLModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the TTLModule instance managed by
@@ -327,15 +187,8 @@ class TTLInterface(ModuleInterface):
             The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
             the MicroControllerInterface class.
         """
-        return ModuleParameters(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            parameter_data=(pulse_duration, averaging_pool_size),
-        )
-
     def send_pulse(
-        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = True
+        self, repetition_delay: np.uint32 = ..., noblock: bool = True
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Triggers TTLModule to deliver a one-off or recurrent (repeating) digital TTL pulse.
 
@@ -355,24 +208,6 @@ class TTLInterface(ModuleInterface):
             The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
             send_message() method of the MicroControllerInterface class.
         """
-        if repetition_delay == 0:
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(1),
-                noblock=np.bool(noblock),
-            )
-
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(noblock),
-            cycle_delay=repetition_delay,
-        )
-
     def toggle(self, state: bool) -> OneOffModuleCommand:
         """Triggers the TTLModule to continuously deliver a digital HIGH or LOW signal.
 
@@ -385,15 +220,7 @@ class TTLInterface(ModuleInterface):
             The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
             MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(2 if state else 3),
-            noblock=np.bool(False),
-        )
-
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def check_state(self, repetition_delay: np.uint32 = ...) -> OneOffModuleCommand | RepeatedModuleCommand:
         """Checks the state of the TTL signal received by the TTLModule.
 
         This command evaluates the state of the TTLModule's input pin and, if it is different from the previous state,
@@ -408,24 +235,6 @@ class TTLInterface(ModuleInterface):
             The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
             send_message() method of the MicroControllerInterface class.
         """
-        if repetition_delay == 0:
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(4),
-                noblock=np.bool(False),
-            )
-
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(4),
-            noblock=np.bool(False),
-            cycle_delay=repetition_delay,
-        )
-
 
 class BreakInterface(ModuleInterface):
     """Interfaces with BreakModule instances running on Ataraxis MicroControllers.
@@ -454,73 +263,26 @@ class BreakInterface(ModuleInterface):
         _torque_per_pwm: Conversion factor from break pwm levels to breaking force in N/cm.
     """
 
+    _newton_per_gram_centimeter: float
+    _minimum_break_strength: Incomplete
+    _maximum_break_strength: Incomplete
+    _object_diameter: Incomplete
+    _torque_per_pwm: Incomplete
     def __init__(
         self,
         module_id: np.uint8,
         instance_name: str,
-        minimum_break_strength: float = 43.2,  # 0.6 in iz
-        maximum_break_strength: float = 1152.13,  # 16 in oz
-        object_diameter: float = 15.0333,  # 0333 is to account for the wheel wrap
-    ) -> None:
-        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
-        super().__init__(
-            type_name="BreakModule",
-            module_type=np.uint8(3),
-            module_id=module_id,
-            instance_name=instance_name,
-            unity_input_topics=None,
-            output_data=False,
-        )
-
-        # Hardcodes the conversion factor used to translate torque force in g/cm to N/cm
-        self._newton_per_gram_centimeter: float = 0.0000981
-
-        # Stores additional data into class attributes. Rounds to 12 decimal places for consistency and to ensure
-        # repeatability.
-        self._minimum_break_strength: np.float64 = np.round(
-            a=minimum_break_strength / self._newton_per_gram_centimeter,
-            decimals=12,
-        )
-        self._maximum_break_strength: np.float64 = np.round(
-            a=maximum_break_strength / self._newton_per_gram_centimeter,
-            decimals=12,
-        )
-        self._object_diameter: float = object_diameter
-
-        # Computes the conversion factor to translate break pwm levels into breaking force in Newtons per cm. Rounds
-        # to 12 decimal places for consistency and to ensure repeatability.
-        self._torque_per_pwm = np.round(
-            a=(self._maximum_break_strength - self._minimum_break_strength) / 255,
-            decimals=12,
-        )
-
+        minimum_break_strength: float = 43.2,
+        maximum_break_strength: float = 1152.13,
+        object_diameter: float = 15.0333,
+    ) -> None: ...
     def send_data(
-        self,
-        message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
-        queue: MPQueue,  # type: ignore
+        self, message: ModuleData | ModuleState, unity_communication: UnityCommunication, queue: MPQueue
     ) -> None:
         """Not used."""
-        return
-
     def get_from_unity(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
-        return
-
-    def log_variables(self) -> NDArray[np.uint8] | None:
-        # Saves break data and conversion factors used to translate pwm values into torque force.
-        output_array: NDArray[np.uint8] = np.array(
-            [
-                self._minimum_break_strength,
-                self._maximum_break_strength,
-                np.float64(self._object_diameter),
-                np.float64(self._newton_per_gram_centimeter),
-                self._torque_per_pwm,
-            ],
-            dtype=np.uint8,
-        )
-        return output_array
-
+    def log_variables(self) -> NDArray[np.uint8] | None: ...
     def get_pwm_from_force(self, target_force_n_cm: float) -> np.uint8:
         """Converts the desired breaking force in Newtons to the required PWM value (0-255) to be delivered to the break
         hardware by the BreakModule.
@@ -537,20 +299,7 @@ class BreakInterface(ModuleInterface):
         Raises:
             ValueError: If the input force is not within the valid range for the BreakModule.
         """
-        if self._maximum_break_strength > target_force_n_cm or self._minimum_break_strength < target_force_n_cm:
-            message = (
-                f"The requested force {target_force_n_cm} N/cm is outside the valid range for the BreakModule "
-                f"{self._instance_name} with id {self._module_id}. Valid breaking force range is from "
-                f"{self._minimum_break_strength} to {self._maximum_break_strength}."
-            )
-            console.error(message=message, error=ValueError)
-
-        # Calculates PWM using the pre-computed torque_per_pwm conversion factor
-        pwm_value = np.uint8(round((target_force_n_cm - self._minimum_break_strength) / self._torque_per_pwm))
-
-        return pwm_value
-
-    def set_parameters(self, breaking_strength: np.uint8 = np.uint8(255)) -> ModuleParameters:
+    def set_parameters(self, breaking_strength: np.uint8 = ...) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the BreakModule instance.
 
         Use this method to package and apply new PC-addressable parameters to the BreakModule instance managed by this
@@ -569,13 +318,6 @@ class BreakInterface(ModuleInterface):
             The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
             the MicroControllerInterface class.
         """
-        return ModuleParameters(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
-            parameter_data=(breaking_strength,),
-        )
-
     def toggle(self, state: bool) -> OneOffModuleCommand:
         """Triggers the BreakModule to be permanently engaged at maximum strength or permanently disengaged.
 
@@ -593,14 +335,6 @@ class BreakInterface(ModuleInterface):
             The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
             MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1 if state else 2),
-            noblock=np.bool(False),
-        )
-
     def set_breaking_power(self) -> OneOffModuleCommand:
         """Triggers the BreakModule to engage with the strength (torque) defined by the breaking_strength runtime
         parameter.
@@ -619,14 +353,6 @@ class BreakInterface(ModuleInterface):
             The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
             MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(3),
-            noblock=np.bool(False),
-        )
-
 
 class ValveInterface(ModuleInterface):
     """Interfaces with ValveModule instances running on Ataraxis MicroControllers.
@@ -656,65 +382,20 @@ class ValveInterface(ModuleInterface):
             valve duration in microseconds.
     """
 
+    _microliters_per_microsecond: Incomplete
     def __init__(
         self,
         module_id: np.uint8,
         instance_name: str,
         valve_calibration_data: tuple[tuple[int, float], ...],
         input_unity_topics: tuple[str, ...] | None = ("Gimbl/Reward/",),
-    ) -> None:
-        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
-        super().__init__(
-            type_name="ValveModule",
-            module_type=np.uint8(5),
-            module_id=module_id,
-            instance_name=instance_name,
-            unity_input_topics=input_unity_topics,
-            output_data=False,
-        )
-
-        # Extracts pulse durations and fluid volumes into separate arrays
-        pulse_durations: NDArray[np.float64] = np.array([x[0] for x in valve_calibration_data], dtype=np.float64)
-        fluid_volumes: NDArray[np.float64] = np.array([x[1] for x in valve_calibration_data], dtype=np.float64)
-        # noinspection PyTypeChecker
-
-        # Computes the conversion factor by finding the slope of the calibration curve.
-        # Rounds to 12 decimal places for consistency and to ensure repeatability
-        slope: np.float64 = polyfit(x=pulse_durations, y=fluid_volumes, deg=1)[0]  # type: ignore
-        self._microliters_per_microsecond: np.float64 = np.round(a=slope, decimals=12)
-
+    ) -> None: ...
     def send_data(
-        self,
-        message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
-        queue: MPQueue,  # type: ignore
+        self, message: ModuleData | ModuleState, unity_communication: UnityCommunication, queue: MPQueue
     ) -> None:
         """Not used."""
-        return
-
-    def get_from_unity(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand:
-        # Currently, the only processed topic is "Gimbl/Reward/". If more supported topics are needed, this needs to be
-        # rewritten to use if-else conditions.
-
-        # If the received message was sent to the reward topic, this is a binary (empty payload) trigger to
-        # pulse the valve. It is expected that the valve parameters are configured so that this delivers the
-        # desired amount of water reward.
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),  # Blocks to ensure reward delivery precision.
-        )
-
-    def log_variables(self) -> NDArray[np.uint8] | None:
-        # Saves the valve calibration factor
-        output_array: NDArray[np.uint8] = np.array(
-            [self._microliters_per_microsecond],
-            dtype=np.uint8,
-        )
-        return output_array
-
+    def get_from_unity(self, topic: str, payload: bytes | bytearray) -> OneOffModuleCommand: ...
+    def log_variables(self) -> NDArray[np.uint8] | None: ...
     def get_duration_from_volume(self, volume: float) -> np.uint32:
         """Converts the desired fluid volume in microliters to the valve pulse duration in microseconds that ValveModule
         will use to deliver that fluid volume.
@@ -728,13 +409,8 @@ class ValveInterface(ModuleInterface):
         Returns:
             The microsecond pulse duration that would be used to deliver the specified volume.
         """
-        return np.uint32(np.round(volume / self._microliters_per_microsecond))
-
     def set_parameters(
-        self,
-        pulse_duration: np.uint32 = np.uint32(10000),
-        calibration_delay: np.uint32 = np.uint32(10000),
-        calibration_count: np.uint16 = np.uint16(100),
+        self, pulse_duration: np.uint32 = ..., calibration_delay: np.uint32 = ..., calibration_count: np.uint16 = ...
     ) -> ModuleParameters:
         """Changes the PC-addressable runtime parameters of the ValveModule instance.
 
@@ -756,15 +432,8 @@ class ValveInterface(ModuleInterface):
             The ModuleParameters message that can be sent to the microcontroller via the send_message() method of
             the MicroControllerInterface class.
         """
-        return ModuleParameters(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            parameter_data=(pulse_duration, calibration_delay, calibration_count),
-        )
-
     def send_pulse(
-        self, repetition_delay: np.uint32 = np.uint32(0), noblock: bool = False
+        self, repetition_delay: np.uint32 = ..., noblock: bool = False
     ) -> RepeatedModuleCommand | OneOffModuleCommand:
         """Triggers ValveModule to deliver a precise amount of fluid by cycling opening and closing the valve once or
         repetitively (recurrently).
@@ -789,24 +458,6 @@ class ValveInterface(ModuleInterface):
             The RepeatedModuleCommand or OneOffModuleCommand message that can be sent to the microcontroller via the
             send_message() method of the MicroControllerInterface class.
         """
-        if repetition_delay == 0:
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(1),
-                noblock=np.bool(noblock),
-            )
-
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(noblock),
-            cycle_delay=repetition_delay,
-        )
-
     def toggle(self, state: bool) -> OneOffModuleCommand:
         """Triggers the ValveModule to be permanently open or closed.
 
@@ -819,14 +470,6 @@ class ValveInterface(ModuleInterface):
             The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of the
             MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(2 if state else 3),
-            noblock=np.bool(False),
-        )
-
     def calibrate(self) -> OneOffModuleCommand:
         """Triggers ValveModule to repeatedly pulse the valve using the duration defined by the pulse_duration runtime
         parameter.
@@ -849,14 +492,6 @@ class ValveInterface(ModuleInterface):
             The OneOffModuleCommand message that can be sent to the microcontroller via the send_message() method of
             the MicroControllerInterface class.
         """
-        return OneOffModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(4),
-            noblock=np.bool(False),
-        )
-
 
 class LickInterface(ModuleInterface):
     """The class that exposes methods for interfacing with SensorModule instances running on Ataraxis MicroControllers.
@@ -880,52 +515,23 @@ class LickInterface(ModuleInterface):
         _sensor_topic: Stores the output MQTT topic.
     """
 
+    _sensor_topic: Incomplete
     def __init__(
-        self,
-        module_id: np.uint8,
-        instance_name: str,
-        output_data: bool = True,
-        sensor_topic: str = "LickPort/",
-    ) -> None:
-        # Initializes the subclassed ModuleInterface using the input instance data. Type data is hardcoded.
-        super().__init__(
-            type_name="SensorModule",
-            module_type=np.uint8(4),
-            module_id=module_id,
-            instance_name=instance_name,
-            unity_input_topics=None,
-            output_data=output_data,
-        )
-
-        self._sensor_topic: str = sensor_topic
-
+        self, module_id: np.uint8, instance_name: str, output_data: bool = True, sensor_topic: str = "LickPort/"
+    ) -> None: ...
     def send_data(
-        self,
-        message: ModuleData | ModuleState,
-        unity_communication: UnityCommunication,
-        mp_queue: MPQueue,  # type: ignore
-    ) -> None:
-        # If the incoming message is not reporting a change in signal (code 51), aborts processing
-        if message.event != np.uint8(51):
-            return
-
-        # Sends an empty message to the sensor MQTT topic, which acts as a binary trigger.
-        unity_communication.send_data(topic=self._sensor_topic, payload=None)
-
+        self, message: ModuleData | ModuleState, unity_communication: UnityCommunication, mp_queue: MPQueue
+    ) -> None: ...
     def get_from_unity(self, topic: str, payload: bytes | bytearray) -> None:
         """Not used."""
-        return
-
     def log_variables(self) -> NDArray[np.uint8] | None:
         """Not used."""
-        return None
-
     def set_parameters(
         self,
-        lower_threshold: np.uint16 = np.uint16(0),
-        upper_threshold: np.uint16 = np.uint16(65535),
-        delta_threshold: np.uint16 = np.uint16(1),
-        averaging_pool_size: np.uint8 = np.uint8(0),
+        lower_threshold: np.uint16 = ...,
+        upper_threshold: np.uint16 = ...,
+        delta_threshold: np.uint16 = ...,
+        averaging_pool_size: np.uint8 = ...,
     ) -> ModuleParameters:
         """Sets PC-addressable parameters of the module instance running on the microcontroller.
 
@@ -951,14 +557,7 @@ class LickInterface(ModuleInterface):
         Returns:
             The ModuleParameters message to be sent to the microcontroller.
         """
-        return ModuleParameters(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),  # Generally, return code is only helpful for debugging.
-            parameter_data=(upper_threshold, lower_threshold, delta_threshold, averaging_pool_size),
-        )
-
-    def check_state(self, repetition_delay: np.uint32 = np.uint32(0)) -> OneOffModuleCommand | RepeatedModuleCommand:
+    def check_state(self, repetition_delay: np.uint32 = ...) -> OneOffModuleCommand | RepeatedModuleCommand:
         """Checks the state of the analog pin managed by the module.
 
         This command will evaluate the signal received by the analog pin and, if it is significantly different from the
@@ -974,24 +573,3 @@ class LickInterface(ModuleInterface):
         Returns:
             The RepeatedModuleCommand or OneOffModuleCommand message to be sent to the microcontroller.
         """
-        if repetition_delay == 0:
-            return OneOffModuleCommand(
-                module_type=self._module_type,
-                module_id=self._module_id,
-                return_code=np.uint8(0),
-                command=np.uint8(1),
-                noblock=np.bool(False),
-            )
-
-        return RepeatedModuleCommand(
-            module_type=self._module_type,
-            module_id=self._module_id,
-            return_code=np.uint8(0),
-            command=np.uint8(1),
-            noblock=np.bool(False),
-            cycle_delay=repetition_delay,
-        )
-
-
-# class TorqueInterface(ModuleInterface):
-#     pass

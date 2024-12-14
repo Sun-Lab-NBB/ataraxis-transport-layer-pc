@@ -4,7 +4,7 @@ import numpy as np
 from ataraxis_data_structures import DataLogger
 from ataraxis_time.precision_timer.timer_class import PrecisionTimer
 
-from ataraxis_transport_layer import EncoderModule, MicroControllerInterface
+from ataraxis_transport_layer import EncoderInterface, MicroControllerInterface
 
 timeout = PrecisionTimer(precision="s")
 if __name__ == "__main__":
@@ -16,7 +16,7 @@ if __name__ == "__main__":
     logger.start()
 
     # Initializes the tested module interface
-    module = EncoderModule(module_id=np.uint8(1), instance_name="TestEncoder")
+    module = EncoderInterface(module_id=np.uint8(1), instance_name="TestEncoder")
 
     # Initializes and starts the microcontroller interface. Provides it with the tested module instance initialized
     # above.

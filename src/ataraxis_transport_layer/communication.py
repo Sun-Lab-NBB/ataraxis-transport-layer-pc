@@ -1155,7 +1155,12 @@ class UnityCommunication:
         self._output_queue: Queue = Queue()  # type: ignore
 
         # Initializes the MQTT client. Note, it needs to be connected before it can send and receive messages!
-        self._client: mqtt.Client = mqtt.Client(protocol=mqtt.MQTTv5, transport="tcp")
+        # noinspection PyArgumentList,PyUnresolvedReferences
+        self._client: mqtt.Client = mqtt.Client(
+            protocol=mqtt.MQTTv5,
+            transport="tcp",
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,  # type: ignore
+        )
 
         # Verifies that the broker can be connected to
         try:
@@ -1243,7 +1248,17 @@ class UnityCommunication:
             topic: The MQTT topic to publish the data to.
             payload: The data to be published. When set to None, an empty message will be sent, which is often used as
                 a boolean trigger.
+
+        Raises:
+            RuntimeError: If the instance is not connected to the MQTT broker.
         """
+        if not self._connected:
+            message = (
+                f"Cannot send data to the MQTT broker at {self._ip}:{self._port} via the UnityCommunication instance. "
+                f"The UnityCommunication instance is not connected to the MQTT broker, call connect() method before "
+                f"sending data."
+            )
+            console.error(message=message, error=RuntimeError)
         self._client.publish(topic=topic, payload=payload, qos=0)
 
     @property
@@ -1262,7 +1277,18 @@ class UnityCommunication:
             A two-element tuple. The first element is a string that communicates the MQTT topic of the received message.
             The second element is the payload of the message, which is a bytes or bytearray object. If no buffered
             objects are stored in the queue (queue is empty), returns None.
+
+        Raises:
+            RuntimeError: If the instance is not connected to the MQTT broker.
         """
+        if not self._connected:
+            message = (
+                f"Cannot get data from the MQTT broker at {self._ip}:{self._port} via the UnityCommunication instance. "
+                f"The UnityCommunication instance is not connected to the MQTT broker, call connect() method before "
+                f"sending data."
+            )
+            console.error(message=message, error=RuntimeError)
+
         if not self.has_data:
             return None
 

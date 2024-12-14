@@ -212,7 +212,7 @@ def test_cobs_processor_encode_decode_errors():
     # that matter, at all (delimiter_not_found_error)
     corrupted_packet = np.array([6, 1, 2, 3, 4, 5, 6], dtype=np.uint8)
     message = (
-        f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter"
+        f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter "
         f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
         f"because the decoding does not end at the final index of the packet. Packet is likely "
         f"corrupted. CODE: {processor._processor.delimiter_not_found_error}."

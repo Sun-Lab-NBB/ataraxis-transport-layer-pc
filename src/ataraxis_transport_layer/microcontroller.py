@@ -585,7 +585,7 @@ class MicroControllerInterface:  # pragma: no cover
 
             # Appends type and id codes to the variable data package
             header = np.array([module_type, module_id], dtype=np.uint8)
-            data_package = np.concatenate((header, variable_data), dtype=np.uint8)
+            data_package = np.concatenate((header, variable_data), dtype=np.uint8)  # type: ignore
 
             # Uses controller_id as source ID, which is also done for all other log packages. The critical part here
             # is the timestamp set to the maximum possible value that still fits into numpy uint64 value.
