@@ -1,10 +1,3 @@
-from .custom_modules import (
-    TTLModule as TTLModule,
-    BreakModule as BreakModule,
-    ValveModule as ValveModule,
-    SensorModule as SensorModule,
-    EncoderModule as EncoderModule,
-)
 from .helper_modules import (
     CRCProcessor as CRCProcessor,
     COBSProcessor as COBSProcessor,
@@ -14,16 +7,23 @@ from .transport_layer import (
     SerialTransportLayer as SerialTransportLayer,
     list_available_ports as list_available_ports,
 )
+from .custom_interfaces import (
+    TTLInterface as TTLInterface,
+    LickInterface as LickInterface,
+    BreakInterface as BreakInterface,
+    ValveInterface as ValveInterface,
+    EncoderInterface as EncoderInterface,
+)
 
 __all__ = [
-    "SerialTransportLayer",
-    "CRCProcessor",
+    "BreakInterface",
     "COBSProcessor",
-    "list_available_ports",
+    "CRCProcessor",
+    "EncoderInterface",
+    "LickInterface",
     "MicroControllerInterface",
-    "TTLModule",
-    "EncoderModule",
-    "BreakModule",
-    "SensorModule",
-    "ValveModule",
+    "SerialTransportLayer",
+    "TTLInterface",
+    "ValveInterface",
+    "list_available_ports",
 ]

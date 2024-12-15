@@ -500,7 +500,7 @@ class COBSProcessor:
         # packet corruption.
         elif self._processor.status == self._processor.delimiter_not_found_error:
             message = (
-                f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter"
+                f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter "
                 f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
                 f"because the decoding does not end at the final index of the packet. Packet is likely "
                 f"corrupted. CODE: {self._processor.status}."

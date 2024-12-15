@@ -87,6 +87,7 @@ class SerialTransportLayer:
             helpful for certain debugging scenarios.
 
     Attributes:
+        _opened: Tracks whether the _port has been opened.
         _port: Depending on the test_mode flag, stores either a SerialMock or Serial object that provides serial port
             interface.
         _crc_processor: Stores the CRCProcessor class object that provides methods for working CRC checksums.
@@ -138,6 +139,7 @@ class SerialTransportLayer:
         type[np.float64],
         type[np.bool],
     ]
+    _opened: bool
     _port: Incomplete
     _crc_processor: Incomplete
     _cobs_processor: Incomplete
@@ -483,7 +485,7 @@ class SerialTransportLayer:
             [START BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
 
         Returns:
-            True, if the dat was successfully transmitted.
+            True, if the data was successfully transmitted.
 
         Raises:
             ValueError: If the method encounters an error during the packet construction.
@@ -662,6 +664,8 @@ class SerialTransportLayer:
             1 - Packet fully parsed.
             2 - Not enough bytes read to fully parse the packet. The packet size was resolved, but there were not
             enough bytes to fully parse the packet (encoded payload + crc postamble).
+            3 - Not enough bytes read to fully parse the packet. The packet payload was successfully parsed, but there
+            were not enough bytes to fully parse the CRC postamble.
             101 - No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to
             ignore start byte errors. Usually, this situation is caused by communication line noise generating
             'noise bytes'.

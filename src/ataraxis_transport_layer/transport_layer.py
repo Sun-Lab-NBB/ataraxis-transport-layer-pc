@@ -1,18 +1,14 @@
-"""This module provides the TransportLayer classes used to interface with various project Ataraxis systems.
+"""This module provides the SerialTransportLayer class used to establish and maintain bidirectional serial communication
+with other Ataraxis-compatible systems over USB / UART interface.
 
-Each TransportLayer class is generally optimized and geared towards communicating with a specific Ataraxis system. At
-the time of writing, teh available classes are SerialTransportLayer and UnityTransportLayer.
-
-The SerialTransportLayer class handles bidirectional serial communication with Microcontrollers running the
+Primarily, the SerialTransportLayer class handles bidirectional serial communication with Microcontrollers running the
 ataraxis-micro-controller library (Arduino and Teensy boards). The communication is carried over the UART or USB
 interface via the pySerial library. The class is written in a way that maximizes method runtime speed and is mostly
 limited by the speed of pySerial runtime. The functionality of the class is realized through 4 main methods:
 write_data(), send_data(), receive_data() and read_data(). See method and class docstrings for more information.
 
-The UnityTransportLayer class handles bidirectional communication with a Unity client running a modified 'Gimbl'
-interface (https://github.com/winnubstj/Gimbl). The communication is carried over a virtual TCP socket using the MQTT
-protocol. Theoretically, this class can be used for cross-machine communication over real TCP sockets, but it has only
-been tested on the same machine. See method and class docstrings for more information.
+Additionally, this module exposes the list_available_ports() function used to discover addressable USB ports when
+setting up PC-MicroController communication.
 """
 
 from typing import Any
@@ -36,7 +32,7 @@ from .helper_modules import (
 )
 
 
-def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
+def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:  # pragma: no cover
     """Provides the information about each serial port addressable through the pySerial library.
 
     This function is intended to be used for discovering and selecting the serial port 'names' to use with
@@ -127,6 +123,7 @@ class SerialTransportLayer:
             helpful for certain debugging scenarios.
 
     Attributes:
+        _opened: Tracks whether the _port has been opened.
         _port: Depending on the test_mode flag, stores either a SerialMock or Serial object that provides serial port
             interface.
         _crc_processor: Stores the CRCProcessor class object that provides methods for working CRC checksums.
@@ -207,6 +204,10 @@ class SerialTransportLayer:
         test_mode: bool = False,
         allow_start_byte_errors: bool = False,
     ) -> None:
+        # Tracks whether the serial por t is open. This is used solely to avoid one annoying __del__ error during
+        # testing
+        self._opened: bool = False
+
         # Verifies that input arguments are valid. Does not check polynomial parameters, that is offloaded to the
         # CRCProcessor class.
         if not isinstance(port, str):
@@ -214,46 +215,49 @@ class SerialTransportLayer:
                 f"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but "
                 f"encountered {port} of type {type(port).__name__}."
             )
-            raise TypeError(message)
+            console.error(message=message, error=TypeError)
 
-        if baudrate <= 0:
+        if not isinstance(baudrate, int) or baudrate <= 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
                 f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
-        if not 0 <= start_byte <= 255:
+        if not isinstance(start_byte, int) or not 0 <= start_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
-        if not 0 <= delimiter_byte <= 255:
+        if not isinstance(delimiter_byte, int) or not 0 <= delimiter_byte <= 255:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
-        if timeout < 0:
+        if not isinstance(timeout, int) or timeout < 0:
             message = (
                 f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
                 f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
             )
-            raise ValueError(message)
+            console.error(message=message, error=ValueError)
 
         if start_byte == delimiter_byte:
-            message = "The 'start_byte' and 'delimiter_byte' cannot be the same."
-            raise ValueError(message)
+            message = (
+                "Unable to initialize SerialTransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be "
+                "the same."
+            )
+            console.error(message=message, error=ValueError)
 
         # Based on the class runtime selector, initializes a real or mock serial port manager class
         self._port: SerialMock | Serial
         if not test_mode:
             # Statically disables built-in timeout. Our jit- and c-extension classes are more optimized for this job
             # than Serial's built-in timeout.
-            self._port = Serial(port, baudrate, timeout=0)
+            self._port = Serial(port, baudrate, timeout=0)  # pragma: no cover
         else:
             self._port = SerialMock()
 
@@ -287,7 +291,7 @@ class SerialTransportLayer:
         self._reception_buffer: NDArray[np.uint8] = np.empty(shape=rx_buffer_size, dtype=np.uint8)
 
         # Based on the minimum expected payload size, calculates the minimum number of bytes that can fully represent
-        # a packet. This is sued to avoid costly pySerial calls unless there is a high chance that the call will return
+        # a packet. This is used to avoid costly pySerial calls unless there is a high chance that the call will return
         # a parsable packet.
         self._minimum_packet_size: int = minimum_received_payload_size + 4 + int(self._postamble_size)
 
@@ -302,16 +306,18 @@ class SerialTransportLayer:
         # COM ports, preventing quick connection cycling.
         self._port.close()
         self._port.open()
+        self._opened = True
 
     def __del__(self) -> None:
         """Ensures proper resource release prior to garbage-collecting class instance."""
         # Closes the port before deleting the class instance. Not strictly required, but helpful to ensure resources
         # are released
-        self._port.close()
+        if self._opened:
+            self._port.close()
 
     def __repr__(self) -> str:
         """Returns a string representation of the SerialTransportLayer class instance."""
-        if isinstance(self._port, Serial):
+        if isinstance(self._port, Serial):  # pragma: no cover
             representation_string = (
                 f"SerialTransportLayer(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
                 f"{self._crc_processor.polynomial}, start_byte={self._start_byte}, "
@@ -334,7 +340,7 @@ class SerialTransportLayer:
         # in_waiting is twice as fast as using the read() method. The 'true' outcome of this check is capped at the
         # minimum packet size to minimize the chance of having to call read() more than once. The method counts the
         # bytes available for reading and left over from previous packet parsing operations.
-        return self._port.in_waiting + len(self._leftover_bytes) > self._minimum_packet_size
+        return (self._port.in_waiting + len(self._leftover_bytes)) >= self._minimum_packet_size
 
     @property
     def transmission_buffer(self) -> NDArray[np.uint8]:
@@ -484,12 +490,9 @@ class SerialTransportLayer:
             for field in fields(data_object):
                 # Calls the write method recursively onto the value of each field
                 data_value = getattr(data_object, field.name)
-                local_index = self.write_data(data_object=data_value, start_index=local_index)
 
-                # If any such call fails for any reason (as signified by the returned index not exceeding the
-                # start_index), breaks the loop to handle the error below
-                if local_index < start_index:
-                    break
+                # If this call fails, it will raise an error that wll terminate this loop early
+                local_index = self.write_data(data_object=data_value, start_index=local_index)
 
             # Once the loop is over (due to break or having processed all class fields), sets the end_index to the
             # final recorded local_index value
@@ -552,8 +555,8 @@ class SerialTransportLayer:
         message = (
             f"Failed to write the data to the transmission buffer. Encountered an unknown error code ({end_index})"
             f"returned by the writer method."
-        )
-        console.error(message=message, error=RuntimeError)
+        )  # pragma: no cover
+        console.error(message=message, error=RuntimeError)  # pragma: no cover
 
         # This fallback is to appease MyPy and will neve rbe reached
         raise RuntimeError(message)  # pragma: no cover
@@ -845,8 +848,8 @@ class SerialTransportLayer:
         message = (
             f"Failed to read the data from the reception buffer. Encountered an unknown error code ({end_index})"
             f"returned by the reader method."
-        )
-        console.error(message=message, error=RuntimeError)
+        )  # pragma: no cover
+        console.error(message=message, error=RuntimeError)  # pragma: no cover
 
         # Fallback to appease MyPy, will never be reached
         raise RuntimeError(message)  # pragma: no cover
@@ -935,7 +938,7 @@ class SerialTransportLayer:
             [START BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
 
         Returns:
-            True, if the dat was successfully transmitted.
+            True, if the data was successfully transmitted.
 
         Raises:
             ValueError: If the method encounters an error during the packet construction.
@@ -974,8 +977,10 @@ class SerialTransportLayer:
             payload=self._transmission_buffer[: self._bytes_in_transmission_buffer],
             delimiter=self._delimiter_byte,
         )
-        checksum = self._crc_processor.calculate_crc_checksum(packet)
-        self._crc_processor.convert_checksum_to_bytes(checksum)
+        # Due to other controls, simulating this error with tests is currently impossible. The code is kept as-is for
+        # potential future relevance, however.
+        checksum = self._crc_processor.calculate_crc_checksum(packet)  # pragma: no cover
+        self._crc_processor.convert_checksum_to_bytes(checksum)  # pragma: no cover
 
         # The steps above SHOULD run into an error. If they did not, there is an unexpected error originating from the
         # _construct_packet method. In this case, raises a generic RuntimeError to prompt the user to manually
@@ -984,8 +989,8 @@ class SerialTransportLayer:
             "Failed to send the payload data. Unexpected error encountered for _construct_packet() method. "
             "Re-running all COBS and CRC steps used for packet construction in wrapped mode did not reproduce the "
             "error. Manual error resolution required."
-        )
-        console.error(message=message, error=RuntimeError)
+        )  # pragma: no cover
+        console.error(message=message, error=RuntimeError)  # pragma: no cover
 
         # Fallback to appease MyPy, will never be reached.
         raise RuntimeError(message)  # pragma: no cover
@@ -1262,9 +1267,8 @@ class SerialTransportLayer:
                 # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
                 # reception.
                 message = (
-                    f"Failed to parse the incoming serial packet data. Packet reception staled. "
-                    f"The byte number {parsed_bytes_count + 1} out of {parsed_bytes.size} was not received in time "
-                    f"({self._timeout} microseconds), following the reception of the previous byte."
+                    f"Failed to parse the size of the incoming serial packet. The packet size byte was not received in "
+                    f"time ({self._timeout} microseconds), following the reception of the START byte."
                 )
                 console.error(message=message, error=RuntimeError)
 
@@ -1290,6 +1294,30 @@ class SerialTransportLayer:
                 # This explicit fallback terminator is here to appease Mypy and will never be reached.
                 raise RuntimeError(message)  # pragma: no cover
 
+            # A separate error message that specifically detects status 3: Not enough bytes to resolve the CRC
+            # postamble. Technically, this error should not be possible (it is the terminal runtime status for the
+            # packet parsing method). However, it is implemented to avoid confusion with status 2 and 0.
+            if status == 3 and not self._bytes_available(
+                required_bytes_count=parsed_bytes.size - parsed_bytes_count, timeout=self._timeout
+            ):
+                # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
+                # reception.
+                message = (
+                    f"Failed to parse the incoming serial packet's CRC postamble. The byte number "
+                    f"{parsed_bytes_count + 1} out of {parsed_bytes.size} was not received in time "
+                    f"({self._timeout} microseconds), following the reception of the previous byte. Packet reception "
+                    f"staled."
+                )  # pragma: no cover
+                console.error(message=message, error=RuntimeError)  # pragma: no cover
+
+                # This explicit fallback terminator is here to appease Mypy and will never be reached.
+                raise RuntimeError(message)  # pragma: no cover
+
+            # If _bytes_available() method returned true for status codes 1 to 3, that means that additional bytes were
+            # received in time and the loop has to be cycled again to process newly received bytes.
+            if status <= 3:
+                continue
+
             # Any code other than partial or full success code is interpreted as the terminal code. All codes other
             # than 101 are error codes. Code 101 is a non-error non-success terminal code. This clause also contains
             # the resolution for unexpected status codes.
@@ -1309,30 +1337,31 @@ class SerialTransportLayer:
             elif status == 103:
                 message = (
                     f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
-                    f"({parsed_bytes.size - int(self._postamble_size)}), is outside the expected boundaries "
+                    f"({parsed_bytes.size}), is outside the expected boundaries "
                     f"({self._min_rx_payload_size} to {self._max_rx_payload_size}). This likely indicates a "
                     f"mismatch in the transmission parameters between this system and the Microcontroller."
                 )
 
             # Delimiter byte value was encountered before reaching the end of the COBS-encoded payload data region.
+            # 'expected number' is calculated like this: parsed_bytes has space for the encoded packet + CRC. So, to get
+            # the expected delimiter byte number, we just subtract the CRC size from the parsed_bytes size.
             elif status == 104:
                 message = (
-                    f"Failed to parse the incoming serial packet data. Delimiter byte value "
-                    f"({self._delimiter_byte}) encountered at byte number {parsed_bytes_count + 1}, instead of the "
-                    f"expected byte number {parsed_bytes.size - int(self._postamble_size)}. This likely indicates "
-                    f"packet corruption or mismatch in the transmission parameters between this system "
-                    f"and the Microcontroller."
+                    f"Failed to parse the incoming serial packet data. Delimiter byte value ({self._delimiter_byte}) "
+                    f"encountered at payload byte number {parsed_bytes_count}, instead of the expected byte number "
+                    f"{parsed_bytes.size - int(self._postamble_size)}. This likely indicates packet corruption or "
+                    f"mismatch in the transmission parameters between this system and the Microcontroller."
                 )
 
-            # The last COBS-encoded payload data value does not match the expected delimiter byte value.
+            # The last COBS-encoded payload (encoded packet's) data value does not match the expected delimiter byte
+            # value.
             elif status == 105:
                 message = (
-                    f"Failed to parse the incoming serial packet data. Delimiter byte value "
-                    f"({self._delimiter_byte}) expected as the last payload byte "
-                    f"({parsed_bytes.size - int(self._postamble_size)}), but instead encountered "
-                    f"{parsed_bytes[parsed_bytes.size - int(self._postamble_size)]}. This likely indicates packet "
-                    f"corruption or mismatch in the transmission parameters between this system "
-                    f"and the Microcontroller."
+                    f"Failed to parse the incoming serial packet data. Delimiter byte value ({self._delimiter_byte}) "
+                    f"expected as the last encoded packet byte ({parsed_bytes.size - int(self._postamble_size)}), but "
+                    f"instead encountered {parsed_bytes[parsed_bytes_count-1]}. This likely indicates packet "
+                    f"corruption or mismatch in the transmission parameters between this system and the "
+                    f"Microcontroller."
                 )
 
             # Unknown status_code. Reaching this clause should not be possible. This is a static guard to help
@@ -1348,9 +1377,9 @@ class SerialTransportLayer:
             f"Failed to parse the incoming serial packet data. Encountered an unknown status value "
             f"{status}, returned by the _receive_packet() method. Manual user intervention is required to "
             f"resolve the issue."
-        )
+        )  # pragma: no cover
         # Raises the resolved error message as RuntimeError.
-        console.error(message=message, error=RuntimeError)
+        console.error(message=message, error=RuntimeError)  # pragma: no cover
 
         # This explicit fallback terminator is here to appease Mypy and will never be reached.
         raise RuntimeError(message)  # pragma: no cover
@@ -1411,7 +1440,7 @@ class SerialTransportLayer:
 
             # If the total number of bytes was not enough, checks whether serial port has received any additional bytes
             # since the last loop iteration. This is primarily used to reset the timer upon new bytes' reception.
-            if previous_additional_bytes < additional_bytes:
+            if previous_additional_bytes < additional_bytes:  # pragma: no cover
                 previous_additional_bytes = additional_bytes  # Updates the byte tracker, if necessary
                 self._timer.reset()  # Resets the timeout timer as long as the port receives additional bytes
 
@@ -1460,6 +1489,8 @@ class SerialTransportLayer:
             1 - Packet fully parsed.
             2 - Not enough bytes read to fully parse the packet. The packet size was resolved, but there were not
             enough bytes to fully parse the packet (encoded payload + crc postamble).
+            3 - Not enough bytes read to fully parse the packet. The packet payload was successfully parsed, but there
+            were not enough bytes to fully parse the CRC postamble.
             101 - No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to
             ignore start byte errors. Usually, this situation is caused by communication line noise generating
             'noise bytes'.
@@ -1579,6 +1610,10 @@ class SerialTransportLayer:
             if processed_bytes == total_bytes:
                 remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
                 return 2, parsed_byte_count, remaining_bytes, parsed_bytes
+            # Recalculates the packet size to match the size of the expanded array. Otherwise, if all stages are
+            # resolved as part of the same cycle, the code below will continue working with the assumption that the
+            # packet size is 0.
+            packet_size = max(parsed_bytes.size - int(postamble_size), 0)
 
         # Based on the size of the packet and the number of already parsed packet bytes, calculates the remaining
         # number of bytes. Ensures the resultant value is always non-negative. If this value is 0, stage 3 is skipped.
@@ -1648,7 +1683,7 @@ class SerialTransportLayer:
         # The only way to reach this point is when the CRC parsing loop above escapes due to running out of bytes to
         # process without fully parsing the postamble. Returns with partial success code (2)
         remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
-        return 2, parsed_byte_count, remaining_bytes, parsed_bytes
+        return 3, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
     @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover

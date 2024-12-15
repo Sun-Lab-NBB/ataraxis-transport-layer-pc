@@ -94,7 +94,7 @@ conda = [
     "hatchling>=1,<2",
 
     # Distribution
-    "twine>=5,<6",
+    "twine>=6,<7",
     "grayskull>=2,<3",
 
     # Miscellaneous helpers

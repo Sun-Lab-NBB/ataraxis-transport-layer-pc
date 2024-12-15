@@ -1,17 +1,17 @@
 """This module provides the SerialCommunication and UnityCommunication classes that enable communication between
-the PC, Unity game engine and microcontrollers running Ataraxis software.
+the PC, Unity game engine, and Arduino / Teensy microcontrollers running Ataraxis software.
 
 SerialCommunication supports the PC-MicroController communication over USB / UART interface, while UnityCommunication
 supports the Python-Unity communication over the MQTT protocol (virtual / real TCP sockets).
 
-Additionally, this module exposes the message and helper structure that are used to serialize and deserialize the
-transmitted data.
+Additionally, this module exposes message and helper structures used to serialize and deserialize the transmitted data.
 """
 
 from enum import IntEnum
 from queue import Queue
-from typing import Any, Union, Callable
+from typing import Any
 from dataclasses import field, dataclass
+from collections.abc import Callable
 from multiprocessing import Queue as MPQueue
 
 import numpy as np
@@ -97,7 +97,7 @@ class SerialProtocols(IntEnum):
 
 
 # Defines prototype factories used by the SerialPrototypes enumeration (below) to return prototype objects.
-_PROTOTYPE_FACTORIES: dict[int, Callable[[], Union[NDArray[np.uint8], np.uint8, np.uint16, np.uint32]]] = {
+_PROTOTYPE_FACTORIES: dict[int, Callable[[], NDArray[np.uint8] | np.uint8 | np.uint16 | np.uint32]] = {
     1: lambda: np.uint8(0),
     2: lambda: np.zeros(shape=2, dtype=np.uint8),
     3: lambda: np.zeros(shape=3, dtype=np.uint8),
@@ -146,7 +146,7 @@ class SerialPrototypes(IntEnum):
         """
         return np.uint8(self.value)
 
-    def get_prototype(self) -> Union[NDArray[np.uint8], np.uint8, np.uint16, np.uint32]:
+    def get_prototype(self) -> NDArray[np.uint8] | np.uint8 | np.uint16 | np.uint32:
         """Returns the prototype object associated with this prototype enum value.
 
         The prototype object returned by this method can be passed to the reading method of the SerialTransportLayer
@@ -159,7 +159,7 @@ class SerialPrototypes(IntEnum):
         return _PROTOTYPE_FACTORIES[self.value]()
 
     @classmethod
-    def get_prototype_for_code(cls, code: np.uint8) -> Union[NDArray[np.uint8], np.uint8, np.uint16, np.uint32, None]:
+    def get_prototype_for_code(cls, code: np.uint8) -> NDArray[np.uint8] | np.uint8 | np.uint16 | np.uint32 | None:
         """Returns the prototype object associated with the input prototype code.
 
         The prototype object returned by this method can be passed to the reading method of the SerialTransportLayer
@@ -282,7 +282,8 @@ class DequeueModuleCommand:
     """Instructs the addressed Module to clear (empty) its command queue.
 
     Note, clearing the command queue does not terminate already executing commands, but it prevents recurrent commands
-    from running again."""
+    from running again.
+    """
 
     module_type: np.uint8
     """The type (family) code of the module to which the command is addressed."""
@@ -320,7 +321,8 @@ class DequeueModuleCommand:
 class KernelCommand:
     """Instructs the Kernel to run the specified command exactly once.
 
-    Currently, the Kernel only supports blocking one-off commands."""
+    Currently, the Kernel only supports blocking one-off commands.
+    """
 
     command: np.uint8
     """The code of the command to execute. Valid command codes are in the range between 1 and 255."""
@@ -417,7 +419,8 @@ class KernelParameters:
     """Instructs the Kernel to update the microcontroller-wide parameters with the values included in the message.
 
     These parameters are shared by the Kernel and all custom Modules, and the exact parameter layout is hardcoded. This
-    is in contrast to Module parameters, that differ between module types."""
+    is in contrast to Module parameters, that differ between module types.
+    """
 
     action_lock: np.bool
     """Determines whether the controller allows non-ttl modules to change output pin states.
@@ -852,7 +855,8 @@ class SerialCommunication:
     running AtaraxisMicroController firmware using the USB or UART protocol.
 
     This class is built on top of the SerialTransportLayer, designed to provide the microcontroller communication
-    interface (API) for other Ataraxis libraries.
+    interface (API) for other Ataraxis libraries. This class is not designed to be instantiated directly and
+    should instead be used through the MicroControllerInterface class available through this library!
 
     Notes:
         This class is explicitly designed to use the same parameters as the Communication class used by the
@@ -1102,7 +1106,9 @@ class UnityCommunication:
     Unity side to establish bidirectional communication between Python and Virtual Reality (VR) game world. Primarily,
     the class is intended to be used together with SerialCommunication class to transfer data between microcontrollers
     and Unity. Usually, both communication classes will be managed by the same process (core) that handles the necessary
-    transformations to bridge MQTT and Serial communication protocols used by this library.
+    transformations to bridge MQTT and Serial communication protocols used by this library. This class is not designed
+    to be instantiated directly and should instead be used through the MicroControllerInterface class available through
+    this library!
 
     Notes:
         In the future, this class may be phased out in favor of a unified communication protocol that would use
@@ -1149,17 +1155,21 @@ class UnityCommunication:
         self._output_queue: Queue = Queue()  # type: ignore
 
         # Initializes the MQTT client. Note, it needs to be connected before it can send and receive messages!
-        self._client: mqtt.Client = mqtt.Client(protocol=mqtt.MQTTv5, transport="tcp")
+        # noinspection PyArgumentList,PyUnresolvedReferences
+        self._client: mqtt.Client = mqtt.Client(
+            protocol=mqtt.MQTTv5,
+            transport="tcp",
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,  # type: ignore
+        )
 
         # Verifies that the broker can be connected to
         try:
             result = self._client.connect(self._ip, self._port)
             if result != mqtt.MQTT_ERR_SUCCESS:
                 # If the result is not the expected code, raises an exception
-                raise Exception()  # pragma: no cover
-            else:
-                # If the broker was successfully connected, disconnects the client until start() method is called
-                self._client.disconnect()
+                raise Exception  # pragma: no cover
+            # If the broker was successfully connected, disconnects the client until start() method is called
+            self._client.disconnect()
         # The exception can also be raised by connect() method raising an exception internally.
         except Exception:
             message = (
@@ -1192,7 +1202,6 @@ class UnityCommunication:
             _userdata: Custom user-defined data. Currently not used.
             message: The received MQTT message.
         """
-
         # Whenever a message is received, it is buffered via the local queue object.
         self._output_queue.put_nowait((message.topic, message.payload))
 
@@ -1239,13 +1248,24 @@ class UnityCommunication:
             topic: The MQTT topic to publish the data to.
             payload: The data to be published. When set to None, an empty message will be sent, which is often used as
                 a boolean trigger.
+
+        Raises:
+            RuntimeError: If the instance is not connected to the MQTT broker.
         """
+        if not self._connected:
+            message = (
+                f"Cannot send data to the MQTT broker at {self._ip}:{self._port} via the UnityCommunication instance. "
+                f"The UnityCommunication instance is not connected to the MQTT broker, call connect() method before "
+                f"sending data."
+            )
+            console.error(message=message, error=RuntimeError)
         self._client.publish(topic=topic, payload=payload, qos=0)
 
     @property
     def has_data(self) -> bool:
         """Returns True if the instance received messages from Unity and can output received data via the get_dataq()
-        method."""
+        method.
+        """
         if not self._output_queue.empty():
             return True
         return False
@@ -1257,7 +1277,18 @@ class UnityCommunication:
             A two-element tuple. The first element is a string that communicates the MQTT topic of the received message.
             The second element is the payload of the message, which is a bytes or bytearray object. If no buffered
             objects are stored in the queue (queue is empty), returns None.
+
+        Raises:
+            RuntimeError: If the instance is not connected to the MQTT broker.
         """
+        if not self._connected:
+            message = (
+                f"Cannot get data from the MQTT broker at {self._ip}:{self._port} via the UnityCommunication instance. "
+                f"The UnityCommunication instance is not connected to the MQTT broker, call connect() method before "
+                f"sending data."
+            )
+            console.error(message=message, error=RuntimeError)
+
         if not self.has_data:
             return None
 
