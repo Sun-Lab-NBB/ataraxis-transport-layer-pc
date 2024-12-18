@@ -3,35 +3,14 @@
 
 Transport Layer
 ===============
-.. automodule:: ataraxis_transport_layer.transport_layer
+.. automodule:: ataraxis_transport_layer_pc.transport_layer
    :members:
    :undoc-members:
    :show-inheritance:
 
 Helper Modules
 ==============
-.. automodule:: ataraxis_transport_layer.helper_modules
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Communication
-=============
-.. automodule:: ataraxis_transport_layer.communication
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-MicroController
-===============
-.. automodule:: ataraxis_transport_layer.microcontroller
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Custom Interfaces
-=================
-.. automodule:: ataraxis_transport_layer.custom_interfaces
+.. automodule:: ataraxis_transport_layer_pc.helper_modules
    :members:
    :undoc-members:
    :show-inheritance:

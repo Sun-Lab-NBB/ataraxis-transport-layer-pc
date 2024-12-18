@@ -1,5 +1,5 @@
 """This file contains the test functions that verify the functionality and error-handling of all
-SerialTransportLayer class methods. Special care is taken to fully test the 4 major methods: write_data(),
+TransportLayer class methods. Special care is taken to fully test the 4 major methods: write_data(),
 read_data(), send_data(), and receive_data(). You can also use this file if you need more examples on how to use
 class methods.
 """
@@ -12,12 +12,12 @@ import pytest
 from numpy.typing import NDArray
 from ataraxis_base_utilities import error_format
 
-from ataraxis_transport_layer.transport_layer import SerialTransportLayer
+from ataraxis_transport_layer_pc import TransportLayer
 
 
 @dataclass
 class SampleDataClass:
-    """A simple dataclass used to test 'structure' serialization capability of the SerialTransportLayer class. Has
+    """A simple dataclass used to test 'structure' serialization capability of the TransportLayer class. Has
      to use numpy arrays and scalars as field types to support serialization.
 
     Attributes:
@@ -31,16 +31,14 @@ class SampleDataClass:
 
 
 @pytest.fixture()
-def protocol() -> SerialTransportLayer:
-    """Returns a SerialTransportLayer instance with test mode enabled.
+def protocol() -> TransportLayer:
+    """Returns a TransportLayer instance with test mode enabled.
 
     This asset is used to streamline STL initialization for testing purposes.
     """
-    protocol = SerialTransportLayer(
+    protocol = TransportLayer(
         port="COM7",
-        baudrate=115200,
-        start_byte=129,
-        delimiter_byte=0,
+        microcontroller_serial_buffer_size=1024,
         test_mode=True,
     )
 
@@ -48,12 +46,12 @@ def protocol() -> SerialTransportLayer:
 
 
 def test_init_and_repr(protocol) -> None:
-    """Verifies the functionality of SerialTransportLayer __repr__ method.
+    """Verifies the functionality of TransportLayer __repr__ method.
 
     Also, indirectly verifies the __init__() method through the use of protocol fixture.
     """
     representation_string = (
-        f"SerialTransportLayer(port & baudrate=MOCKED, polynomial={protocol._crc_processor.polynomial}, "
+        f"TransportLayer(port & baudrate=MOCKED, polynomial={protocol._crc_processor.polynomial}, "
         f"start_byte={protocol._start_byte}, delimiter_byte={protocol._delimiter_byte}, timeout={protocol._timeout} "
         f"us, maximum_tx_payload_size = {protocol._max_tx_payload_size}, "
         f"maximum_rx_payload_size={protocol._max_rx_payload_size})"
@@ -62,66 +60,86 @@ def test_init_and_repr(protocol) -> None:
 
 
 def test_init_errors() -> None:
-    """Verifies the error handling of the SerialTransportLayer __init__() method.
+    """Verifies the error handling of the TransportLayer __init__() method.
 
     Avoids checking arguments that are given to helper modules, such as the input polynomial. Assumes that helper
-    modules have been tested before testing the SerialTransportLayer class and are known to properly handle invalid
+    modules have been tested before testing the TransportLayer class and are known to properly handle invalid
     initialization arguments.
     """
     # Invalid port argument
     port = None
     message = (
-        f"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but "
+        f"Unable to initialize TransportLayer class. Expected a string value for 'port' argument, but "
         f"encountered {port} of type {type(port).__name__}."
     )
     with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
-        SerialTransportLayer(
-            port=port,
-        )
+        TransportLayer(port=port, microcontroller_serial_buffer_size=64)
 
     # Invalid baudrate argument
     baudrate = -9600
     message = (
-        f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
+        f"Unable to initialize TransportLayer class. Expected a positive integer value for 'baudrate' "
         f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        SerialTransportLayer(port="COM7", baudrate=baudrate)
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, baudrate=baudrate)
 
     # Invalid start_byte argument
     start_byte = 300
     message = (
-        f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
+        f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
         f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        SerialTransportLayer(port="COM7", start_byte=start_byte)
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, start_byte=start_byte)
 
     # Invalid delimiter_byte argument
     delimiter_byte = 300
     message = (
-        f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
+        f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
         f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        SerialTransportLayer(port="COM7", delimiter_byte=delimiter_byte)
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, delimiter_byte=delimiter_byte)
 
     # Invalid timeout argument
     timeout = -5000
     message = (
-        f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
+        f"Unable to initialize TransportLayer class. Expected an integer value of 0 or above for "
         f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        SerialTransportLayer(port="COM7", timeout=timeout)
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, timeout=timeout)
 
     # Delimiter and Start byte are the same error
+    message = "Unable to initialize TransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be the same."
+    with pytest.raises(ValueError, match=error_format(message)):
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, start_byte=129, delimiter_byte=129)
+
+    # Invalid microcontroller_serial_buffer_size argument
     message = (
-        "Unable to initialize SerialTransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be the same."
+        f"Unable to initialize TransportLayer class. Expected a positive integer value for "
+        f"'microcontroller_serial_buffer_size' argument, but encountered {None} of type {type(None).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        SerialTransportLayer(port="COM7", start_byte=129, delimiter_byte=129)
+        # noinspection PyTypeChecker
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=None)
+
+    # Maximum transmitted payload size exceeds microcontroller's buffer size - 8:
+    mc_buffer = 56
+    max_payload = 254
+    message = (
+        f"Unable to initialize TransportLayer class. After accounting for the maximum possible size of packet "
+        f"service bytes (8), transmitted packets using maximum payload size "
+        f"({max_payload}) will not fit inside the microcontroller's Serial buffer, which "
+        f"only has space for {mc_buffer} bytes."
+    )
+    with pytest.raises(ValueError, match=error_format(message)):
+        # noinspection PyTypeChecker
+        TransportLayer(
+            port="COM7", microcontroller_serial_buffer_size=mc_buffer, maximum_transmitted_payload_size=max_payload
+        )
 
 
 @pytest.mark.parametrize(
@@ -279,7 +297,7 @@ def test_init_errors() -> None:
     ],
 )
 def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffer: NDArray[Any]) -> None:
-    """Verifies the functioning of SerialTransportLayer write_data(), send_data(), receive_data() and read_data()
+    """Verifies the functioning of TransportLayer write_data(), send_data(), receive_data() and read_data()
     methods.
 
     This test suite cycles the data through the four major methods used by the class to carry out bidirectional serial
@@ -287,11 +305,10 @@ def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffe
     test cases to different cores.
 
     Args:
-        protocol: The SerialTransportLayer instance to test.
+        protocol: The TransportLayer instance to test.
         data: Tuple containing test data of various types.
         expected_buffer: Expected buffer state after writing the data
     """
-
     # Step 1: Writes all data items to the transmission buffer
     current_index = 0
     for item in data:
@@ -348,9 +365,9 @@ def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffe
 
 
 def test_receive_bytes_available(protocol) -> None:
-    """Verifies the functionality of the SerialTransportLayer _bytes_available() private method not tested by other
-    test cases."""
-
+    """Verifies the functionality of the TransportLayer _bytes_available() private method not tested by other
+    test cases.
+    """
     # _bytes_available() is designed to receive data broken into chunks. This functionality is hard to test indirectly
     # without using two instances of TransportLayer class. Instead, this method directly verifies that functionality
     # by simulating receiving the data in chunks.
@@ -379,8 +396,7 @@ def test_receive_bytes_available(protocol) -> None:
 
 
 def test_read_data_errors(protocol) -> None:
-    """Verifies the error handling behavior of SerialTransportLayer read_data() method"""
-
+    """Verifies the error handling behavior of TransportLayer read_data() method"""
     # Sets the received bytes tracker to 5. The instance interprets this as meaning that it has 5 bytes available for
     # reading inside the reception buffer. This is necessary to trigger the error cases below.
     protocol._bytes_in_reception_buffer = 5
@@ -432,8 +448,7 @@ def test_read_data_errors(protocol) -> None:
 
 
 def test_write_data_errors(protocol) -> None:
-    """Verifies the error handling behavior of SerialTransportLayer write_data() method"""
-
+    """Verifies the error handling behavior of TransportLayer write_data() method"""
     # Invalid data type
     invalid_data = None
     message = (
@@ -487,9 +502,8 @@ def test_write_data_errors(protocol) -> None:
 
 
 def test_receive_data_errors(protocol):
-    """Verifies the error handling behavior of SerialTransportLayer class receive_data() method."""
-
-    # Generates a test payload and uses SerialTransportLayer internal methods to encode, checksum and assemble the
+    """Verifies the error handling behavior of TransportLayer class receive_data() method."""
+    # Generates a test payload and uses TransportLayer internal methods to encode, checksum, and assemble the
     # data packet around the payload. This simulates the steps typically taken as part of the send_data() method
     # runtime.
     test_payload: NDArray[np.uint8] = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
@@ -535,7 +549,7 @@ def test_receive_data_errors(protocol):
         protocol.receive_data()
 
     # Cleans up and resets the test buffer
-    protocol._leftover_bytes = bytes()  # Clears leftover bytes to prevent it from accumulating unprocessed bytes.
+    protocol._leftover_bytes = b""  # Clears leftover bytes to prevent it from accumulating unprocessed bytes.
     empty_buffer[-1] = 129
 
     # CODE 2. Packet reception stalls while waiting for additional payload bytes.
@@ -543,7 +557,7 @@ def test_receive_data_errors(protocol):
     test_data[13] = 1  # Replaces the original delimiter byte to avoid Delimiter Byte Found Too Early error
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
-        "Failed to parse the incoming serial packet data. The byte number 15 out of 114 "
+        "Failed to parse the incoming serial packet data. The byte number 14 out of 113 "
         "was not received in time (20000 microseconds), following the reception of the previous byte. "
         "Packet reception staled."
     )
@@ -554,7 +568,7 @@ def test_receive_data_errors(protocol):
         protocol.receive_data()
 
     # Cleans up and resets the test buffer
-    protocol._leftover_bytes = bytes()
+    protocol._leftover_bytes = b""
     # Does not reset the packet size, as the test below also modifies this value
     test_data[13] = 0
 
@@ -574,7 +588,7 @@ def test_receive_data_errors(protocol):
         protocol.receive_data()
 
     # Cleans up and resets the test buffer
-    protocol._leftover_bytes = bytes()
+    protocol._leftover_bytes = b""
     test_data[1] = 10
 
     # CODE 104. Delimiter byte value found before reaching the end of the encoded packet.
@@ -582,7 +596,7 @@ def test_receive_data_errors(protocol):
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
         f"Failed to parse the incoming serial packet data. Delimiter byte value ({protocol._delimiter_byte}) "
-        f"encountered at payload byte number {11}, instead of the expected byte number "
+        f"encountered at payload byte number {10}, instead of the expected byte number "
         f"{12}. This likely indicates packet corruption or "
         f"mismatch in the transmission parameters between this system and the Microcontroller."
     )
@@ -593,7 +607,7 @@ def test_receive_data_errors(protocol):
         protocol.receive_data()
 
     # Cleans up and resets the test buffer
-    protocol._leftover_bytes = bytes()
+    protocol._leftover_bytes = b""
     test_data[-4] = 10  # This was the initial value at index -4
 
     # CODE 105. Delimiter byte not found at the end of the encoded packet.
@@ -611,7 +625,7 @@ def test_receive_data_errors(protocol):
         protocol.receive_data()
 
     # Cleans up and resets the test buffer
-    protocol._leftover_bytes = bytes()
+    protocol._leftover_bytes = b""
     test_data[-3] = 0  # Restores the delimiter
 
     # CRC Checksum verification error.
@@ -631,7 +645,7 @@ def test_receive_data_errors(protocol):
         protocol.receive_data()
 
     # Cleans up and resets the test buffer
-    protocol._leftover_bytes = bytes()
+    protocol._leftover_bytes = b""
 
     # COBS verification error.
     # For this test, creates a special test payload by introducing an error after COBS-encoding the payload, but
@@ -656,8 +670,7 @@ def test_receive_data_errors(protocol):
 
 
 def test_send_data_errors(protocol):
-    """Verifies the error handling behavior of SerialTransportLayer class send_data() method."""
-
+    """Verifies the error handling behavior of TransportLayer class send_data() method."""
     # Tests calling send_data() with an empty transmission_buffer.
     message = (
         f"Failed to encode the payload using COBS scheme. The size of the input payload "

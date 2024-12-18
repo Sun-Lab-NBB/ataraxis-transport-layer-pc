@@ -4,11 +4,11 @@ import numpy as np
 import pytest
 from ataraxis_base_utilities import error_format
 
-from ataraxis_transport_layer.helper_modules import (
-    SerialMock,
+from ataraxis_transport_layer_pc import (
     CRCProcessor,
     COBSProcessor,
 )
+from ataraxis_transport_layer_pc.helper_modules import SerialMock
 
 
 @pytest.mark.parametrize(

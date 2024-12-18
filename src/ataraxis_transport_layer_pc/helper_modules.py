@@ -1,7 +1,7 @@
-"""This module contains the low-level helper classes that support the runtime of some TransportLayer family classes.
+"""This module contains the low-level helper classes that support the runtime of TransportLayer class methods.
 
 This module includes the CRCProcessor and COBSProcessor classes used to serialize and deserialize transmitted payloads
-and SerialMock class used to test the SerialTransportLayer class.
+and SerialMock class used to test the TransportLayer class.
 
 All methods of CRCProcessor and COBSProcessor classes are implemented using Numba and Numpy to optimize runtime
 execution speed. This allows compiling the classes to machine-code whenever they are first called by any TransportLayer
@@ -10,7 +10,7 @@ For user convenience, these classes are wrapped into pure-python API, which adds
 working with the wrapped classes.
 
 The SerialMock class is a pure-python class whose main job is to 'overload' the methods of the pySerial's Serial
-class, so that SerialTransportLayer can be tested without a properly configured Microcontroller. It has no
+class, so that TransportLayer can be tested without a properly configured Microcontroller. It has no
 practical use outside of this specific role.
 """
 
@@ -1183,13 +1183,13 @@ class CRCProcessor:
 class SerialMock:
     """Mocks the behavior of PySerial's `Serial` class for testing purposes.
 
-    This class provides a mock implementation of the `Serial` class, enabling unit tests for `SerialTransportLayer`
+    This class provides a mock implementation of the `Serial` class, enabling unit tests for TransportLayer class
     without requiring an actual hardware connection. It replicates the core functionalities of PySerial's `Serial`
     class that are relevant to testing, such as reading and writing data, while simplifying the overall behavior.
 
     Key differences from `Serial`:
         The `tx_buffer` and `rx_buffer` attributes are exposed directly, allowing test cases to verify the state of
-        transmitted and received data. The class only supports methods used by `SerialTransportLayer` for testing, and
+        transmitted and received data. The class only supports methods used by `TransportLayer` for testing, and
         omits other methods not relevant to this specific use case.
 
     Attributes:

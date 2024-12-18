@@ -7,27 +7,28 @@ build-backend = "hatchling.build"
 
 # Project metdata section. Provides the genral ID information about the project.
 [project]
-name = "ataraxis-transport-layer"
+name = "ataraxis-transport-layer-pc"
 version = "1.0.0"
-description = "Provides classes and methods that enable bidirectional communication between project Ataraxis systems."
+description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB or UART serial interfaces."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11, <3.13"  # Limited to 3.11 and 3.12 until 3.13 support is added for numba
 authors = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
+    { name = "Katlynn Ryu", email = "kmr238@cornell.edu" },
 ]
 maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
 
-keywords = ["ataraxis", "MQTT", "Serial", "communication"]
+keywords = ["ataraxis", "serial", "communication"]
 
 classifiers = [
     # Development status
     "Development Status :: 5 - Production/Stable",
     # Intended audience and project topic
     "Intended Audience :: Developers",
-    "Topic :: Multimedia :: Video",
+    "Topic :: Communications",
     # License
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     # Supported Python Versions
@@ -47,13 +48,11 @@ dependencies = [
     "pyserial>=3,<4",
     "ataraxis-time>=3,<4",
     "ataraxis-base-utilities>=3,<4",
-    "ataraxis-data-structures>=2,<3",
-    "paho-mqtt>=2,<3",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Sun-Lab-NBB/ataraxis-transport-layer"
-Documentation = "https://app.netlify.com/sites/ataraxis-transport-layer-api-docs/overview"
+Homepage = "https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc"
+Documentation = "https://ataraxis-transport-layer-pc-api-docs.netlify.app/"
 
 # Specifies additional dependencies that can be installed alongside the main library. Also, this is the section that
 # stores conda, condarun, and noconda lists that facilitate setting up dependencies via conda where possible.
@@ -109,12 +108,14 @@ noconda = [
     "tox-uv>=1,<2",
     "uv>=0,<1",
 
+    # Documentation
+    "sphinx-rtd-dark-mode>=1,<2",
+
     # Building
     "build>=1,<2",
 
     # Types:
     "types-pyserial>=3,<4",
-    "types-paho-mqtt>=1,<2",
 
     # Automation
     "ataraxis-automation>=4,<5",
@@ -124,12 +125,14 @@ noconda = [
 # be used by developers to quickly install all necessary components for working on this project. Has to be installed
 # from pip.
 dev = [
-    "ataraxis-transport-layer[conda]",
-    "ataraxis-transport-layer[noconda]"
+    "ataraxis-transport-layer-pc[conda]",
+    "ataraxis-transport-layer-pc[noconda]"
 ]
 
-# Future support for CLI interface(s) can be realizied through this section.
+# Exposes a cli command that lists all active USB ports alongside their descriptive information. This is used to
+# discover USB ports used by compatibel microcontrollers.
 [project.scripts]
+axtl-ports = "ataraxis_transport_layer_pc.transport_layer:print_available_ports"
 
 # Specifies files that should not be included in the source-code distribution, but are also not part of gitignore.
 [tool.hatch.build.targets.sdist]
@@ -137,7 +140,7 @@ exclude = [".github", "recipe"]
 
 # Specifies the library structure.
 [tool.hatch.build.targets.wheel]
-packages = ["src/ataraxis_transport_layer"]
+packages = ["src/ataraxis_transport_layer_pc"]
 
 # Ruff Configuration.
 [tool.ruff]
@@ -197,14 +200,14 @@ length-sort = true                 # Places shorter imports first
 disallow_untyped_defs = true # Enforces function annotation
 warn_unused_ignores = true   # Warns against using 'type: ignore' for packages that have type stubs available.
 exclude = [
-    "ataraxis-transport-layer-\\d+", # Ignores temporary folder created by setuptools when building the sdist
-    "venv.*/",                       # Ignores virtual environments
-    "build/",                        # Ignores the sdist directory
-    "dist/",                         # Ignores the wheel directory
-    "docs/",                         # Ignores the sphinx / doxygen directory
-    "stubs/",                        # Ignores stubs directory (stubgen output target)
-    "recipe/",                       # Ignores recipe directory (grayskull output target)
-    "tests/",                        # Ignores the test directory.
+    "ataraxis-transport-layer-pc-\\d+", # Ignores temporary folder created by setuptools when building the sdist
+    "venv.*/",                          # Ignores virtual environments
+    "build/",                           # Ignores the sdist directory
+    "dist/",                            # Ignores the wheel directory
+    "docs/",                            # Ignores the sphinx / doxygen directory
+    "stubs/",                           # Ignores stubs directory (stubgen output target)
+    "recipe/",                          # Ignores recipe directory (grayskull output target)
+    "tests/",                           # Ignores the test directory.
 ]
 
 # This is used by the 'test' tox tasks to aggregate coverage data produced during pytest runtimes.

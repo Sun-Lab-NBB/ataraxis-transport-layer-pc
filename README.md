@@ -1,38 +1,40 @@
-# ataraxis-transport-layer
+# ataraxis-transport-layer-pc
 
-Provides classes and methods that enable bidirectional communication between project Ataraxis systems.
+A Python library that provides methods for establishing and maintaining bidirectional communication with Arduino and 
+Teensy microcontrollers over USB or UART serial interfaces.
 
-![PyPI - Version](https://img.shields.io/pypi/v/ataraxis-transport-layer)
-![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ataraxis-transport-layer)
+![PyPI - Version](https://img.shields.io/pypi/v/ataraxis-transport-layer-pc)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ataraxis-transport-layer-pc)
 [![uv](https://tinyurl.com/uvbadge)](https://github.com/astral-sh/uv)
 [![Ruff](https://tinyurl.com/ruffbadge)](https://github.com/astral-sh/ruff)
 ![type-checked: mypy](https://img.shields.io/badge/type--checked-mypy-blue?style=flat-square&logo=python)
-![PyPI - License](https://img.shields.io/pypi/l/ataraxis-transport-layer)
-![PyPI - Status](https://img.shields.io/pypi/status/ataraxis-transport-layer)
-![PyPI - Wheel](https://img.shields.io/pypi/wheel/ataraxis-transport-layer)
+![PyPI - License](https://img.shields.io/pypi/l/ataraxis-transport-layer-pc)
+![PyPI - Status](https://img.shields.io/pypi/status/ataraxis-transport-layer-pc)
+![PyPI - Wheel](https://img.shields.io/pypi/wheel/ataraxis-transport-layer-pc)
 ___
 
 ## Detailed Description
 
-This library aggregates the classes and methods needed to exchange data between Ataraxis systems found on the same 
-hardware (multiple processes) and on different hardware. These tools include service classes used to ensure data 
-integrity (CRC, COBS), communication protocols acting on top of the Serial and TCP interfaces (TransportLayer), 
-and classes that provide predetermined message structures (Communication). While TransportLayer classes handle 
-the macrostructure of the transmitted and received payloads, Communication classes provide a fixed microstructure and 
-wrap TransportLayer classes into a convenient API.
+This is the Python implementation of the ataraxis-transport-layer (AXTL) library, designed to run on 
+host-computers (PCs). It provides methods for bidirectionally communicating with a microcontroller running the 
+[ataraxis-transport-layer-mc](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) companion library written in 
+C++. The library abstracts most steps necessary for data transmission, such as serializing data into payloads, 
+packing the payloads into packets, and transmitting packets as byte-streams to the receiver. It also abstracts the 
+reverse sequence of steps necessary to verify and decode the payload from the packet received as a stream of bytes. The 
+library is specifically designed to support time-critical applications, such as scientific experiments, and can achieve 
+microsecond communication speeds for newer microcontroller-PC configurations.
 ___
 
 ## Features
 
 - Supports Windows, Linux, and macOS.
-- Provides mechanisms for encoding and decoding data payloads using COBS.
-- Provides mechanisms for verifying transmitted data integrity using CRC.
-- Provides a set of TransportLayer classes that streamline communicating over USB / UART and TCP interfaces.
-- Provides a set of Communication classes designed to bidirectionally communication with Microcontrollers and Unity.
-- Uses JIT-compilation to optimize communication speeds where possible.
-- Wraps JIT-compiled method into pure-python interface to improve user experience. 
+- Uses Consistent Overhead Byte Stuffing (COBS) to encode payloads.
+- Supports Circular Redundancy Check (CRC) 8-, 16- and 32-bit polynomials to ensure data integrity during transmission.
+- Uses JIT-compilation and NumPy to optimize data processing and communication speeds, where possible.
+- Wraps JIT-compiled methods into pure-python interfaces to improve user experience.
+- Has a [companion](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) libray written in C++ to simplify 
+  PC-MicroController communication.
 - GPL 3 License.
-
 ___
 
 ## Table of Contents
@@ -50,9 +52,7 @@ ___
 
 ## Dependencies
 
-1. 
-
-For users, most library dependencies are installed automatically for all supported installation methods 
+For users, all library dependencies are installed automatically by all supported installation methods.
 (see [Installation](#installation) section). 
 
 For developers, see the [Developers](#developers) section for 
@@ -63,32 +63,193 @@ ___
 
 ### Source
 
-1. Download this repository to your local machine using your preferred method, such as git-cloning. Optionally, use one
-   of the stable releases that include precompiled binary wheels in addition to source code.
-2. ```cd``` to the root directory of the project using your command line interface of choice.
-3. Run ```python -m pip install .``` to install the project. Alternatively, if using a distribution with precompiled
-   binaries, use ```python -m pip install WHEEL_PATH```, replacing 'WHEEL_PATH' with the path to the wheel file.
+Note, installation from source is ***highly discouraged*** for everyone who is not an active project developer.
+Developers should see the [Developers](#Developers) section for more details on installing from source. The instructions
+below assume you are ***not*** a developer.
+
+1. Download this repository to your local machine using your preferred method, such as Git-cloning. Use one
+   of the stable releases from [GitHub](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc/releases).
+2. Unpack the downloaded zip and copy the path to the appropriate binary wheel (`.whl`) file.
+3. Run ```python -m pip install WHEEL_PATH```, replacing 'WHEEL_PATH' with the path to the wheel file to install the 
+   wheel into the active conda environment.
 
 ### PIP
-
-Use the following command to install the library using PIP: ```pip install ataraxis-transport-layer```
-
-### Conda / Mamba
-
-**_Note. Due to conda-forge contributing process being more nuanced than pip uploads, conda versions may lag behind
-pip and source code distributions._**
-
-Use the following command to install the library using Conda or Mamba: ```conda install ataraxis-transport-layer```
+Use the following command to install the library using PIP: ```pip install ataraxis-transport-layer-pc```
 ___
 
 ## Usage
 
-TODO STUB
+### TransportLayer
+The TransportLayer class provides an intermediate-level API for bidirectional communication over USB or UART serial 
+interfaces. It ensures proper encoding and decoding of data packets using the Consistent Overhead Byte Stuffing (COBS) 
+protocol and ensures transmitted packet integrity via Cyclic Redundancy Check (CRC).
+
+#### Packet Anatomy:
+This class sends and receives data in the form of packets. Each packet adheres to the following general 
+layout:
+
+`[START] [PAYLOAD SIZE] [COBS OVERHEAD] [PAYLOAD (1 to 254 bytes)] [DELIMITER] [CRC CHECKSUM (1 to 4 bytes)]`
+
+To optimize runtime efficiency, the class generates two buffers at compile time that store encoded and decoded payloads.
+TransportLayer’s write_data() and read_data() methods work with payload data buffers. The rest of the packet data is 
+processed exclusively during send_data() and receive_data() runtime and is not accessible to users. Therefore, users 
+can safely ignore all packet-related information and focus on working with transmitted and received serialized payloads.
+
+#### Quickstart
+This is a minimal example of how to use this library.
+
+```
+# Imports the TransportLayer class.
+from ataraxis_transport_layer_pc import TransportLayer
+
+# Imports dataclass to demonstrate struct-like data transmission
+from dataclasses import dataclass
+
+# Imports numpy to use for payload generation.
+import numpy as np
+
+# Imports sleep function to delay execution after connection cycling
+from time import sleep
+
+# Instantiates a new TransportLayer object. Most class parameters are set to value that should scale with any
+# microcontroller. However, you do need to provide the USB port name (can be discovered via 'axtl-ports' CLI command)
+# and the microcontroller's Serial buffer size (can be obtained from the microcontroller's manufacturer). Check the API
+# documentation website if you want to fine-tune other class parameters to better match your use case.
+tl_class = TransportLayer(port="/dev/ttyACM2", microcontroller_serial_buffer_size=300)
+
+# Some Arduino boards reset after receiving a connection request. To make this example universal, sleeps for 5 seconds
+# to ensure the microcontroller is ready to receive data.
+sleep(5)
+
+# Pre-creates the objects used for the demonstration below.
+test_scalar = np.uint32(123456789)
+test_array = np.zeros(4, dtype=np.uint8)  # [0, 0, 0, 0]
+
+
+# While Python does not have C++-like structures, dataclasses can be used for a similar purpose.
+@dataclass()  # It is important for the class to NOT be frozen!
+class TestStruct:
+    test_flag: np.bool = np.bool(True)
+    test_float: np.float32 = np.float32(6.66)
+
+    def __repr__(self) -> str:
+        return f"TestStruct(test_flag={self.test_flag}, test_float={round(float(self.test_float), ndigits=2)})"
+
+
+test_struct = TestStruct()
+
+# Executes one transmission and one data reception cycle. During production runtime, this code would typically run in
+# a function or loop.
+
+# Writes objects to the TransportLayer's transmission buffer, staging them to be sent with the next
+# send_data() command. Note, the objects are written in the order they will be read by the microcontroller.
+next_index = 0  # Starts writing from the beginning of the transmission buffer.
+next_index = tl_class.write_data(test_scalar, next_index)
+next_index = tl_class.write_data(test_array, next_index)
+# Since test_struct is the last object in the payload, we do not need to save the new next_index.
+next_index = tl_class.write_data(test_struct, next_index)
+
+# Packages and sends the contents of the transmission buffer that were written above to the Microcontroller.
+tl_class.send_data()  # This also returns a boolean status that we discard for this example.
+
+# Waits for the microcontroller to receive the data and respond by sending its data.
+while not tl_class.available:
+    continue  # If no data is available, the loop blocks until it becomes available.
+
+# If the data is available, carries out the reception procedure (reads the received byte-stream, parses the
+# payload, and makes it available for reading).
+data_received = tl_class.receive_data()
+
+# If the reception was successful, reads the data, assumed to contain serialized test objects. Note, this
+# example is intended to be used together with the example script from the ataraxis-transport-layer-mc library.
+if data_received:
+    # Overwrites the memory of the objects that were sent to the microcontroller with the response data
+    next_index = 0  # Resets the index to 0.
+    test_scalar, next_index = tl_class.read_data(test_scalar, next_index)
+    test_array, next_index = tl_class.read_data(test_array, next_index)
+    test_struct, _ = tl_class.read_data(test_struct, next_index)  # Again, the index after last object is not saved.
+
+    # Verifies the received data
+    assert test_scalar == np.uint32(987654321)  # The microcontroller overwrites the scalar with reverse order.
+
+    # The rest of the data is transmitted without any modifications.
+    assert np.array_equal(test_array, np.array([0, 0, 0, 0]))
+    assert test_struct.test_flag == np.bool(True)
+    assert test_struct.test_float == np.float32(6.66)
+
+# Prints the received data values to the terminal for visual inspection.
+print("Test completed successfully!")
+print(f"test_scalar = {test_scalar}")
+print(f"test_array = {test_array}")
+print(f"test_struct = {test_struct}")
+```
+#### Key Methods
+
+##### Sending Data
+There are two key methods associated with sending data to the PC:
+- The `write_data()` method serializes the input object into bytes and writes the resultant byte sequence into 
+  the `_transmission_buffer` payload region starting at the specified `start_index`.
+- The `send_data()` method encodes the payload into a packet using COBS, calculates the CRC checksum for the encoded 
+  packet, and transmits the packet and the CRC checksum to PC. The method requires that at least one byte of data is 
+  written to the staging buffer via the WriteData() method before it can be sent to the PC.
+
+The example below showcases the sequence of steps necessary to send the data to the PC and assumes TransportLayer 
+'tl_class' was initialized following the steps in the [Quickstart](#quickstart) example:
+```
+// Generates the test array to simulate the payload.
+uint8_t test_array[10] = {1, 2, 3, 0, 0, 6, 0, 8, 0, 0};
+
+// Writes the data into the _transmission_buffer.
+tl_class.WriteData(test_array, 0);
+
+// Sends the payload to the Stream buffer. If all steps of this process succeed, the method returns 'true' and the data
+// is handed off to the 
+bool sent_status = tl_class.SendData();
+```
+
+#### Receiving Data
+There are three key methods associated with receiving data from the PC:
+- The `available` property checks if the serial interface has received enough bytes to justify parsing the data. If this
+  method returns False, calling ReceiveData() will likely fail.
+- The `receive_data()` method reads the encoded packet from the byte-stream stored in Serial interface buffer, verifies 
+  its integrity with CRC, and decodes the payload from the packet using COBS. If the packet was successfully received 
+  and unpacked, this method returns True.
+- The `read_data()` method overwrites the memory (data) of the input object with the data extracted from the received 
+  payload. To do so, the method reads the number of bytes necessary to 'fill' the object with data from the payload, 
+  starting at the `start_index`. Following this procedure, the object will have new value(s) that match the read 
+  data.
+
+The example below showcases the sequence of steps necessary to receive data from the PC and assumes TransportLayer
+'tl_class' was initialized following the steps in the [Quickstart](#quickstart) example: 
+```
+// Packages and sends the contents of the transmission buffer that were written above to the PC.
+tl_class.SendData();  //
+
+if (tl_class.Available())
+{
+    tl_class.ReceiveData();
+}
+uint16_t value    = 44321;
+uint8_t array[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+
+struct MyStruct
+{
+        uint8_t a  = 60;
+        uint16_t b = 12345;
+        uint32_t c = 1234567890;
+} test_structure;
+
+// Overwrites the test objects with the data stored inside the buffer
+uint16_t next_index = tl_class.ReadData(value);  // ReadData defaults to start_index 0 if it is not provided
+uint16_t next_index = tl_class.ReadData(array, next_index);
+uint16_t next_index = tl_class.ReadData(test_structure, next_index);
+```
+___
 ___
 
 ## API Documentation
 
-See the [API documentation](https://ataraxis-transport-layer-api-docs.netlify.app/) for the
+See the [API documentation](https://ataraxis-transport-layer-pc-api-docs.netlify.app/) for the
 detailed description of the methods and classes exposed by components of this library.
 ___
 
@@ -103,33 +264,27 @@ that were used during development from the included .yml files.
 1. Download this repository to your local machine using your preferred method, such as git-cloning.
 2. ```cd``` to the root directory of the project using your command line interface of choice.
 3. Install development dependencies. You have multiple options of satisfying this requirement:
-    1. **_Preferred Method:_** Use conda or pip to install
-       [tox](https://tox.wiki/en/latest/user_guide.html) or use an environment that has it installed and
-       call ```tox -e import``` to automatically import the os-specific development environment included with the
-       source code in your local conda distribution. Alternatively, you can use ```tox -e create``` to create the 
-       environment from scratch and automatically install the necessary dependencies using pyproject.toml file. See 
+    1. **_Preferred Method:_** Use conda or pip to install [tox](https://tox.wiki/en/latest/user_guide.html) and call
+       ```tox -e import``` to automatically import the os-specific development environment included with the source 
+       code in your local conda distribution. Alternatively, you can use ```tox -e create``` to create the environment 
+       from scratch and automatically install the necessary dependencies using pyproject.toml file. See 
        [environments](#environments) section for other environment installation methods.
     2. Run ```python -m pip install .'[dev]'``` command to install development dependencies and the library using 
        pip. On some systems, you may need to use a slightly modified version of this command: 
        ```python -m pip install .[dev]```.
     3. As long as you have an environment with [tox](https://tox.wiki/en/latest/user_guide.html) installed
        and do not intend to run any code outside the predefined project automation pipelines, tox will automatically
-       install all required dependencies for each task.
-
-**Note:** When using tox automation, having a local version of the library may interfere with tox tasks that attempt
-to build the library using an isolated environment. While the problem is rare, our 'tox' pipelines automatically 
-install and uninstall the project from its' conda environment. This relies on a static tox configuration and will only 
-target the project-specific environment, so it is advised to always ```tox -e import``` or ```tox -e create``` the 
-project environment using 'tox' before running other tox commands.
+       install all required dependencies for each task. In this case, skip installing additional development 
+       dependencies.
 
 ### Additional Dependencies
 
 In addition to installing the required python packages, separately install the following dependencies:
 
 1. [Python](https://www.python.org/downloads/) distributions, one for each version that you intend to support. 
-  Currently, this library supports version 3.10 and above. The easiest way to get tox to work as intended is to have 
-  separate python distributions, but using [pyenv](https://github.com/pyenv/pyenv) is a good alternative too. 
-  This is needed for the 'test' task to work as intended.
+   The easiest way to get tox to work as intended is to have separate python distributions, but using 
+   [pyenv](https://github.com/pyenv/pyenv) is a good alternative. This is needed for the 'test' task to work as 
+   intended.
 
 ### Development Automation
 
@@ -190,7 +345,7 @@ We use [semantic versioning](https://semver.org/) for this project. For the vers
 ## Authors
 
 - Ivan Kondratyev ([Inkaros](https://github.com/Inkaros))
-- Edwin Chen
+- Katlynn Ryu ([katlynn-ryu](https://github.com/KatlynnRyu))
 
 ___
 

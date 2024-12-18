@@ -24,7 +24,15 @@ def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:
 
     """
 
-class SerialTransportLayer:
+def print_available_ports() -> None:
+    """Lists all serial ports active on the host-system with descriptive information about the device connected to
+    that port.
+
+    This command is intended to be used for discovering the USB ports that can be connected to by a TransportLayer
+    class instance.
+    """
+
+class TransportLayer:
     """Provides methods to bidirectionally communicate with Microcontrollers running the C++ version of the
     TransportLayer class over the UART or USB Serial interface.
 
@@ -48,7 +56,10 @@ class SerialTransportLayer:
 
     Args:
         port: The name of the serial port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. You can use the
-            list_available_ports() class method to get a list of discoverable serial port names.
+            print_available_ports() library method to get a list of discoverable serial port names.
+        microcontroller_serial_buffer_size: The size, in bytes, of the buffer used by the target microcontroller's
+            Serial buffer. Usually, this information is available from the microcontroller's manufacturer (UART / USB
+            controller specification).
         baudrate: The baudrate to be used to communicate with the Microcontroller. Should match the value used by
             the microcontroller for UART ports, ignored for USB ports. Note, the appropriate baudrate for any UART-using
             controller partially depends on its CPU clock!
@@ -63,7 +74,9 @@ class SerialTransportLayer:
             It can be provided as a HEX number (e.g., 0x0000).
         maximum_transmitted_payload_size: The maximum number of bytes that are expected to be transmitted to the
             Microcontroller as a single payload. This has to match the maximum_received_payload_size value used by
-            the Microcontroller. Due to COBS encoding, this value has to be between 1 and 254 bytes.
+            the Microcontroller. Due to COBS encoding, this value has to be between 1 and 254 bytes. When set to 0, the
+            class will automatically calculate adn set this to the highest valid value compatible with the
+            microcontroller_serial_buffer_size argument value.
         minimum_received_payload_size: The minimum number of bytes that are expected to be received from the
             Microcontroller as a single payload. This number is used to calculate the threshold for entering
             incoming data reception cycle. In turn, this is used to minimize the number of calls made to costly
@@ -161,11 +174,12 @@ class SerialTransportLayer:
     def __init__(
         self,
         port: str,
+        microcontroller_serial_buffer_size: int,
         baudrate: int = 115200,
         polynomial: np.uint8 | np.uint16 | np.uint32 = ...,
         initial_crc_value: np.uint8 | np.uint16 | np.uint32 = ...,
         final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = ...,
-        maximum_transmitted_payload_size: int = 254,
+        maximum_transmitted_payload_size: int = 0,
         minimum_received_payload_size: int = 1,
         start_byte: int = 129,
         delimiter_byte: int = 0,
@@ -177,7 +191,7 @@ class SerialTransportLayer:
     def __del__(self) -> None:
         """Ensures proper resource release prior to garbage-collecting class instance."""
     def __repr__(self) -> str:
-        """Returns a string representation of the SerialTransportLayer class instance."""
+        """Returns a string representation of the TransportLayer class instance."""
     @property
     def available(self) -> bool:
         """Returns True if enough bytes are available from the serial port to justify attempting to receive a packet."""

@@ -1,11 +1,9 @@
-"""This module provides the SerialTransportLayer class used to establish and maintain bidirectional serial communication
-with other Ataraxis-compatible systems over USB / UART interface.
+"""This module provides the TransportLayer class used to establish and maintain bidirectional serial communication
+with Arduino and Teensy microcontrollers running the ataraxis-transport-layer-mc library over USB / UART interface.
 
-Primarily, the SerialTransportLayer class handles bidirectional serial communication with Microcontrollers running the
-ataraxis-micro-controller library (Arduino and Teensy boards). The communication is carried over the UART or USB
-interface via the pySerial library. The class is written in a way that maximizes method runtime speed and is mostly
-limited by the speed of pySerial runtime. The functionality of the class is realized through 4 main methods:
-write_data(), send_data(), receive_data() and read_data(). See method and class docstrings for more information.
+The class is written in a way that maximizes method runtime speed and is mostly limited by the speed of pySerial
+runtime. The functionality of the class is realized through 4 main methods: write_data(), send_data(), receive_data(),
+and read_data(). See method and class docstrings for more information.
 
 Additionally, this module exposes the list_available_ports() function used to discover addressable USB ports when
 setting up PC-MicroController communication.
@@ -60,7 +58,36 @@ def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:  # pragma:
     return tuple(information_list)
 
 
-class SerialTransportLayer:
+def print_available_ports() -> None:  # pragma: no cover
+    """Lists all serial ports active on the host-system with descriptive information about the device connected to
+    that port.
+
+    This command is intended to be used for discovering the USB ports that can be connected to by a TransportLayer
+    class instance.
+    """
+    # Records the current console status and, if necessary, ensured console is enabled before running this command.
+    is_enabled = True
+    if not console.enabled:
+        is_enabled = False
+        console.enable()  # Enables console output
+
+    # Gets a tuple that stores all active USB ports with some ID information.
+    available_ports = list_available_ports()
+
+    # Loops over all discovered ports and prints the ID information about each port to the terminal
+    count = 0  # Cannot use 'enumerate' due to filtering PID==None ports.
+    for port in available_ports:
+        # Filters out any ports with PID == None. This is primarily used to filter out invalid ports on Linux systems.
+        if port["PID"] is not None:
+            count += 1  # Counts only valid ports.
+            console.echo(f"{count}: {port['Device']} -> {port['Description']}")  # Removes unnecessary information.
+
+    # If the console was enabled by this runtime, ensures it is disabled before finishing the runtime.
+    if not is_enabled:
+        console.disable()
+
+
+class TransportLayer:
     """Provides methods to bidirectionally communicate with Microcontrollers running the C++ version of the
     TransportLayer class over the UART or USB Serial interface.
 
@@ -84,7 +111,10 @@ class SerialTransportLayer:
 
     Args:
         port: The name of the serial port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. You can use the
-            list_available_ports() class method to get a list of discoverable serial port names.
+            print_available_ports() library method to get a list of discoverable serial port names.
+        microcontroller_serial_buffer_size: The size, in bytes, of the buffer used by the target microcontroller's
+            Serial buffer. Usually, this information is available from the microcontroller's manufacturer (UART / USB
+            controller specification).
         baudrate: The baudrate to be used to communicate with the Microcontroller. Should match the value used by
             the microcontroller for UART ports, ignored for USB ports. Note, the appropriate baudrate for any UART-using
             controller partially depends on its CPU clock!
@@ -99,7 +129,9 @@ class SerialTransportLayer:
             It can be provided as a HEX number (e.g., 0x0000).
         maximum_transmitted_payload_size: The maximum number of bytes that are expected to be transmitted to the
             Microcontroller as a single payload. This has to match the maximum_received_payload_size value used by
-            the Microcontroller. Due to COBS encoding, this value has to be between 1 and 254 bytes.
+            the Microcontroller. Due to COBS encoding, this value has to be between 1 and 254 bytes. When set to 0, the
+            class will automatically calculate and set this argument to the highest value compatible with the
+            microcontroller_serial_buffer_size argument.
         minimum_received_payload_size: The minimum number of bytes that are expected to be received from the
             Microcontroller as a single payload. This number is used to calculate the threshold for entering
             incoming data reception cycle. In turn, this is used to minimize the number of calls made to costly
@@ -191,11 +223,12 @@ class SerialTransportLayer:
     def __init__(
         self,
         port: str,
+        microcontroller_serial_buffer_size: int,
         baudrate: int = 115200,
-        polynomial: np.uint8 | np.uint16 | np.uint32 = np.uint16(0x1021),
-        initial_crc_value: np.uint8 | np.uint16 | np.uint32 = np.uint16(0xFFFF),
-        final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = np.uint16(0x0000),
-        maximum_transmitted_payload_size: int = 254,
+        polynomial: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x07),
+        initial_crc_value: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x00),
+        final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x00),
+        maximum_transmitted_payload_size: int = 0,
         minimum_received_payload_size: int = 1,
         start_byte: int = 129,
         delimiter_byte: int = 0,
@@ -212,43 +245,68 @@ class SerialTransportLayer:
         # CRCProcessor class.
         if not isinstance(port, str):
             message = (
-                f"Unable to initialize SerialTransportLayer class. Expected a string value for 'port' argument, but "
+                f"Unable to initialize TransportLayer class. Expected a string value for 'port' argument, but "
                 f"encountered {port} of type {type(port).__name__}."
             )
             console.error(message=message, error=TypeError)
 
         if not isinstance(baudrate, int) or baudrate <= 0:
             message = (
-                f"Unable to initialize SerialTransportLayer class. Expected a positive integer value for 'baudrate' "
+                f"Unable to initialize TransportLayer class. Expected a positive integer value for 'baudrate' "
                 f"argument, but encountered {baudrate} of type {type(baudrate).__name__}."
             )
             console.error(message=message, error=ValueError)
 
         if not isinstance(start_byte, int) or not 0 <= start_byte <= 255:
             message = (
-                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
+                f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
             )
             console.error(message=message, error=ValueError)
 
         if not isinstance(delimiter_byte, int) or not 0 <= delimiter_byte <= 255:
             message = (
-                f"Unable to initialize SerialTransportLayer class. Expected an integer value between 0 and 255 for "
+                f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
             )
             console.error(message=message, error=ValueError)
 
         if not isinstance(timeout, int) or timeout < 0:
             message = (
-                f"Unable to initialize SerialTransportLayer class. Expected an integer value of 0 or above for "
+                f"Unable to initialize TransportLayer class. Expected an integer value of 0 or above for "
                 f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
             )
             console.error(message=message, error=ValueError)
 
         if start_byte == delimiter_byte:
             message = (
-                "Unable to initialize SerialTransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be "
+                "Unable to initialize TransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be "
                 "the same."
+            )
+            console.error(message=message, error=ValueError)
+
+        if not isinstance(microcontroller_serial_buffer_size, int) or microcontroller_serial_buffer_size < 1:
+            message = (
+                f"Unable to initialize TransportLayer class. Expected a positive integer value for "
+                f"'microcontroller_serial_buffer_size' argument, but encountered {microcontroller_serial_buffer_size} "
+                f"of type {type(microcontroller_serial_buffer_size).__name__}."
+            )
+            console.error(message=message, error=ValueError)
+
+        # If maximum_transmitted_payload_size is set to the default initialization value of 0, automatically sets it
+        # to the highest valid value. The value cannot exceed 254 and has to be at least 8 bytes smaller than the
+        # microcontroller_serial_buffer_size to account for packet service bytes.
+        if maximum_transmitted_payload_size == 0:
+            maximum_transmitted_payload_size = min((microcontroller_serial_buffer_size - 8), 254)
+
+        # Ensures that the specified maximum transmitted payload size would fit in the microcontroller's serial
+        # buffer, accounting for the maximum size of the packet service bytes that will be added to the payload.
+        elif maximum_transmitted_payload_size > microcontroller_serial_buffer_size - 8:
+            message = (
+                f"Unable to initialize TransportLayer class. After accounting for the maximum possible size of packet "
+                f"service bytes (8), transmitted packets using maximum payload size "
+                f"({maximum_transmitted_payload_size}) will not fit inside the microcontroller's Serial buffer, which "
+                f"only has space for {microcontroller_serial_buffer_size} bytes."
             )
             console.error(message=message, error=ValueError)
 
@@ -301,7 +359,7 @@ class SerialTransportLayer:
         self._leftover_bytes: bytes = b""  # Placeholder, this is re-initialized as needed during data reception.
 
         # Opens (connects to) the serial port. Cycles closing and opening to ensure the port is opened,
-        # non-graciously replacing whatever is using the port at the time of instantiating SerialTransportLayer class.
+        # non-graciously replacing whatever is using the port at the time of instantiating TransportLayer class.
         # This non-safe procedure was implemented to avoid a frequent issue with Windows taking a long time to release
         # COM ports, preventing quick connection cycling.
         self._port.close()
@@ -316,10 +374,10 @@ class SerialTransportLayer:
             self._port.close()
 
     def __repr__(self) -> str:
-        """Returns a string representation of the SerialTransportLayer class instance."""
+        """Returns a string representation of the TransportLayer class instance."""
         if isinstance(self._port, Serial):  # pragma: no cover
             representation_string = (
-                f"SerialTransportLayer(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
+                f"TransportLayer(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
                 f"{self._crc_processor.polynomial}, start_byte={self._start_byte}, "
                 f"delimiter_byte={self._delimiter_byte}, timeout={self._timeout} us, "
                 f"maximum_tx_payload_size = {self._max_tx_payload_size}, "
@@ -327,7 +385,7 @@ class SerialTransportLayer:
             )
         else:
             representation_string = (
-                f"SerialTransportLayer(port & baudrate=MOCKED, polynomial={self._crc_processor.polynomial}, "
+                f"TransportLayer(port & baudrate=MOCKED, polynomial={self._crc_processor.polynomial}, "
                 f"start_byte={self._start_byte}, delimiter_byte={self._delimiter_byte}, timeout={self._timeout} us, "
                 f"maximum_tx_payload_size = {self._max_tx_payload_size}, "
                 f"maximum_rx_payload_size={self._max_rx_payload_size})"
@@ -553,7 +611,7 @@ class SerialTransportLayer:
 
         # If the end_index is not resolved properly, catches and raises a runtime error
         message = (
-            f"Failed to write the data to the transmission buffer. Encountered an unknown error code ({end_index})"
+            f"Failed to write the data to the transmission buffer. Encountered an unknown error code ({end_index}) "
             f"returned by the writer method."
         )  # pragma: no cover
         console.error(message=message, error=RuntimeError)  # pragma: no cover
