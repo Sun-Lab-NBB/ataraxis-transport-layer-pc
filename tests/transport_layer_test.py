@@ -592,11 +592,11 @@ def test_receive_data_errors(protocol):
     test_data[1] = 10
 
     # CODE 104. Delimiter byte value found before reaching the end of the encoded packet.
-    test_data[-4] = 0  # Inserts the delimiter 1 position before the actual delimiter position
+    test_data[-3] = 0  # Inserts the delimiter 1 position before the actual delimiter position
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
         f"Failed to parse the incoming serial packet data. Delimiter byte value ({protocol._delimiter_byte}) "
-        f"encountered at payload byte number {10}, instead of the expected byte number "
+        f"encountered at payload byte number {11}, instead of the expected byte number "
         f"{12}. This likely indicates packet corruption or "
         f"mismatch in the transmission parameters between this system and the Microcontroller."
     )
@@ -608,10 +608,10 @@ def test_receive_data_errors(protocol):
 
     # Cleans up and resets the test buffer
     protocol._leftover_bytes = b""
-    test_data[-4] = 10  # This was the initial value at index -4
+    test_data[-3] = 10  # This was the initial value at index -4
 
     # CODE 105. Delimiter byte not found at the end of the encoded packet.
-    test_data[-3] = 10  # Overrides the delimiter
+    test_data[-2] = 10  # Overrides the delimiter
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
         f"Failed to parse the incoming serial packet data. Delimiter byte value ({protocol._delimiter_byte}) "
@@ -626,7 +626,7 @@ def test_receive_data_errors(protocol):
 
     # Cleans up and resets the test buffer
     protocol._leftover_bytes = b""
-    test_data[-3] = 0  # Restores the delimiter
+    test_data[-2] = 0  # Restores the delimiter
 
     # CRC Checksum verification error.
     # Translates the real and invalid checksums into hexadecimals used in error messages
