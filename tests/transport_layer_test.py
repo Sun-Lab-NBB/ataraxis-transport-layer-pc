@@ -39,6 +39,7 @@ def protocol() -> TransportLayer:
     protocol = TransportLayer(
         port="COM7",
         microcontroller_serial_buffer_size=1024,
+        baudrate=1000000,
         test_mode=True,
     )
 
@@ -74,7 +75,7 @@ def test_init_errors() -> None:
     )
     with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
-        TransportLayer(port=port, microcontroller_serial_buffer_size=64)
+        TransportLayer(port=port, microcontroller_serial_buffer_size=64, baudrate=1000000)
 
     # Invalid baudrate argument
     baudrate = -9600
@@ -92,7 +93,7 @@ def test_init_errors() -> None:
         f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, start_byte=start_byte)
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, start_byte=start_byte)
 
     # Invalid delimiter_byte argument
     delimiter_byte = 300
@@ -101,7 +102,9 @@ def test_init_errors() -> None:
         f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, delimiter_byte=delimiter_byte)
+        TransportLayer(
+            port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, delimiter_byte=delimiter_byte
+        )
 
     # Invalid timeout argument
     timeout = -5000
@@ -110,12 +113,14 @@ def test_init_errors() -> None:
         f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, timeout=timeout)
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, timeout=timeout)
 
     # Delimiter and Start byte are the same error
     message = "Unable to initialize TransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be the same."
     with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, start_byte=129, delimiter_byte=129)
+        TransportLayer(
+            port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, start_byte=129, delimiter_byte=129
+        )
 
     # Invalid microcontroller_serial_buffer_size argument
     message = (
@@ -124,7 +129,7 @@ def test_init_errors() -> None:
     )
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
-        TransportLayer(port="COM7", microcontroller_serial_buffer_size=None)
+        TransportLayer(port="COM7", microcontroller_serial_buffer_size=None, baudrate=1000000)
 
     # Invalid maximum_transmitted_payload_size argument
     invalid_max_size = None
@@ -136,7 +141,10 @@ def test_init_errors() -> None:
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         TransportLayer(
-            port="COM7", microcontroller_serial_buffer_size=64, maximum_transmitted_payload_size=invalid_max_size
+            port="COM7",
+            microcontroller_serial_buffer_size=64,
+            baudrate=1000000,
+            maximum_transmitted_payload_size=invalid_max_size,
         )
 
     # Invalid minimum_transmitted_payload_size argument
@@ -149,7 +157,10 @@ def test_init_errors() -> None:
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         TransportLayer(
-            port="COM7", microcontroller_serial_buffer_size=64, minimum_received_payload_size=invalid_min_size
+            port="COM7",
+            microcontroller_serial_buffer_size=64,
+            baudrate=1000000,
+            minimum_received_payload_size=invalid_min_size,
         )
 
     # Maximum transmitted payload size exceeds microcontroller's buffer size - 8:
@@ -164,7 +175,10 @@ def test_init_errors() -> None:
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         TransportLayer(
-            port="COM7", microcontroller_serial_buffer_size=mc_buffer, maximum_transmitted_payload_size=max_payload
+            port="COM7",
+            microcontroller_serial_buffer_size=mc_buffer,
+            baudrate=1000000,
+            maximum_transmitted_payload_size=max_payload,
         )
 
 

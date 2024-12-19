@@ -140,7 +140,7 @@ exclude = [".github", "recipe"]
 
 # Specifies the library structure.
 [tool.hatch.build.targets.wheel]
-packages = ["src/ataraxis_transport_layer_pc"]
+packages = ["src/ataraxis_transport_layer_pc", "examples"]
 
 # Ruff Configuration.
 [tool.ruff]

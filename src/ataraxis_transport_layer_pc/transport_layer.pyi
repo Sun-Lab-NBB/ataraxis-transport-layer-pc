@@ -62,7 +62,8 @@ class TransportLayer:
             controller specification).
         baudrate: The baudrate to be used to communicate with the Microcontroller. Should match the value used by
             the microcontroller for UART ports, ignored for USB ports. Note, the appropriate baudrate for any UART-using
-            controller partially depends on its CPU clock!
+            controller partially depends on its CPU clock! You can use this https://wormfood.net/avrbaudcalc.php tool
+            to find the best baudrate for your board.
         polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as a HEX
             number (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32
             datatype are supported.
@@ -175,7 +176,7 @@ class TransportLayer:
         self,
         port: str,
         microcontroller_serial_buffer_size: int,
-        baudrate: int = 115200,
+        baudrate: int,
         polynomial: np.uint8 | np.uint16 | np.uint32 = ...,
         initial_crc_value: np.uint8 | np.uint16 | np.uint32 = ...,
         final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = ...,
@@ -229,35 +230,7 @@ class TransportLayer:
         approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
         efficiency and runtime speed.
         """
-    def write_data(
-        self,
-        data_object: np.uint8
-        | np.uint16
-        | np.uint32
-        | np.uint64
-        | np.int8
-        | np.int16
-        | np.int32
-        | np.int64
-        | np.float32
-        | np.float64
-        | np.bool
-        | NDArray[
-            np.uint8
-            | np.uint16
-            | np.uint32
-            | np.uint64
-            | np.int8
-            | np.int16
-            | np.int32
-            | np.int64
-            | np.float32
-            | np.float64
-            | np.bool
-        ]
-        | type[Any],
-        start_index: int | None = None,
-    ) -> int:
+    def write_data(self, data_object: Any, start_index: int | None = None) -> int:
         """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
         start_index.
 
@@ -372,35 +345,7 @@ class TransportLayer:
             written at the start_index. Integer code -1, if the input array object is not one-dimensional.
             Integer code -2, if the input array object is empty.
         """
-    def read_data(
-        self,
-        data_object: np.uint8
-        | np.uint16
-        | np.uint32
-        | np.uint64
-        | np.int8
-        | np.int16
-        | np.int32
-        | np.int64
-        | np.float32
-        | np.float64
-        | np.bool
-        | NDArray[
-            np.uint8
-            | np.uint16
-            | np.uint32
-            | np.uint64
-            | np.int8
-            | np.int16
-            | np.int32
-            | np.int64
-            | np.float32
-            | np.float64
-            | np.bool
-        ]
-        | type[Any],
-        start_index: int = 0,
-    ) -> tuple[Any, int]:
+    def read_data(self, data_object: Any, start_index: int = 0) -> tuple[Any, int]:
         """Recreates the input data_object using the data read from the payload stored inside the class reception
         buffer.
 

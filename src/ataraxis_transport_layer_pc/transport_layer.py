@@ -117,7 +117,8 @@ class TransportLayer:
             controller specification).
         baudrate: The baudrate to be used to communicate with the Microcontroller. Should match the value used by
             the microcontroller for UART ports, ignored for USB ports. Note, the appropriate baudrate for any UART-using
-            controller partially depends on its CPU clock!
+            controller partially depends on its CPU clock! You can use this https://wormfood.net/avrbaudcalc.php tool
+            to find the best baudrate for your board.
         polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as a HEX
             number (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32
             datatype are supported.
@@ -224,7 +225,7 @@ class TransportLayer:
         self,
         port: str,
         microcontroller_serial_buffer_size: int,
-        baudrate: int = 115200,
+        baudrate: int,
         polynomial: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x07),
         initial_crc_value: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x00),
         final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x00),
@@ -464,33 +465,7 @@ class TransportLayer:
 
     def write_data(
         self,
-        data_object: (
-            np.uint8
-            | np.uint16
-            | np.uint32
-            | np.uint64
-            | np.int8
-            | np.int16
-            | np.int32
-            | np.int64
-            | np.float32
-            | np.float64
-            | np.bool
-            | NDArray[
-                np.uint8
-                | np.uint16
-                | np.uint32
-                | np.uint64
-                | np.int8
-                | np.int16
-                | np.int32
-                | np.int64
-                | np.float32
-                | np.float64
-                | np.bool
-            ]
-            | type[Any]
-        ),
+        data_object: Any,
         start_index: int | None = None,
     ) -> int:
         """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
@@ -598,9 +573,8 @@ class TransportLayer:
             message = (
                 f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
                 f"space to write the data starting at the index {start_index}. Specifically, given the data size of "
-                f"{data_object.nbytes} bytes, the required buffer size is "  # type: ignore # pragma: no cover
-                f"{start_index + data_object.nbytes} bytes, but the available size "  # type: ignore # pragma: no cover
-                f"is {self._transmission_buffer.size} bytes."
+                f"{data_object.nbytes} bytes, the required buffer size is {start_index + data_object.nbytes} bytes, "
+                f"but the available size is {self._transmission_buffer.size} bytes."
             )
             console.error(message=message, error=ValueError)
 
@@ -609,8 +583,8 @@ class TransportLayer:
         if end_index == -1:
             message = (
                 f"Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
-                f"one-dimensional (flat) arrays are supported."
+                f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) arrays "
+                f"are supported."
             )
             console.error(message=message, error=ValueError)
 
@@ -753,33 +727,7 @@ class TransportLayer:
 
     def read_data(
         self,
-        data_object: (
-            np.uint8
-            | np.uint16
-            | np.uint32
-            | np.uint64
-            | np.int8
-            | np.int16
-            | np.int32
-            | np.int64
-            | np.float32
-            | np.float64
-            | np.bool
-            | NDArray[
-                np.uint8
-                | np.uint16
-                | np.uint32
-                | np.uint64
-                | np.int8
-                | np.int16
-                | np.int32
-                | np.int64
-                | np.float32
-                | np.float64
-                | np.bool
-            ]
-            | type[Any]
-        ),
+        data_object: Any,
         start_index: int = 0,
     ) -> tuple[Any, int]:
         """Recreates the input data_object using the data read from the payload stored inside the class reception
@@ -892,9 +840,9 @@ class TransportLayer:
             message = (
                 f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
                 f"bytes available to fully fill the object starting at the index {start_index}. Specifically, given "
-                f"the object size of {data_object.nbytes} bytes, the required payload size is "  # type: ignore
-                f"{start_index + data_object.nbytes} bytes, but the available size is "  # type: ignore
-                f"{self.bytes_in_reception_buffer} bytes."
+                f"the object size of {data_object.nbytes} bytes, the required payload size is "
+                f"{start_index + data_object.nbytes} bytes, but the available size is {self.bytes_in_reception_buffer} "
+                f"bytes."
             )
             console.error(message=message, error=ValueError)
 
@@ -903,8 +851,8 @@ class TransportLayer:
         elif end_index == -1:
             message = (
                 f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
-                f"{data_object.ndim} dimensions as input data_object. At this time, only "  # type: ignore
-                f"one-dimensional (flat) arrays are supported."
+                f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) arrays "
+                f"are supported."
             )
             console.error(message=message, error=ValueError)
 
