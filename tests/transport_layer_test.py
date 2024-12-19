@@ -126,6 +126,32 @@ def test_init_errors() -> None:
         # noinspection PyTypeChecker
         TransportLayer(port="COM7", microcontroller_serial_buffer_size=None)
 
+    # Invalid maximum_transmitted_payload_size argument
+    invalid_max_size = None
+    message = (
+        f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 254 for "
+        f"'maximum_transmitted_payload_size' argument, but encountered {invalid_max_size} "
+        f"of type {type(invalid_max_size).__name__}."
+    )
+    with pytest.raises(ValueError, match=error_format(message)):
+        # noinspection PyTypeChecker
+        TransportLayer(
+            port="COM7", microcontroller_serial_buffer_size=64, maximum_transmitted_payload_size=invalid_max_size
+        )
+
+    # Invalid minimum_transmitted_payload_size argument
+    invalid_min_size = None
+    message = (
+        f"Unable to initialize TransportLayer class. Expected an integer value between 1 and 254 for "
+        f"'minimum_received_payload_size' argument, but encountered {invalid_min_size} "
+        f"of type {type(invalid_min_size).__name__}."
+    )
+    with pytest.raises(ValueError, match=error_format(message)):
+        # noinspection PyTypeChecker
+        TransportLayer(
+            port="COM7", microcontroller_serial_buffer_size=64, minimum_received_payload_size=invalid_min_size
+        )
+
     # Maximum transmitted payload size exceeds microcontroller's buffer size - 8:
     mc_buffer = 56
     max_payload = 254
@@ -394,6 +420,9 @@ def test_receive_bytes_available(protocol) -> None:
     protocol._leftover_bytes = test_data.tobytes()
     protocol.receive_data()
 
+    # Also verifies that receive_data() correctly returns without errors if no bytes are available for reception
+    assert not protocol.receive_data()
+
 
 def test_read_data_errors(protocol) -> None:
     """Verifies the error handling behavior of TransportLayer read_data() method"""
@@ -493,7 +522,7 @@ def test_write_data_errors(protocol) -> None:
     message = (
         f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
         f"space to write the data starting at the index {1}. Specifically, given the data size of "
-        f"{large_data.nbytes} bytes, the required buffer size is {1+large_data.nbytes} bytes, but the available "
+        f"{large_data.nbytes} bytes, the required buffer size is {1 + large_data.nbytes} bytes, but the available "
         f"size is {protocol._transmission_buffer.size} bytes."
     )
     with pytest.raises(ValueError, match=error_format(message)):
@@ -630,11 +659,11 @@ def test_receive_data_errors(protocol):
 
     # CRC Checksum verification error.
     # Translates the real and invalid checksums into hexadecimals used in error messages
-    expected_checksum = hex(protocol._crc_processor.convert_bytes_to_checksum(test_data[-2:].copy()))  # to Hexadecimal
-    received_checksum = hex(protocol._crc_processor.convert_bytes_to_checksum(np.array([0x00, 0x00], dtype=np.uint8)))
+    expected_checksum = hex(protocol._crc_processor.convert_bytes_to_checksum(test_data[-1:].copy()))  # to Hexadecimal
+    received_checksum = hex(protocol._crc_processor.convert_bytes_to_checksum(np.array([0x00], dtype=np.uint8)))
 
     # Replaces the checksum in the test_data packet with an invalid checksum
-    test_data[-2:] = np.array([0x00, 0x00], dtype=np.uint8)  # Fake checksum
+    test_data[-1:] = np.array([0x00], dtype=np.uint8)  # Fake checksum
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
         f"Failed to verify the received serial packet's integrity. The checksum value transmitted with the packet "

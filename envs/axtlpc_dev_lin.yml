@@ -156,6 +156,7 @@ dependencies:
       - ataraxis-automation==4.0.1
       - ataraxis-base-utilities==3.0.1
       - ataraxis-time==3.0.0
+      - ataraxis-transport-layer-pc==1.0.0
       - build==1.2.2.post1
       - loguru==0.7.3
       - pyproject-hooks==1.2.0

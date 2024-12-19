@@ -293,6 +293,22 @@ class TransportLayer:
             )
             console.error(message=message, error=ValueError)
 
+        if not isinstance(maximum_transmitted_payload_size, int) or not 0 <= maximum_transmitted_payload_size <= 254:
+            message = (
+                f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 254 for "
+                f"'maximum_transmitted_payload_size' argument, but encountered {maximum_transmitted_payload_size} "
+                f"of type {type(maximum_transmitted_payload_size).__name__}."
+            )
+            console.error(message=message, error=ValueError)
+
+        if not isinstance(minimum_received_payload_size, int) or not 1 <= minimum_received_payload_size <= 254:
+            message = (
+                f"Unable to initialize TransportLayer class. Expected an integer value between 1 and 254 for "
+                f"'minimum_received_payload_size' argument, but encountered {minimum_received_payload_size} "
+                f"of type {type(minimum_received_payload_size).__name__}."
+            )
+            console.error(message=message, error=ValueError)
+
         # If maximum_transmitted_payload_size is set to the default initialization value of 0, automatically sets it
         # to the highest valid value. The value cannot exceed 254 and has to be at least 8 bytes smaller than the
         # microcontroller_serial_buffer_size to account for packet service bytes.

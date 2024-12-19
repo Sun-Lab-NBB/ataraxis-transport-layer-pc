@@ -75,8 +75,8 @@ class TransportLayer:
         maximum_transmitted_payload_size: The maximum number of bytes that are expected to be transmitted to the
             Microcontroller as a single payload. This has to match the maximum_received_payload_size value used by
             the Microcontroller. Due to COBS encoding, this value has to be between 1 and 254 bytes. When set to 0, the
-            class will automatically calculate adn set this to the highest valid value compatible with the
-            microcontroller_serial_buffer_size argument value.
+            class will automatically calculate and set this argument to the highest value compatible with the
+            microcontroller_serial_buffer_size argument.
         minimum_received_payload_size: The minimum number of bytes that are expected to be received from the
             Microcontroller as a single payload. This number is used to calculate the threshold for entering
             incoming data reception cycle. In turn, this is used to minimize the number of calls made to costly
