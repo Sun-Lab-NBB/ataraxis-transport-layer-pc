@@ -280,6 +280,13 @@ receive_status = tl_class.receive_data()  # Returns True if the data was receive
 # read_data call.
 updated_array, next_index = tl_class.read_data(test_array, 0)  # Start index is 0.
 ```
+
+### Discovering Connectable Ports
+To help determining which USB ports are available for communication, this library exposes `axtl-ports` CLI command. 
+This command is available from any environment that has the library installed and internally calls the 
+`print_available_ports()` standalone function. The command prints all USB ports that can be connected
+by the pySerial backend alongside the available ID information. The returned port address can then be provided to the 
+TransportLayer class as the 'port' argument to establish the serial communication through the port.
 ___
 
 ## API Documentation

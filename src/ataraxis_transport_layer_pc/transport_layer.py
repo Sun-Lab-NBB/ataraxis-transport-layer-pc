@@ -281,8 +281,7 @@ class TransportLayer:
 
         if start_byte == delimiter_byte:
             message = (
-                "Unable to initialize TransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be "
-                "the same."
+                "Unable to initialize TransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be the same."
             )
             console.error(message=message, error=ValueError)
 
@@ -1381,7 +1380,7 @@ class TransportLayer:
                 message = (
                     f"Failed to parse the incoming serial packet data. Delimiter byte value ({self._delimiter_byte}) "
                     f"expected as the last encoded packet byte ({parsed_bytes.size - int(self._postamble_size)}), but "
-                    f"instead encountered {parsed_bytes[parsed_bytes_count-1]}. This likely indicates packet "
+                    f"instead encountered {parsed_bytes[parsed_bytes_count - 1]}. This likely indicates packet "
                     f"corruption or mismatch in the transmission parameters between this system and the "
                     f"Microcontroller."
                 )

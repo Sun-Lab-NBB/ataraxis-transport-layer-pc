@@ -8,11 +8,11 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "ataraxis-transport-layer-pc"
-version = "1.0.0"
+version = "1.1.0"
 description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB or UART serial interfaces."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11, <3.13"  # Limited to 3.11 and 3.12 until 3.13 support is added for numba
+requires-python = ">=3.11"
 authors = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
     { name = "Katlynn Ryu", email = "kmr238@cornell.edu" },
@@ -34,7 +34,7 @@ classifiers = [
     # Supported Python Versions
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    # "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.13",
     # Supported OS systems
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
@@ -63,7 +63,6 @@ Documentation = "https://ataraxis-transport-layer-pc-api-docs.netlify.app/"
 # project dependencies with conda over pip as possible.
 condarun = [
     "numpy>=2,<3",
-    "numba>=0,<1",
     "pyserial>=3,<4",
 ]
 
@@ -83,7 +82,7 @@ conda = [
     "importlib_metadata>=8,<9",
     "sphinx-rtd-theme>=3,<4",
     "sphinx-click>=6,<7",
-    "sphinx-autodoc-typehints>=2,<3",
+    "sphinx-autodoc-typehints>=3,<4",
 
     # Linting and Stub-generation
     "mypy>=1,<2",
@@ -95,9 +94,6 @@ conda = [
     # Distribution
     "twine>=6,<7",
     "grayskull>=2,<3",
-
-    # Miscellaneous helpers
-    "black>=24,<25",
 ]
 
 # Dependencies known to not be installable with conda for at least one supported development platform
@@ -219,3 +215,21 @@ source = ["src/", ".tox/*/lib/python*/site-packages/"]
 # Same as above, specifies the output directory for the coverage .html report
 [tool.coverage.html]
 directory = "reports/coverage_html"
+
+# Optimizes coverage generation for parallel testing
+[tool.coverage.run]
+parallel = true
+concurrency = ["multiprocessing", "thread"]
+
+# Specifies additional ignore directives
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "def __del__",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "pass",
+    "\\.\\.\\."
+]
