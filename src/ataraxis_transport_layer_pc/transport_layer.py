@@ -1,71 +1,106 @@
 """This module provides the TransportLayer class used to establish and maintain bidirectional serial communication
 with Arduino and Teensy microcontrollers running the ataraxis-transport-layer-mc library over USB / UART interface.
-
-The class is written in a way that maximizes method runtime speed and is mostly limited by the speed of pySerial
-runtime. The functionality of the class is realized through 4 main methods: write_data(), send_data(), receive_data(),
-and read_data(). See method and class docstrings for more information.
-
-Additionally, this module exposes the list_available_ports() function used to discover addressable USB ports when
-setting up PC-MicroController communication.
 """
 
+from enum import IntEnum
 from typing import Any
 from dataclasses import fields, is_dataclass
 
-from numba import njit  # type: ignore
+from numba import njit  # type: ignore[import-untyped]
 import numpy as np
 from serial import Serial
 from numpy.typing import NDArray
 from serial.tools import list_ports
 from ataraxis_time import PrecisionTimer
 from ataraxis_base_utilities import console
+from serial.tools.list_ports_common import ListPortInfo
 
-# noinspection PyProtectedMember,PyUnresolvedReferences
 from .helper_modules import (
     SerialMock,
     CRCProcessor,
     COBSProcessor,
+    CRCStatusCode,
+    COBSStatusCode,
     _CRCProcessor,
     _COBSProcessor,
 )
 
+# Defines constants that are frequently reused in this module
+_ZERO = np.uint8(0)
+_POLYNOMIAL = np.uint8(0x07)
+_EMPTY_ARRAY = np.empty(0, dtype=np.uint8)
+_MAXIMUM_BYTE_VALUE = 255
+_MAXIMUM_PAYLOAD_SIZE = 254
 
-def list_available_ports() -> tuple[dict[str, int | str | Any], ...]:  # pragma: no cover
+
+class PacketParsingStatus(IntEnum):
+    """Maps integer byte-codes returned by the TransportLayer class packet parsing method to human-readable names."""
+
+    PACKET_SIZE_UNKNOWN = 0
+    """Not enough bytes read to fully parse the packet. The start byte was found, but packet size has not been resolved 
+    and, therefore, not known."""
+    PACKET_PARSED = 1
+    """Packet fully parsed."""
+    NOT_ENOUGH_PACKET_BYTES = 2
+    """Not enough bytes read to fully parse the packet. The packet size was resolved, but there were not enough bytes to
+    fully parse the packet (encoded payload + crc postamble)."""
+    NOT_ENOUGH_CRC_BYTES = 3
+    """Not enough bytes read to fully parse the packet. The packet payload was successfully parsed, but there were not 
+    enough bytes to fully parse the CRC postamble."""
+    NO_BYTES_TO_READ = 101
+    """No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to ignore start byte 
+    errors. Usually, this situation is caused by communication line noise generating 'noise bytes'."""
+    NO_START_BYTE_FOUND = 102
+    """No start byte found, which is interpreted as a 'no start byte detected' error case. This status is only possible 
+    when the class is configured to detect start byte errors."""
+    PAYLOAD_SIZE_MISMATCH = 103
+    """Parsed payload_size value does not match the expected value. This likely indicates packet corruption or 
+    communication parameter mismatch between the TransportLayer instance and the connected Microcontroller."""
+    DELIMITER_FOUND_TOO_EARLY = 104
+    """Delimiter byte value encountered before reaching the end of the encoded payload data block. It is expected that 
+    the last byte of the encoded payload is set to the delimiter value and that the value is not present anywhere else 
+    inside the encoded payload region. Encountering the delimiter early indicates packet corruption."""
+    DELIMITER_NOT_FOUND = 105
+    """Delimiter byte value not encountered at the end of the encoded payload data block. See code 104 description for 
+    more details, but this code also indicates packet corruption."""
+
+
+class DataManipulationCodes(IntEnum):
+    """Maps integer byte-codes returned by the TransportLayer class data reading and writing methods to human-readable
+    names.
+    """
+
+    INSUFFICIENT_BUFFER_SPACE_ERROR = 0
+    """The reception or transmission buffer does not have enough space for the requested operation."""
+    MULTIDIMENSIONAL_ARRAY_ERROR = -1
+    """The data to be written or the prototype to be read are not a one-dimensional NumPy array."""
+    EMPTY_ARRAY_ERROR = -2
+    """The data to be written or the prototype to be read is an empty NumPy array."""
+
+
+def list_available_ports() -> tuple[ListPortInfo, ...]:  # pragma: no cover
     """Provides the information about each serial port addressable through the pySerial library.
 
     This function is intended to be used for discovering and selecting the serial port 'names' to use with
-    TransportLayer and Communication classes.
+    TransportLayer instances.
 
     Returns:
-        A tuple of dictionaries with each dictionary storing ID and descriptive information about each discovered
+        A tuple of ListPortInfo instances, each storing ID and descriptive information about each discovered serial
         port.
 
     """
-    # Gets the list of port objects visible to the pySerial library.
-    available_ports = list_ports.comports()
-
-    # Prints the information about each port using terminal.
-    information_list = [
-        {
-            "Name": port.name,
-            "Device": port.device,
-            "PID": port.pid,
-            "Description": port.description,
-        }
-        for port in available_ports
-    ]
-
-    return tuple(information_list)
+    # Returns the list of port objects visible to the pySerial library.
+    return tuple(list_ports.comports())
 
 
 def print_available_ports() -> None:  # pragma: no cover
-    """Lists all serial ports active on the host-system with descriptive information about the device connected to
-    that port.
+    """Prints all serial ports active on the host-system with descriptive information about the device connected to
+    that port to the terminal.
 
     This command is intended to be used for discovering the USB ports that can be connected to by a TransportLayer
     class instance.
     """
-    # Records the current console status and, if necessary, ensured console is enabled before running this command.
+    # Records the current console status and, if necessary, ensures the console is enabled before running this command.
     is_enabled = True
     if not console.enabled:
         is_enabled = False
@@ -78,9 +113,9 @@ def print_available_ports() -> None:  # pragma: no cover
     count = 0  # Cannot use 'enumerate' due to filtering PID==None ports.
     for port in available_ports:
         # Filters out any ports with PID == None. This is primarily used to filter out invalid ports on Linux systems.
-        if port["PID"] is not None:
+        if port.pid is not None:
             count += 1  # Counts only valid ports.
-            console.echo(f"{count}: {port['Device']} -> {port['Description']}")  # Removes unnecessary information.
+            console.echo(f"{count}: {port.device} -> {port.description}")  # Removes unnecessary information.
 
     # If the console was enabled by this runtime, ensures it is disabled before finishing the runtime.
     if not is_enabled:
@@ -92,9 +127,7 @@ class TransportLayer:
     TransportLayer class over the UART or USB Serial interface.
 
     This class functions as a central hub that calls various internal and external helper classes and fully encapsulates
-    the serial port interface (via pySerial third-party library). Most of this class is hidden behind private attributes
-    and methods, and any part of the class that is publicly exposed is generally safe to use and should be enough
-    to realize the full functionality of the library.
+    the serial port interface (via pySerial third-party library).
 
     Notes:
         This class contains 4 main methods: write_data(), send_data(), receive_data() and read_data(). Write and read
@@ -110,70 +143,56 @@ class TransportLayer:
         to run at C speeds, which is one of the notable advantages of this library.
 
     Args:
-        port: The name of the serial port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. You can use the
-            print_available_ports() library method to get a list of discoverable serial port names.
-        microcontroller_serial_buffer_size: The size, in bytes, of the buffer used by the target microcontroller's
+        port: The name of the serial port to connect to, e.g.: 'COM3' or '/dev/ttyUSB0'. Use the print_available_ports()
+            function to get a list of available serial port names.
+        microcontroller_serial_buffer_size: The size, in bytes, of the buffer used by the connected microcontroller's
             Serial buffer. Usually, this information is available from the microcontroller's manufacturer (UART / USB
             controller specification).
-        baudrate: The baudrate to be used to communicate with the Microcontroller. Should match the value used by
-            the microcontroller for UART ports, ignored for USB ports. Note, the appropriate baudrate for any UART-using
-            controller partially depends on its CPU clock! You can use this https://wormfood.net/avrbaudcalc.php tool
-            to find the best baudrate for your board.
+        baudrate: The baudrate to use for communication if the Microcontroller uses the UART interface. Should match
+            the value used by the microcontroller. This parameter is ignored when using the USB communication interface.
         polynomial: The polynomial to use for the generation of the CRC lookup table. Can be provided as a HEX
-            number (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32
-            datatype are supported.
-        initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
-            This value depends on the chosen polynomial algorithm and should use the same datatype as the 'polynomial'
-            argument. It can be provided as a HEX number (e.g., 0xFFFF).
-        final_crc_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value
-            depends on the chosen polynomial algorithm and should use the same datatype as the 'polynomial' argument.
-            It can be provided as a HEX number (e.g., 0x0000).
+            number (e.g., 0x1021). Currently only non-reversed polynomials are supported.
+        initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation. This
+            value depends on the chosen polynomial.
+        final_crc_xor_value: The final XOR value to be applied to the calculated CRC checksum value. This value depends
+            on the chosen polynomial.
         maximum_transmitted_payload_size: The maximum number of bytes that are expected to be transmitted to the
             Microcontroller as a single payload. This has to match the maximum_received_payload_size value used by
             the Microcontroller. Due to COBS encoding, this value has to be between 1 and 254 bytes. When set to 0, the
-            class will automatically calculate and set this argument to the highest value compatible with the
+            class automatically calculates and sets this argument to the highest value compatible with the
             microcontroller_serial_buffer_size argument.
         minimum_received_payload_size: The minimum number of bytes that are expected to be received from the
-            Microcontroller as a single payload. This number is used to calculate the threshold for entering
-            incoming data reception cycle. In turn, this is used to minimize the number of calls made to costly
-            methods required to receive data. Due to COBS encoding, this value has to be between 1 and 254 bytes.
-        start_byte: The value used to mark the beginning of the packet. Has to match the value used by the
-            Microcontroller. Can be any value in the uint8 range (0 to 255). It is advised to use the value that is
-            unlikely to occur as noise.
-        delimiter_byte: The value used to denote the end of the packet. Has to match the value used by the
-            Microcontroller. Due to how COBS works, it is advised to use '0' as the delimiter byte. Zero is the only
-            value guaranteed to be exclusive when used as a delimiter.
+            Microcontroller as a single payload. Due to COBS encoding, this value has to be between 1 and 254 bytes.
+        start_byte: The value used to mark the beginning of the packet in the incoming datastream. Has to match the
+            value used by the Microcontroller. It is advised to use a value that is unlikely to be produced by the
+            communication line noise.
+        delimiter_byte: The value used to mark the end of the packet in the incoming datastream. Has to match the value
+            used by theMicrocontroller. Due to how COBS works, it is advised to use '0' as the delimiter byte value.
         timeout: The maximum number of microseconds that can separate receiving any two consecutive bytes of the
-            packet. This is used to detect and resolve stale packet reception attempts. While this defaults to 20000
-            (20 ms), the library can resolve intervals in the range of ~50-100 microseconds, so the number can
-            be made considerably smaller than that.
-        test_mode: Determines whether the library uses a real pySerial Stream class or a StreamMock class. Only used
-            during testing and should always be disabled otherwise.
+            packet. This is used to detect and resolve stale packet reception attempts.
+        test_mode: Determines whether the library uses a real pySerial Stream class or a StreamMock class. This flag
+            should be disabled when the class is used to communicate with a real MiroController.
         allow_start_byte_errors: Determines whether the class raises errors when it is unable to find the start value
-            in the incoming byte-stream. It is advised to keep this set to False for most use cases. This is because it
-            is fairly common to see noise-generated bytes inside the reception buffer. These bytes are silently cleared
-            by the reception algorithm until a real packet becomes available. However, enabling this option may be
-            helpful for certain debugging scenarios.
+            in the incoming byte-stream. It is advised to keep this set to False for most use cases.
 
     Attributes:
-        _opened: Tracks whether the _port has been opened.
+        _opened: Tracks whether the serial communication has been opened (the port has been connected).
         _port: Depending on the test_mode flag, stores either a SerialMock or Serial object that provides serial port
             interface.
-        _crc_processor: Stores the CRCProcessor class object that provides methods for working CRC checksums.
-        _cobs_processor: Stores the COBSProcessor class object that provides methods for encoding and decoding
-            transmitted payloads.
-        _timer: Stores the PrecisionTimer class object that provides a microsecond-precise GIL-releasing timer.
+        _crc_processor: Stores the CRCProcessor instance that provides methods for working CRC checksums.
+        _cobs_processor: Stores the COBSProcessor instance that provides methods for encoding and decoding transmitted
+            payloads.
+        _timer: Stores the PrecisionTimer instance that provides a microsecond-precise GIL-releasing timer.
         _start_byte: Stores the byte-value that marks the beginning of transmitted and received packets.
         _delimiter_byte: Stores the byte-value that marks the end of transmitted and received packets.
         _timeout: The number of microseconds to wait between receiving any two consecutive bytes of a packet.
         _allow_start_byte_errors: Determines whether to raise errors when the start_byte value is not found among the
             available bytes during receive_data() runtime.
-        _max_tx_payload_size: Stores the maximum number of bytes that can be transmitted as a single payload. This value
-            cannot exceed 254 bytes due to COBS encoding.
+        _max_tx_payload_size: Stores the maximum number of bytes that can be transmitted as a single payload.
         _max_rx_payload_size: Stores the maximum number of bytes that can be received from the microcontroller as a
-            single payload. This value cannot exceed 254 bytes due to COBS encoding.
+            single payload.
         _min_rx_payload_size: Stores the minimum number of bytes that can be received from the Microcontroller as a
-            single payload. This value has to be between 1 and 254 and cannot exceed the max_rx_payload_size.
+            single payload.
         _postamble_size: Stores the byte-size of the CRC checksum.
         _transmission_buffer: The buffer used to stage the data to be sent to the Microcontroller.
         _reception_buffer: The buffer used to store the decoded data received from the Microcontroller.
@@ -184,8 +203,7 @@ class TransportLayer:
             but not used to reconstruct the payload sent from the Microcontroller. This is used to minimize the number
             of calls to pySerial methods, as they are costly to run.
         _accepted_numpy_scalars: Stores numpy types (classes) that can be used as scalar inputs or as 'dtype'
-            fields of the numpy arrays that are provided to class methods. Currently, these are the only types
-            supported by the library.
+            fields of the numpy arrays that are provided to class methods.
         _minimum_packet_size: Stores the minimum number of bytes that can represent a valid packet. This value is used
             to optimize packet reception logic.
 
@@ -226,9 +244,9 @@ class TransportLayer:
         port: str,
         microcontroller_serial_buffer_size: int,
         baudrate: int,
-        polynomial: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x07),
-        initial_crc_value: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x00),
-        final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = np.uint8(0x00),
+        polynomial: np.uint8 | np.uint16 | np.uint32 = _POLYNOMIAL,
+        initial_crc_value: np.uint8 | np.uint16 | np.uint32 = _ZERO,
+        final_crc_xor_value: np.uint8 | np.uint16 | np.uint32 = _ZERO,
         maximum_transmitted_payload_size: int = 0,
         minimum_received_payload_size: int = 1,
         start_byte: int = 129,
@@ -258,14 +276,14 @@ class TransportLayer:
             )
             console.error(message=message, error=ValueError)
 
-        if not isinstance(start_byte, int) or not 0 <= start_byte <= 255:
+        if not isinstance(start_byte, int) or not 0 <= start_byte <= _MAXIMUM_BYTE_VALUE:
             message = (
                 f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
             )
             console.error(message=message, error=ValueError)
 
-        if not isinstance(delimiter_byte, int) or not 0 <= delimiter_byte <= 255:
+        if not isinstance(delimiter_byte, int) or not 0 <= delimiter_byte <= _MAXIMUM_BYTE_VALUE:
             message = (
                 f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
                 f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
@@ -293,7 +311,10 @@ class TransportLayer:
             )
             console.error(message=message, error=ValueError)
 
-        if not isinstance(maximum_transmitted_payload_size, int) or not 0 <= maximum_transmitted_payload_size <= 254:
+        if (
+            not isinstance(maximum_transmitted_payload_size, int)
+            or not 0 <= maximum_transmitted_payload_size <= _MAXIMUM_PAYLOAD_SIZE
+        ):
             message = (
                 f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 254 for "
                 f"'maximum_transmitted_payload_size' argument, but encountered {maximum_transmitted_payload_size} "
@@ -301,7 +322,10 @@ class TransportLayer:
             )
             console.error(message=message, error=ValueError)
 
-        if not isinstance(minimum_received_payload_size, int) or not 1 <= minimum_received_payload_size <= 254:
+        if (
+            not isinstance(minimum_received_payload_size, int)
+            or not 1 <= minimum_received_payload_size <= _MAXIMUM_PAYLOAD_SIZE
+        ):
             message = (
                 f"Unable to initialize TransportLayer class. Expected an integer value between 1 and 254 for "
                 f"'minimum_received_payload_size' argument, but encountered {minimum_received_payload_size} "
@@ -383,14 +407,14 @@ class TransportLayer:
         self._opened = True
 
     def __del__(self) -> None:
-        """Ensures proper resource release prior to garbage-collecting class instance."""
+        """Ensures that the instance releases all resources prior to being garbage-collected."""
         # Closes the port before deleting the class instance. Not strictly required, but helpful to ensure resources
         # are released
         if self._opened:
             self._port.close()
 
     def __repr__(self) -> str:
-        """Returns a string representation of the TransportLayer class instance."""
+        """Returns a string representation of the class instance."""
         if isinstance(self._port, Serial):  # pragma: no cover
             representation_string = (
                 f"TransportLayer(port='{self._port.name}', baudrate={self._port.baudrate}, polynomial="
@@ -421,7 +445,7 @@ class TransportLayer:
         """Returns a copy of the transmission buffer numpy array.
 
         This buffer stores the 'staged' data to be sent to the Microcontroller. Use this method to safely access the
-        contents of the buffer in a snapshot fashion.
+        contents of the buffer.
         """
         return self._transmission_buffer.copy()
 
@@ -430,7 +454,7 @@ class TransportLayer:
         """Returns a copy of the reception buffer numpy array.
 
         This buffer stores the decoded data received from the Microcontroller. Use this method to safely access the
-        contents of the buffer in a snapshot fashion.
+        contents of the buffer.
         """
         return self._reception_buffer.copy()
 
@@ -445,20 +469,18 @@ class TransportLayer:
         return self._bytes_in_reception_buffer
 
     def reset_transmission_buffer(self) -> None:
-        """Resets the transmission buffer bytes tracker to 0.
+        """Resets the stored transmission buffer bytes tracker to 0.
 
-        This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
-        efficiency and runtime speed.
+        This does not physically alter the buffer's data, but makes it inaccessible to external callers and allows the
+        instance to overwrite it with new data.
         """
         self._bytes_in_transmission_buffer = 0
 
     def reset_reception_buffer(self) -> None:
-        """Resets the reception buffer bytes tracker to 0.
+        """Resets the stored reception buffer bytes tracker to 0.
 
-        This does not physically alter the buffer in any way, but makes all data inside the buffer 'invalid'. This
-        approach to 'resetting' the buffer by overwriting, rather than recreation is chosen for higher memory
-        efficiency and runtime speed.
+        This does not physically alter the buffer's data, but makes it inaccessible to external callers and allows the
+        instance to overwrite it with new data.
         """
         self._bytes_in_reception_buffer = 0
 
@@ -467,45 +489,42 @@ class TransportLayer:
         data_object: Any,
         start_index: int | None = None,
     ) -> int:
-        """Writes (serializes) the input data_object to the class transmission buffer, starting at the specified
-        start_index.
+        """Writes (serializes) the input data_object to the instance's transmission buffer, starting at the specified
+        start_index in the buffer.
 
-        If the object is of valid type and the buffer has enough space to accommodate the object data, it will be
-        converted to bytes and written to the buffer at the start_index. All bytes written via this method become part
-        of the payload that will be sent to the Microcontroller when send_data() method is called.
+        All bytes written via this method become part of the payload that will be sent to the Microcontroller when the
+        send_data() method is called.
 
         Notes:
-            At this time, the method only works with valid numpy scalars and arrays, as well as python dataclasses
-            entirely made out of valid numpy types. Using numpy rather than standard python types increases runtime
-            speed (when combined with other optimization steps) and enforces strict typing (critical for Microcontroller
-            communication).
+            At this time, the method only works with numpy scalars and arrays, as well as python dataclasses entirely
+            made out of valid numpy types.
 
-            The method automatically updates the _bytes_in_transmission_buffer tracker if the write operation
-            increases the total number of payload bytes stored inside the buffer. If the method is used to overwrite
-            previously added, it will not update the tracker variable. The only way to reset the payload size is via
-            calling the appropriate buffer reset method.
+            The method automatically updates the payload size tracker if the write operation increases the total number
+            of payload bytes stored inside the buffer. If the method is used to overwrite existent payload data, it will
+            not update the tracker variable. The only way to reset the payload size is via calling the appropriate
+            buffer reset method.
 
             The maximum runtime speed for this method is achieved when writing data as numpy arrays, which is optimized
             to a single write operation. The minimum runtime speed is achieved by writing dataclasses, as it involves
-            looping over dataclass attributes. When writing dataclasses, all attributes will be serialized and written
-            as a consecutive data block to the same portion of the buffer.
+            looping over dataclass attributes. When writing dataclasses, all attributes are serialized and written
+            as a consecutive data block.
 
         Args:
             data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
                 Supported numpy types are: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float32, float64,
                 and bool. Arrays have to be 1-dimensional and not empty to be supported.
             start_index: Optional. The index inside the transmission buffer (0 to 253) at which to start writing the
-                data. If set to None, the method will automatically use the _bytes_in_transmission_buffer tracker value
-                to append the data to the end of the already written payload
+                data. If set to None, the method automatically uses the payload size tracker to append the data to the
+                end of the already written payload bytes.
 
         Returns:
             The index inside the transmission buffer that immediately follows the last index of the buffer to
             which the data was written. This index can be used as the start_index input for chained write operation
-            calls to iteratively write data to the buffer.
+            calls.
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
-            ValueError: Raised if writing the input object is not possible as that would require writing outside the
+            ValueError: If writing the input object is not possible as that would require writing outside the
                 transmission buffer boundaries. Also raised when multidimensional or empty numpy arrays are
                 encountered.
         """
@@ -562,13 +581,13 @@ class TransportLayer:
         if end_index > start_index:
             # Sets the _bytes_in_transmission_buffer tracker variable to the maximum of its current value and the
             # index that immediately follows the final index of the buffer that was overwritten with the input data.
-            # This only increases the tracker value if write operation increased the size of the payload.
+            # This only increases the tracker value if the write operation increased the size of the payload.
             self._bytes_in_transmission_buffer = max(self._bytes_in_transmission_buffer, end_index)
             return end_index  # Returns the end_index to support chained overwrite operations
 
         # If the index is set to code 0, that indicates that the buffer does not have space to accept the written data
         # starting at the start_index.
-        if end_index == 0:
+        if end_index == DataManipulationCodes.INSUFFICIENT_BUFFER_SPACE_ERROR:
             message = (
                 f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
                 f"space to write the data starting at the index {start_index}. Specifically, given the data size of "
@@ -579,7 +598,7 @@ class TransportLayer:
 
         # If the index is set to code -1, that indicates that a multidimensional numpy array was provided as input,
         # but only flat arrays are allowed
-        if end_index == -1:
+        if end_index == DataManipulationCodes.MULTIDIMENSIONAL_ARRAY_ERROR:
             message = (
                 f"Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with "
                 f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) arrays "
@@ -591,7 +610,7 @@ class TransportLayer:
         # not make sense and, therefore, is likely an error. Also, empty arrays are explicitly not valid in C/C++, so
         # this is also against language rules to provide them with an intention to send that data to Microcontroller
         # running C.
-        if end_index == -2:
+        if end_index == DataManipulationCodes.EMPTY_ARRAY_ERROR:
             message = (
                 "Failed to write the data to the transmission buffer. Encountered an empty (size 0) numpy array as "
                 "input data_object. Writing empty arrays is not supported."
@@ -609,41 +628,23 @@ class TransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
     def _write_scalar_data(
         target_buffer: NDArray[np.uint8],
-        scalar_object: (
-            np.uint8
-            | np.uint16
-            | np.uint32
-            | np.uint64
-            | np.int8
-            | np.int16
-            | np.int32
-            | np.int64
-            | np.float32
-            | np.float64
-            | np.bool
-        ),
+        scalar_object: Any,
         start_index: int,
     ) -> int:
         """Converts the input numpy scalar to a sequence of bytes and writes it to the transmission buffer at the
         specified start_index.
 
-        This method is not designed to be called directly. It should always be called through the write_data() method
-        of the parent class.
-
         Args:
-            target_buffer: The buffer to which the data will be written. This should be the _transmission_buffer array
-                of the caller class.
-            scalar_object: The scalar numpy object to be written to the transmission buffer. Can be any supported numpy
-                scalar type.
+            target_buffer: The buffer where to write the data.
+            scalar_object: The scalar numpy object to be written to the transmission buffer.
             start_index: The index inside the transmission buffer (0 to 253) at which to start writing the data.
 
         Returns:
             The positive index inside the transmission buffer that immediately follows the last index of the buffer to
-            which the data was written. Integer code 0, if the buffer does not have enough space to accommodate the data
-            written at the start_index.
+            which the data was written. One of the DataManipulationCodes if the method encounters a runtime error.
         """
         # Converts the input scalar to a byte array. This is mostly so that Numba can work with the data via the
         # service method calls below. Note, despite the input being scalar, the array object may have multiple elements.
@@ -665,43 +666,23 @@ class TransportLayer:
         return required_size
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
     def _write_array_data(
         target_buffer: NDArray[np.uint8],
-        array_object: NDArray[
-            np.uint8
-            | np.uint16
-            | np.uint32
-            | np.uint64
-            | np.int8
-            | np.int16
-            | np.int32
-            | np.int64
-            | np.float32
-            | np.float64
-            | np.bool
-        ],
+        array_object: NDArray[Any],
         start_index: int,
     ) -> int:
         """Converts the input numpy array to a sequence of bytes and writes it to the transmission buffer at the
         specified start_index.
 
-        This method is not designed to be called directly. It should always be called through the write_data() method
-        of the parent class.
-
         Args:
-            target_buffer: The buffer to which the data will be written. This should be the _transmission_buffer array
-                of the caller class.
-            array_object: The numpy array to be written to the transmission buffer. Currently, the method is designed to
-                only work with one-dimensional arrays with a minimal size of 1 element. The array should be using one
-                of the supported numpy scalar datatypes.
+            target_buffer: The buffer where to write the data.
+            array_object: The numpy array to be written to the transmission buffer.
             start_index: The index inside the transmission buffer (0 to 253) at which to start writing the data.
 
         Returns:
             The positive index inside the transmission buffer that immediately follows the last index of the buffer to
-            which the data was written. Integer code 0, if the buffer does not have enough space to accommodate the data
-            written at the start_index. Integer code -1, if the input array object is not one-dimensional.
-            Integer code -2, if the input array object is empty.
+            which the data was written. One of the DataManipulationCodes if the method encounters a runtime error.
         """
         if array_object.ndim != 1:
             return -1  # Returns -1 if the input array is not one-dimensional.
@@ -717,7 +698,8 @@ class TransportLayer:
         if required_size > target_buffer.size:
             return 0  # Returns 0 if the buffer does not have enough space to accommodate the data
 
-        # Writes the array data to the buffer, starting at the start_index and ending just before required_size index
+        # Writes the array data to the buffer, starting at the start_index and ending just before the required_size
+        # index
         target_buffer[start_index:required_size] = array_data
 
         # Returns the required_size, which incidentally also matches the index that immediately follows the last index
@@ -729,38 +711,32 @@ class TransportLayer:
         data_object: Any,
         start_index: int = 0,
     ) -> tuple[Any, int]:
-        """Recreates the input data_object using the data read from the payload stored inside the class reception
+        """Recreates the input data_object using the data from the payload stored inside the instance's reception
         buffer.
 
         This method uses the input object as a prototype, which supplies the number of bytes to read from the decoded
-        payload received from the Microcontroller and the datatype to cast the read bytes to. If the payload has
-        sufficiently many bytes available from the start_index to accommodate filling the object, the object will be
-        recreated using the data extracted from the payload. Calling this method does not in any way modify the
-        state of the reception buffer, so the same data can be read any number of times.
+        payload received from the Microcontroller and the datatype to cast the read bytes to. Calling this method does
+        not modify the reception buffer, so the same data can be read any number of times.
 
         Notes:
             At this time, the method only works with valid numpy scalars and arrays as well as python dataclasses
-            entirely made out of valid numpy types. Using numpy rather than standard python types increases runtime
-            speed (when combined with other optimizations) and enforces strict typing (critical for Microcontroller
-            communication).
+            entirely made out of valid numpy types.
 
             The maximum runtime speed of this method is achieved when reading data as numpy arrays, which is
             optimized to a single read operation. The minimum runtime speed is achieved by reading dataclasses, as it
             involves looping over dataclass attributes.
 
         Args:
-            data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
-                The input object is used as a prototype to determine how many bytes to read from the reception buffer
-                and has to be properly initialized. Supported numpy types are: uint8, uint16, uint32, uint64, int8,
-                int16, int32, int64, float32, float64, and bool. Array prototypes have to be 1-dimensional and not
-                empty to be supported.
+            data_object: An initialized numpy scalar or array object or a python dataclass made entirely out of valid
+                numpy objects. Supported numpy types are: uint8, uint16, uint32, uint64, int8, int16, int32, int64,
+                float32, float64, and bool. Array prototypes have to be 1-dimensional and not empty to be supported.
             start_index: The index inside the reception buffer (0 to 253) from which to start reading the
-                data_object bytes. Unlike for write_data() method, this value is mandatory.
+                data_object bytes.
 
         Returns:
-            A tuple of 2 elements. The first element is the data_object read from the reception buffer, which is cast
-            to the requested datatype. The second element is the index that immediately follows the last index that
-            was read from the _reception_buffer during method runtime.
+            A tuple of 2 elements. The first element is the data_object restored from the reception buffer's data. The
+            second element is the index that immediately follows the last index that was read from the _reception_buffer
+            during method runtime.
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
@@ -827,15 +803,15 @@ class TransportLayer:
             console.error(message=message, error=TypeError)
 
         # If end_index is different from the start_index and no error has been raised, the method runtime was
-        # successful, so returns the read data_object and the end_index to caller
+        # successful, so returns the read data_object and the end_index to the caller
         if end_index > start_index:
             # Returns the object recreated using data from the buffer and the end_index to caller
             # noinspection PyUnboundLocalVariable
             return out_object, end_index
 
-        # If the index is set to code 0, this indicates that the payload did not have sufficient data starting from the
+        # If the index is set to code 0, this indicates that the payload did not have enough data starting from the
         # start_index to recreate the object.
-        if end_index == 0:
+        if end_index == DataManipulationCodes.INSUFFICIENT_BUFFER_SPACE_ERROR:
             message = (
                 f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
                 f"bytes available to fully fill the object starting at the index {start_index}. Specifically, given "
@@ -847,7 +823,7 @@ class TransportLayer:
 
         # If the index is set to code -1, that indicates that a multidimensional numpy array was provided as input,
         # but only flat arrays are allowed.
-        elif end_index == -1:
+        elif end_index == DataManipulationCodes.MULTIDIMENSIONAL_ARRAY_ERROR:
             message = (
                 f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
                 f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) arrays "
@@ -857,7 +833,7 @@ class TransportLayer:
 
         # If the index is set to code -2, that indicates that an empty numpy array was provided as input, which does
         # not make sense and therefore is likely an error.
-        elif end_index == -2:
+        elif end_index == DataManipulationCodes.EMPTY_ARRAY_ERROR:
             message = (
                 "Failed to read the data from the reception buffer. Encountered an empty (size 0) numpy array as "
                 "input data_object. Reading empty arrays is not supported."
@@ -876,51 +852,29 @@ class TransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
     def _read_array_data(
         source_buffer: NDArray[np.uint8],
-        array_object: NDArray[
-            np.uint8
-            | np.uint16
-            | np.uint32
-            | np.uint64
-            | np.int8
-            | np.int16
-            | np.int32
-            | np.int64
-            | np.float32
-            | np.float64
-            | np.bool
-        ],
+        array_object: NDArray[Any],
         start_index: int,
         payload_size: int,
     ) -> tuple[NDArray[Any], int]:
-        """Reads the requested array_object from the reception buffer of the caller class.
+        """Reads the requested array_object from the instance's reception buffer.
 
         Specifically, the object's data is read as bytes and is converted to an array with the appropriate datatype.
-        This method is not designed to be called directly. It should always be called through the read_data() method
-        of the parent class.
 
         Args:
-            source_buffer: The buffer from which the data will be read. This should be the _reception_buffer array
-                of the caller class.
-            array_object: The numpy array to be read from the _reception_buffer. Currently, the method is designed to
-                only work with one-dimensional arrays with a minimal size of 1 element. The array should be initialized
-                and should use one of the supported datatypes. During runtime, the method reconstructs the array using
-                the data read from the source_buffer.
+            source_buffer: The buffer from which to read the data.
+            array_object: The numpy array to be read from the _reception_buffer.
             start_index: The index inside the reception buffer (0 to 253) at which to start reading the data.
-            payload_size: The number of payload bytes stored inside the buffer. This is used to limit the read operation
-                to avoid retrieving data from the uninitialized portion of the buffer. Note, this will frequently be
-                different from the total buffer size.
+            payload_size: The number of payload bytes currently stored inside the buffer.
 
         Returns:
             A two-element tuple. The first element is the numpy array that uses the datatype and size derived from the
             input array_object, which holds the extracted data. The second element is the index that immediately follows
             the last index that was read during method runtime to support chained read calls. If method runtime fails,
-            returns an empty numpy array as the first element and a static error-code as the second element. Uses
-            integer code 0 if the payload bytes available from start_index are not enough to fill the input array with
-            data. Returns integer code -1 if the input array is not one-dimensional. Returns integer code -2 if the
-            input array is empty.
+            returns an empty numpy array as the first element and one of the DataManipulationCodes values as the second
+            element.
         """
         # Calculates the end index for the read operation. This is based on how many bytes are required to represent the
         # object and the start_index for the read operation.
@@ -947,22 +901,18 @@ class TransportLayer:
         )
 
     def send_data(self) -> bool:
-        """Packages the payload stored in the transmission buffer and sends it to the connected Microcontroller over the
-        serial interface.
-
-        Overall, this method carries out two distinct steps. First, it builds a packet using the payload, which is
-        very fast (~3-5 microseconds on a ~5 Ghz CPU). Next, the method sends the constructed packet over the serial
-        interface managed by pySerial library, which is considerably slower (20-40 microseconds).
+        """Packages the payload stored in the instance's transmission buffer and sends it to the connected
+        Microcontroller over the serial interface.
 
         Notes:
-            The constructed packet being sent over the serial port has the following format:
-            [START BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
+            The constructed packet sent over the serial port has the following format:
+            [START BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM].
 
         Returns:
-            True, if the data was successfully transmitted.
+            True, if the data is successfully transmitted.
 
         Raises:
-            ValueError: If the method encounters an error during the packet construction.
+            ValueError: If the method encounters an error during the transmission packet construction.
         """
         # Constructs the serial packet to be sent. This is a fast inline aggregation of all packet construction steps,
         # using JIT compilation to increase runtime speed. To maximize compilation benefits, it has to access the
@@ -990,7 +940,7 @@ class TransportLayer:
             # Returns True to indicate that data was successfully sent.
             return True
 
-        # If constructor method returns an empty packet, that means one of the inner methods ran into an error.
+        # If the constructor method returns an empty packet, that means one of the inner methods ran into an error.
         # Only COBS and CRC classes can run into errors during _construct_packet() runtime. When this happens, the
         # method re-runs the computations using non-jit-compiled methods that will find and resolve the error. This is
         # slow, but if errors have occurred, it is likely that speed is no longer as relevant as error resolution.
@@ -1001,7 +951,7 @@ class TransportLayer:
         # Due to other controls, simulating this error with tests is currently impossible. The code is kept as-is for
         # potential future relevance, however.
         checksum = self._crc_processor.calculate_crc_checksum(packet)  # pragma: no cover
-        self._crc_processor.convert_checksum_to_bytes(checksum)  # pragma: no cover
+        self._crc_processor.serialize_checksum(checksum)  # pragma: no cover
 
         # The steps above SHOULD run into an error. If they did not, there is an unexpected error originating from the
         # _construct_packet method. In this case, raises a generic RuntimeError to prompt the user to manually
@@ -1017,7 +967,7 @@ class TransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
     def _construct_packet(
         payload_buffer: NDArray[np.uint8],
         cobs_processor: _COBSProcessor,
@@ -1028,34 +978,24 @@ class TransportLayer:
     ) -> NDArray[np.uint8]:
         """Constructs the serial packet using the payload stored inside the input buffer.
 
-        This method inlines COBS, CRC and start_byte prepending steps that iteratively transform the payload stored
+        This method inlines COBS, CRC, and start_byte prepending steps that iteratively transform the payload stored
         inside the caller class transmission buffer into a serial packet that can be transmitted to the
         Microcontroller. By accessing typically hidden jit-compiled _COBSProcessor and _CRCProcessor classes, this
         method inlines and compiles all operations into a single method, achieving the highest possible execution speed.
 
-        Notes:
-            At the time of writing, given other static checks performed at class instantiation, it is nearly impossible
-            for ths runtime to fail. That said, since this can potentially change in the future, the method does contain
-            a full suite of error handling tools.
-
         Args:
-            payload_buffer: The numpy array that stores the 'raw' payload bytes. This should be the transmission buffer
-                of the caller class.
-            cobs_processor: The inner _COBSProcessor jitclass instance. The instance can be obtained by using
-                '.processor' property of the COBSProcessor wrapper class.
-            crc_processor: The inner _CRCProcessor jitclass instance. The instance can be obtained by using '.processor'
-                property of the RCProcessor wrapper class.
-            payload_size: The number of bytes that makes up the payload. It is expected that payload only uses
-                a portion of the input payload_buffer.
+            payload_buffer: The numpy array that stores the 'raw' payload bytes.
+            cobs_processor: The inner _COBSProcessor jitclass instance.
+            crc_processor: The inner _CRCProcessor jitclass instance.
+            payload_size: The number of bytes that makes up the payload.
             delimiter_byte: The byte-value used to mark the end of each transmitted packet's payload region.
             start_byte: The byte-value used to mark the beginning of each transmitted packet.
 
         Returns:
             The byte numpy array containing the constructed serial packet if the method runtime was successful.
-            Otherwise, returns an empty numpy array (size 0) to indicate runtime failure. To trace the source of the
-            error, it may be necessary to rerun this computation using error-raising wrapper COBS and CRC classes.
+            Otherwise, returns an empty numpy array (size 0) to indicate runtime failure.
         """
-        # Extracts the payload from the input buffer and encodes it using COBS scheme.
+        # Extracts the payload from the input buffer and encodes it using the COBS scheme.
         packet = cobs_processor.encode_payload(payload_buffer[:payload_size], delimiter_byte)
 
         # If encoding fails, escalates the error by returning an empty array.
@@ -1067,12 +1007,12 @@ class TransportLayer:
 
         # Checksum calculation method does not have a unique error-associated return value. If it runs into an error, it
         # returns 0, but 0 can also be returned by a successful checksum calculation. To verify that the checksum
-        # calculation was successful, verifies that the processor status matches expected success status.
-        if crc_processor.status != crc_processor.checksum_calculated:
+        # calculation was successful, verifies that the processor status matches the expected success status.
+        if crc_processor.status != CRCStatusCode.CHECKSUM_CALCULATED:
             return np.empty(0, dtype=payload_buffer.dtype)
 
         # Converts the integer checksum to a bytes' format (to form the crc postamble)
-        postamble = crc_processor.convert_checksum_to_bytes(checksum)
+        postamble = crc_processor.serialize_checksum(checksum)
 
         # For bytes' conversion, an empty checksum array indicates failure
         if postamble.size == 0:
@@ -1083,35 +1023,23 @@ class TransportLayer:
 
         # Concatenates the preamble, the encoded payload, and the checksum postamble to form the serial packet
         # and returns the constructed packet to the caller.
-        combined_array = np.concatenate((preamble, packet, postamble))
-        return combined_array
+        return np.concatenate((preamble, packet, postamble))
 
     def receive_data(self) -> bool:
-        """If data bytes are available for reception, parses the serialized data packet, verified its integrity, and
-        decodes the packet's payload into the class reception buffer.
-
-        This method aggregates the steps necessary to read the packet data from the serial port's reception buffer,
-        verify its integrity using CRC, and decode the payload using COBS. Following verification, the decoded payload
-        is transferred into the class reception buffer. This method uses multiple sub-methods and attempts to
-        intelligently minimize the number of calls to comparatively slow serial port buffer manipulation methods.
+        """Reads the byte-stream stored in the serial communication port's buffer, parses the serialized data packet,
+        verified its integrity, and decodes the packet's payload into the instance's reception buffer.
 
         Notes:
-            Expects the received data to be organized in the following format:
+            The received data is expected to be organized in the following format:
             [START BYTE]_[PAYLOAD SIZE BYTE]_[OVERHEAD BYTE]_[COBS ENCODED PAYLOAD]_[DELIMITER BYTE]_[CRC CHECKSUM]
 
-            Before doing any processing, the method checks for whether the data is present in the first place. Even if
-            the class 'available' property returns True, this method can still return False. This would be the case if
-            the 'data' available for reading is actually the communication line noise. Overall, there is no need to
-            check the 'available' property before calling this method, as the method does this internally anyway.
-
-            Since running this method can get comparatively costly, the method only attempts to process the data if
-            it is relatively likely that the method will run successfully. To determine this likelihood, the method uses
-            the minimum_received_payload_size class attribute and only processes the data if enough bytes are available
-            to represent the minimum packet size.
+            Before doing any processing, the method checks whether the port's buffer contains enough data to justify the
+            costly parsing attempt. There is no need to check the 'available' property before calling this method, as
+            the method does this step internally.
 
         Returns:
-            True if the packet was successfully received and its payload was decoded into the reception buffer. False,
-            if there are no packet bytes to receive and process when this method is called.
+            True if the packet was successfully received and its payload was decoded into the reception buffer and False
+            otherwise.
 
         Raises:
             ValueError: If the received packet fails the CRC verification check.
@@ -1145,8 +1073,8 @@ class TransportLayer:
             self._bytes_in_reception_buffer = payload_size
             return True
 
-        # If payload size is 0, this indicates verification failure. In this case, attempts to resolve the cause of the
-        # failure and raise the appropriate error:
+        # If the payload size is 0, this indicates verification failure. In this case, attempts to resolve the cause of
+        # the failure and raise the appropriate error:
 
         # Extracts the data that failed verification into a separate buffer and resets the reception buffer to
         # make it impossible to read the invalid data
@@ -1159,12 +1087,9 @@ class TransportLayer:
         self._crc_processor._resolve_checksum_calculation_status(packet)
 
         # If CRC calculation ran successfully, resolves the status of COBS decoding (provided COBS decoder status is not
-        # standby or encoding success). If verification failed due to COBS decoding error, this method will raise the
-        # appropriate error.
-        if (
-            self._cobs_processor.processor.status != self._cobs_processor.processor.standby
-            and self._cobs_processor.processor.status != self._cobs_processor.processor.payload_encoded
-        ):
+        # standby or encoding success). If verification failed due to the COBS decoding error, this method will raise
+        # the appropriate error.
+        if self._cobs_processor.processor.status not in {COBSStatusCode.STANDBY, COBSStatusCode.PAYLOAD_ENCODED}:
             # Removes the CRC bytes before running the decoder.
             # noinspection PyProtectedMember
             self._cobs_processor._resolve_decoding_status(packet=packet[: packet.size - int(self._postamble_size)])
@@ -1176,7 +1101,7 @@ class TransportLayer:
         # Converts the CRC checksum extracted from the end of the packet from a byte array to an integer. This uses the
         # wrapper class that raises the appropriate error if method runtime fails.
         byte_checksum = packet[-self._postamble_size :]  # Extracts the received CRC checksum as a bytes' array
-        received_checksum = self._crc_processor.convert_bytes_to_checksum(byte_checksum)
+        received_checksum = self._crc_processor.deserialize_checksum(byte_checksum)
 
         # Calculates the expected CRC checksum for the encoded payload.
         encoded_payload = packet[: packet.size - int(self._postamble_size)]  # Removes the CRC postamble bytes
@@ -1197,34 +1122,22 @@ class TransportLayer:
         """Attempts to receive (parse) the serialized payload and the CRC checksum postamble from the byte-stream
         stored inside the serial interface buffer.
 
-        This method's runtime can be broadly divided into 2 distinct steps. The first step transfers the bytes received
-        by the serial interface into the buffer used by the second step. This step relies on pure python code and
-        pySerial library and is comparatively slow. The second step parses the encoded payload and the CRC checksum from
-        the received bytes, and it uses comparatively fast jit-compiled code. The method is designed to minimize the
-        time spent in step 1 where possible, but is largely limited by the serial port interface.
-
         Notes:
-            This method uses the class _timeout attribute to specify the maximum delay in microseconds(!) between
+            This method uses the instance's _timeout attribute to specify the maximum delay in microseconds(!) between
             receiving any two consecutive bytes of the packet. If the packet is not fully received at method runtime
-            initialization, it will wait at most _timeout microseconds for the number of available bytes to
-            increase before declaring the packet stale. There are two points at which the packet can become stale: the
-            end of the preamble reception and the reception of the packet (payload + crc postamble). The primary
-            difference between the two breakpoints is that in the latter case the exact size of the packet is known and
-            in the former it is not known.
+            initialization, it waits at most _timeout microseconds for the number of available bytes to increase before
+            declaring the packet stale.
 
             The method tries to minimize the number of serial port interface calls, as these calls are comparatively
             costly. To do so, the method always reads all bytes available from the serial port interface, regardless of
             how many bytes it needs to resolve the packet. After resolving the packet, any 'leftover' bytes are saved
-            to the class _leftover_bytes buffer and reused by the next call to _parse_packet().
+            to the instance's _leftover_bytes buffer and reused by the next call to _parse_packet().
 
             For this method to work correctly, the class configuration should exactly match the configuration of the
-            TransportLayer class used by the connected Microcontroller. If the two configurations do not match, this
-            method will likely fail to parse any incoming packet.
+            TransportLayer class used by the connected Microcontroller.
 
         Returns:
-            True, if the method is able to successfully parse the incoming packet. In this case, the COBS-encoded
-            payload and the CRC checksum will be stored inside the _reception_buffer and the size of the received
-            packet will be stored in the _bytes_in_reception_buffer tracker. Returns False if there are no packet
+            True, if the method is able to successfully parse the incoming packet and False if there are no packet
             bytes to parse (valid non-error status).
 
         Raises:
@@ -1245,7 +1158,7 @@ class TransportLayer:
 
         # Enters the packet parsing loop. Due to the parsing implementation, the packet can be resolved over at most
         # three iterations of the parsing method. Therefore, this loop is statically capped at 3 iterations.
-        for call_count in range(3):
+        for _call_count in range(3):
             # Converts leftover_bytes (bytes) to a numpy uint8 array for compatibility with _parse_packet
             remaining_bytes = np.frombuffer(self._leftover_bytes, dtype=np.uint8).copy()
 
@@ -1282,7 +1195,7 @@ class TransportLayer:
             # to fully cover the minimum packet size -1 (-1 is to account for already processed start_byte). This
             # maximizes the chances of successfully parsing the full packet during iteration 2. That said, since the
             # exact size of the packet is not known, iteration 3 may be necessary.
-            if status == 0 and not self._bytes_available(
+            if status == PacketParsingStatus.PACKET_SIZE_UNKNOWN and not self._bytes_available(
                 required_bytes_count=self._minimum_packet_size - 1, timeout=self._timeout
             ):
                 # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
@@ -1300,7 +1213,7 @@ class TransportLayer:
             # that the payload size was parsed and, therefore, the exact number of bytes making up the processed packet
             # is known. This method, therefore, blocks until the class is able to receive enough bytes to fully
             # represent the packet or until the reception timeout.
-            if status == 2 and not self._bytes_available(
+            if status == PacketParsingStatus.NOT_ENOUGH_PACKET_BYTES and not self._bytes_available(
                 required_bytes_count=parsed_bytes.size - parsed_bytes_count, timeout=self._timeout
             ):
                 # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
@@ -1318,7 +1231,7 @@ class TransportLayer:
             # A separate error message that specifically detects status 3: Not enough bytes to resolve the CRC
             # postamble. Technically, this error should not be possible (it is the terminal runtime status for the
             # packet parsing method). However, it is implemented to avoid confusion with status 2 and 0.
-            if status == 3 and not self._bytes_available(
+            if status == PacketParsingStatus.NOT_ENOUGH_CRC_BYTES and not self._bytes_available(
                 required_bytes_count=parsed_bytes.size - parsed_bytes_count, timeout=self._timeout
             ):
                 # The only way for _bytes_available() to return False is due to timeout guard aborting additional bytes'
@@ -1336,7 +1249,7 @@ class TransportLayer:
 
             # If _bytes_available() method returned true for status codes 1 to 3, that means that additional bytes were
             # received in time and the loop has to be cycled again to process newly received bytes.
-            if status <= 3:
+            if status <= PacketParsingStatus.NOT_ENOUGH_CRC_BYTES:
                 continue
 
             # Any code other than partial or full success code is interpreted as the terminal code. All codes other
@@ -1344,18 +1257,18 @@ class TransportLayer:
             # the resolution for unexpected status codes.
 
             # No packet to receive. This is a non-error terminal status.
-            if status == 101:
+            if status == PacketParsingStatus.NO_BYTES_TO_READ:
                 return False  # Non-error, non-success return code
 
             # Start byte was not discovered among the available bytes.
-            if status == 102:
+            if status == PacketParsingStatus.NO_START_BYTE_FOUND:
                 message = (
                     f"Failed to parse the incoming serial packet data. Unable to find the start_byte "
                     f"({self._start_byte}) value among the bytes stored inside the serial buffer."
                 )
 
             # Parsed payload size is not within the boundaries specified by the minimum and maximum payload sizes.
-            elif status == 103:
+            elif status == PacketParsingStatus.PAYLOAD_SIZE_MISMATCH:
                 message = (
                     f"Failed to parse the incoming serial packet data. The parsed size of the COBS-encoded payload "
                     f"({parsed_bytes.size}), is outside the expected boundaries "
@@ -1366,7 +1279,7 @@ class TransportLayer:
             # Delimiter byte value was encountered before reaching the end of the COBS-encoded payload data region.
             # 'expected number' is calculated like this: parsed_bytes has space for the encoded packet + CRC. So, to get
             # the expected delimiter byte number, we just subtract the CRC size from the parsed_bytes size.
-            elif status == 104:
+            elif status == PacketParsingStatus.DELIMITER_FOUND_TOO_EARLY:
                 message = (
                     f"Failed to parse the incoming serial packet data. Delimiter byte value ({self._delimiter_byte}) "
                     f"encountered at payload byte number {parsed_bytes_count}, instead of the expected byte number "
@@ -1376,7 +1289,7 @@ class TransportLayer:
 
             # The last COBS-encoded payload (encoded packet's) data value does not match the expected delimiter byte
             # value.
-            elif status == 105:
+            elif status == PacketParsingStatus.DELIMITER_NOT_FOUND:
                 message = (
                     f"Failed to parse the incoming serial packet data. Delimiter byte value ({self._delimiter_byte}) "
                     f"expected as the last encoded packet byte ({parsed_bytes.size - int(self._postamble_size)}), but "
@@ -1407,28 +1320,21 @@ class TransportLayer:
 
     def _bytes_available(self, required_bytes_count: int = 1, timeout: int = 0) -> bool:
         """Determines if the required number of bytes is available across all class buffers that store unprocessed
-        bytes.
-
-        Specifically, this method first checks whether the leftover_bytes buffer of the class contains enough bytes.
-        If not, the method checks how many bytes can be extracted from the serial interface buffer, combines these bytes
-        with the leftover bytes, and repeats the check. If the check succeeds, the method reads all available bytes from
-        the serial port and stacks them with the bytes already stored inside the leftover_bytes buffer before returning.
-        Optionally, the method can block in-place while the serial port continuously receives new bytes, until the
-        required number of bytes becomes available.
+        serial stream bytes.
 
         Notes:
             This method is primarily designed to optimize packet processing speed by minimizing the number of calls to
-            the serial interface methods. This is because these methods take a comparatively long time to execute.
+            the serial interface methods.
 
         Args:
-            required_bytes_count: The number of bytes that needs to be available across all class buffers that store
-                unprocessed bytes for this method to return True.
+            required_bytes_count: The number of bytes that needs to be available across all instance's buffers that
+                store unprocessed bytes for this method to return True.
             timeout: The maximum number of microseconds that can pass between the serial port receiving any two
                 consecutive bytes. Using a non-zero timeout allows the method to briefly block and wait for the
                 required number of bytes to become available, as long as the serial port keeps receiving new bytes.
 
         Returns:
-            True if enough bytes are available at the end of this method runtime to justify parsing the packet.
+            True if enough bytes are available at the end of this method's runtime to justify parsing the packet.
         """
         # Tracks the number of bytes available from the leftover_bytes buffer
         available_bytes = len(self._leftover_bytes)
@@ -1456,7 +1362,7 @@ class TransportLayer:
             if total_bytes >= required_bytes_count:
                 self._leftover_bytes += self._port.read(
                     additional_bytes
-                )  # This takes twice as long as 'available' check
+                )  # This takes twice as long as the 'available' check
                 return True
 
             # If the total number of bytes was not enough, checks whether serial port has received any additional bytes
@@ -1469,7 +1375,7 @@ class TransportLayer:
         return False
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
     def _parse_packet(
         unparsed_bytes: NDArray[np.uint8],
         start_byte: np.uint8,
@@ -1480,17 +1386,15 @@ class TransportLayer:
         allow_start_byte_errors: bool,
         start_found: bool = False,
         parsed_byte_count: int = 0,
-        parsed_bytes: NDArray[np.uint8] = np.empty(0, dtype=np.uint8),
+        parsed_bytes: NDArray[np.uint8] = _EMPTY_ARRAY,
     ) -> tuple[int, int, NDArray[np.uint8], NDArray[np.uint8]]:
-        """Parses as much of the packet data as possible using the input unparsed_bytes object.
-
-        This method contains all packet parsing logic, split into 4 distinct stages: resolving the start_byte, resolving
-        the packet_size, resolving the encoded payload, and resolving the CRC postamble. It is common for the method to
-        not advance through all stages during a single call, requiring multiple calls to fully parse the packet.
-        The method is written in a way that supports iterative calls to work on the same packet. This method is not
-        intended to be used standalone and should always be called through the _receive_packet() method.
+        """Parses as much of the incoming serialized packet's data as possible using the input unparsed_bytes object.
 
         Notes:
+            It is common for the method to not advance through all parsing stages during a single call, requiring
+            multiple calls to fully parse the packet. The method is written in a way that supports iterative calls to
+            work on the same packet.
+
             For this method, the 'packet' refers to the COBS encoded payload + the CRC checksum postamble. While each
             received byte stream also necessarily includes the metadata preamble, the preamble data is used and
             discarded during this method's runtime.
@@ -1503,51 +1407,20 @@ class TransportLayer:
             may be fully resolved (parsed or failed to be parsed) with one call, and, as a maximum, 3 calls may be
             necessary.
 
-            The method uses static integer codes to communicate its runtime status:
-
-            0 - Not enough bytes read to fully parse the packet. The start byte was found, but packet size has not
-            been resolved and, therefore, not known.
-            1 - Packet fully parsed.
-            2 - Not enough bytes read to fully parse the packet. The packet size was resolved, but there were not
-            enough bytes to fully parse the packet (encoded payload + crc postamble).
-            3 - Not enough bytes read to fully parse the packet. The packet payload was successfully parsed, but there
-            were not enough bytes to fully parse the CRC postamble.
-            101 - No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to
-            ignore start byte errors. Usually, this situation is caused by communication line noise generating
-            'noise bytes'.
-            102 - No start byte found, which is interpreted as a 'no start byte detected' error case. This status is
-            only possible when the class is configured to detect start byte errors.
-            103 - Parsed payload_size value is either less than the minimum expected value or above the maximum value.
-            This likely indicates packet corruption or communication parameter mismatch between this class and the
-            connected Microcontroller.
-            104 - Delimiter byte value encountered before reaching the end of the encoded payload data block. It is
-            expected that the last byte of the encoded payload is set to the delimiter value and that the value is not
-            present anywhere else inside the encoded payload region. Encountering the delimiter early indicates packet
-            corruption.
-            105 - Delimiter byte value not encountered at the end of the encoded payload data block. See code 104
-            description for more details, but this code also indicates packet corruption.
+            The method uses static integer codes to communicate its runtime status. These codes are available from the
+            PacketParsingStatus enumeration.
 
         Args:
-            unparsed_bytes: A bytes() object that stores the bytes read from the serial port. If this is the first call
-                to this method for a given _receive_packet() method runtime, this object may also include any bytes left
-                from the previous _receive_packet() runtime.
-            start_byte: The byte-value used to mark the beginning of a transmitted packet in the byte-stream. This is
-                used to detect the portion of the stream that stores the data packet.
-            delimiter_byte: The byte-value used to mark the end of a transmitted packet in the byte-stream. This is
-                used to detect the portion of the stream that stores the data packet and the portion that stores the
-                CRC postamble.
-            max_payload_size: The maximum size of the payload, in bytes, that can be received. This value cannot
-                exceed 254 due to COBS limitations.
-            min_payload_size: The minimum size of the payload, in bytes, that can be received. This value cannot be
-                less than 1 or above 254 (see above) and cannot exceed the max_payload_size.
-            postamble_size: The number of bytes needed to store the CRC checksum. This is determined based on the type
-                of the CRC polynomial used by the class.
+            unparsed_bytes: A bytes() object that stores the serial stream bytes ot be parsed.
+            start_byte: The byte-value used to mark the beginning of a transmitted packet in the byte-stream.
+            delimiter_byte: The byte-value used to mark the end of a transmitted packet in the byte-stream.
+            max_payload_size: The maximum size of the payload, in bytes, that can be received.
+            min_payload_size: The minimum size of the payload, in bytes, that can be received.
+            postamble_size: The number of bytes needed to store the CRC checksum.
             allow_start_byte_errors: A boolean flag that determines whether inability to find start_byte should be
                 interpreted as having no bytes to read (default, code 101) or as an error (code 102).
             start_found: Iterative argument. When this method is called two or more times, this value can be provided
-                to the method to skip resolving the start byte (detecting packet presence). Specifically, it is used
-                when a call to this method finds the start byte, but cannot resolve the packet size. Then, during a
-                second call, start_byte searching step is skipped.
+                to the method to skip resolving the start byte (detecting packet presence).
             parsed_byte_count: Iterative parameter. When this method is called multiple times, this value communicates
                 how many bytes out of the expected byte number have been parsed by the previous method runtime.
             parsed_bytes: Iterative parameter. This object is initialized to the expected packet size once it is parsed.
@@ -1562,11 +1435,12 @@ class TransportLayer:
         # Converts the input 'bytes' object to a numpy array to optimize further buffer manipulations
         total_bytes = unparsed_bytes.size  # Calculates the total number of bytes available for parsing
         processed_bytes = 0  # Tracks how many input bytes are processed during method runtime
+        remaining_bytes: NDArray[np.uint8]
 
         # Stage 1: Resolves the start_byte. Detecting the start byte tells the method the processed byte-stream contains
         # a packet that needs to be parsed.
         if not start_found:
-            # Loops over available bytes until start byte is found or the method runs out of bytes to evaluate
+            # Loops over available bytes until the start byte is found or the method runs out of bytes to evaluate
             for i in range(total_bytes):
                 processed_bytes += 1  # Increments the counter for each evaluated byte
 
@@ -1580,10 +1454,7 @@ class TransportLayer:
             if not start_found:
                 # Determines the status code based on whether start byte errors are allowed.
                 # If they are allowed, returns 102. Otherwise (default) returns 101.
-                if allow_start_byte_errors:
-                    status_code = 102  # This will terminate packet reception with an error
-                else:
-                    status_code = 101  # This will terminate packet reception without an error
+                status_code = 102 if allow_start_byte_errors else 101
 
                 remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes
                 return status_code, parsed_byte_count, remaining_bytes, parsed_bytes
@@ -1707,7 +1578,7 @@ class TransportLayer:
         return 3, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
     # pragma: no cover
     def _validate_packet(
         reception_buffer: NDArray[np.uint8],
@@ -1717,39 +1588,28 @@ class TransportLayer:
         delimiter_byte: np.uint8,
         postamble_size: np.uint8,
     ) -> int:
-        """Validates the packet by passing it through a CRC checksum calculator, decodes the COBS-encoded payload, and
-        saves it back to the input reception_buffer.
-
-        Both the CRC checksum calculation and COBS decoding act as data integrity verification steps. Jointly, they
-        make it very unlikely that a corrupted packet advances to further data processing steps. If this method runs
-        successfully, the payload will be available for consumption via read_data() method.
+        """Validates the parsed data packet by passing it through a CRC checksum calculator, decodes the COBS-encoded
+        payload, and saves it back to the input reception_buffer.
 
         Notes:
-            This method expects the packet to be stored inside the _reception_buffer and will write the decoded
-            payload back to the _reception_buffer if method runtime succeeds. This allows optimizing memory access and
-            method runtime speed.
+            This method expects the packet to be stored inside the reception_buffer and writes the decoded payload back
+            to the reception_buffer.
 
-            The method uses the following CRC property: running a CRC calculation on the data with appended CRC
-            checksum (for that data) will always return 0. This stems from the fact that CRC checksum is the remainder
-            of dividing the data by the CRC polynomial. For checksums that use multiple bytes, it is essential that the
-            receiver and the sender use the same order of bytes when serializing and deserializing the CRC postamble,
-            for this method to run as expected.
+            The method relies on the following CRC property: running a CRC calculation on the data with appended CRC
+            checksum (for that data) always returns 0. For checksums that use multiple bytes to store the RC value, it
+            is essential that the receiver and the sender use the same byte order when serializing and deserializing the
+            CRC postamble.
 
         Args:
-            reception_buffer: The buffer that stores the packet to be verified and decoded. If method runtime is
-                successful, a portion of the buffer will be overwritten to store the decoded payload. This should be
-                the reception buffer of the caller class.
-            packet_size: The number of bytes that makes up the packet to be verified. It is expected that payload only
-                uses a portion of the input reception_buffer.
-            cobs_processor: The inner _COBSProcessor jitclass instance. The instance can be obtained by using
-                '.processor' property of the COBSProcessor wrapper class.
-            crc_processor: The inner _CRCProcessor jitclass instance. The instance can be obtained by using '.processor'
-                property of the RCProcessor wrapper class.
+            reception_buffer: The buffer that stores the packet to be verified and decoded.
+            packet_size: The number of bytes that makes up the packet to be verified.
+            cobs_processor: The inner _COBSProcessor jitclass instance.
+            crc_processor: The inner _CRCProcessor jitclass instance.
             delimiter_byte: The byte-value used to mark the end of each received packet's payload region.
             postamble_size: The CRC postamble byte-size for the processed packet.
 
         Returns:
-             A positive integer (>= 1) that stores the size of the decoded payload, if the method succeeds. Integer
+             A positive integer (>= 1) that stores the size of the decoded payload if the method succeeds. Integer
              error code 0, if the method fails.
         """
         # Extracts the packet from the reception buffer. The methods below assume the entirety of the input buffer
@@ -1765,7 +1625,7 @@ class TransportLayer:
         # The first is an error during the CRC calculator method runtime (unlikely), indicated by the crc_processor
         # status. The second is packet corruption inferred from the calculated checksum not being 0. In either case,
         # returns error code 0.
-        if crc_processor.status != crc_processor.checksum_calculated or checksum != 0:
+        if crc_processor.status != CRCStatusCode.CHECKSUM_CALCULATED or checksum != 0:
             return 0
 
         # Removes the CRC bytes from the end of the packet, as they are no longer necessary after the CRC verification

@@ -4,9 +4,9 @@ import importlib_metadata
 # -- Project information -----------------------------------------------------
 project = 'ataraxis-transport-layer-pc'
 # noinspection PyShadowingBuiltins
-copyright = '2024, Ivan Kondratyev & Sun Lab'
-authors = ['Ivan Kondratyev (Inkaros)', 'Katlynn Ryu']
-release = importlib_metadata.version("ataraxis-transport-layer-pc")  # Extracts the project version from the .toml file.
+copyright = '2025, Sun (NeuroAI) lab'
+authors = ['Ivan Kondratyev', 'Katlynn Ryu']
+release = importlib_metadata.version("ataraxis-transport-layer-pc")
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -25,8 +25,8 @@ exclude_patterns = []
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 napoleon_include_init_with_doc = False
-napoleon_include_private_with_doc = True
-napoleon_include_special_with_doc = True
+napoleon_include_private_with_doc = False
+napoleon_include_special_with_doc = False
 napoleon_use_admonition_for_examples = False
 napoleon_use_admonition_for_notes = False
 napoleon_use_admonition_for_references = False
@@ -45,7 +45,7 @@ typehints_formatter = None
 typehints_use_signature = False
 typehints_use_signature_return = False
 
-# RTD dark mode starts in light mode
+# Disables the dark mode by default.
 default_dark_mode = False
 
 # -- Options for HTML output -------------------------------------------------
