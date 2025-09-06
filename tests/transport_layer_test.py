@@ -417,7 +417,7 @@ def test_receive_bytes_available(protocol) -> None:
     preamble = np.array([129, 10], dtype=np.uint8)
     packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
     checksum = protocol._crc_processor.calculate_crc_checksum(packet)
-    checksum = protocol._crc_processor.convert_checksum_to_bytes(checksum)
+    checksum = protocol._crc_processor.serialize_checksum(checksum)
     test_data = np.concatenate((preamble, packet, checksum), dtype=np.uint8, axis=0)
 
     # Breaks the packet into 2 chunks
@@ -553,7 +553,7 @@ def test_receive_data_errors(protocol):
     preamble = np.array([129, 10], dtype=np.uint8)
     packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
     checksum = protocol._crc_processor.calculate_crc_checksum(packet)
-    checksum = protocol._crc_processor.convert_checksum_to_bytes(checksum)
+    checksum = protocol._crc_processor.serialize_checksum(checksum)
     test_data = np.concatenate((preamble, packet, checksum), axis=0)
 
     # Also generates a buffer that does not have a start byte to test errors associated with handling communication
@@ -674,8 +674,8 @@ def test_receive_data_errors(protocol):
 
     # CRC Checksum verification error.
     # Translates the real and invalid checksums into hexadecimals used in error messages
-    expected_checksum = hex(protocol._crc_processor.convert_bytes_to_checksum(test_data[-1:].copy()))  # to Hexadecimal
-    received_checksum = hex(protocol._crc_processor.convert_bytes_to_checksum(np.array([0x00], dtype=np.uint8)))
+    expected_checksum = hex(protocol._crc_processor.deserialize_checksum(test_data[-1:].copy()))  # to Hexadecimal
+    received_checksum = hex(protocol._crc_processor.deserialize_checksum(np.array([0x00], dtype=np.uint8)))
 
     # Replaces the checksum in the test_data packet with an invalid checksum
     test_data[-1:] = np.array([0x00], dtype=np.uint8)  # Fake checksum
@@ -698,7 +698,7 @@ def test_receive_data_errors(protocol):
     packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
     packet[5] = 2  # Replaces one of the COBS_encoded values with a different value, introducing a COBS error
     checksum = protocol._crc_processor.calculate_crc_checksum(packet)
-    checksum = protocol._crc_processor.convert_checksum_to_bytes(checksum)
+    checksum = protocol._crc_processor.serialize_checksum(checksum)
     test_data = np.concatenate((preamble, packet, checksum), axis=0)
 
     # Checks the COBS error

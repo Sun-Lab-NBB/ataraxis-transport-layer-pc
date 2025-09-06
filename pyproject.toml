@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "ataraxis-transport-layer-pc"
-version = "2.0.0rc1"
+version = "2.0.0"
 description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB or UART serial interfaces."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -101,6 +101,16 @@ lint.select = ["ALL"]
 # General ignore directives
 lint.ignore = [
     "UP038",  # This rule is deprecated.
+    "W291",  # Conflicts with docstring formatting
+    "ANN401",  # While suboptimal, ANY is a helpful type when used with caution
+    "C901",  # Sometimes complex functions are necessary
+    "PLR0913",  # Sometimes complex functions are necessary
+    "PLR0912",  # Sometimes complex functions are necessary
+    "PLR0915",  # Sometimes complex type defenitions are necessary
+    "PLR0911", # Sometimes complex return graphs are necessary
+    "FBT001", # Sometimes positional boolean atguments are necessary
+    "FBT002", # Sometimes positional boolean arguments are necessary
+    "SLF001",  # Sometimes accessing private members is necessary
     "COM812", # Conflicts with the formatter
     "ISC001", # Conflicts with the formatter
     "PT001", # https://github.com/astral-sh/ruff/issues/8796#issuecomment-182590771
@@ -115,7 +125,7 @@ lint.ignore = [
 quote-style = "double"             # Uses double quotes for strings
 indent-style = "space"             # Uses space for indents
 skip-magic-trailing-comma = false  # Like black, ignores trailing commas
-line-ending = "auto"               # Automatically detects and standardizes line ending character
+line-ending = "auto"               # Automatically detects and standardizes line-ending character
 
 # Docstrings and comments' line length
 [tool.ruff.lint.pycodestyle]
@@ -141,8 +151,27 @@ length-sort = true                 # Places shorter imports first
 
 # MyPy configuration section.
 [tool.mypy]
-disallow_untyped_defs = true # Enforces function annotation
-warn_unused_ignores = true   # Warns against using 'type: ignore' for packages that have type stubs available.
+# Strict mode settings (equivalent to --strict)
+warn_unused_configs = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+# Extra checks (equivalent to --extra-checks)
+extra_checks = true
+
+# Pretty output (equivalent to --pretty)
+pretty = true
+
 exclude = [
     "ataraxis-transport-layer-pc-\\d+", # Ignores temporary folder created by setuptools when building the sdist
     "venv.*/",                          # Ignores virtual environments

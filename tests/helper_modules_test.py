@@ -4,11 +4,7 @@ import numpy as np
 import pytest
 from ataraxis_base_utilities import error_format
 
-from ataraxis_transport_layer_pc import (
-    CRCProcessor,
-    COBSProcessor,
-    COBSStatusCode,
-)
+from ataraxis_transport_layer_pc import CRCProcessor, COBSProcessor, COBSStatusCode, CRCStatusCode
 from ataraxis_transport_layer_pc.helper_modules import SerialMock
 
 
@@ -1097,11 +1093,11 @@ def test_crc_processor(polynomial, initial_crc, final_xor, test_data, expected_c
     assert checksum == expected_checksum
 
     # Tests checksum-to-bytes conversion
-    checksum_bytes = crc_processor.convert_checksum_to_bytes(checksum)
+    checksum_bytes = crc_processor.serialize_checksum(checksum)
     assert np.array_equal(checksum_bytes, expected_bytes)
 
     # Tests bytes to checksum conversion
-    reconstructed_checksum = crc_processor.convert_bytes_to_checksum(checksum_bytes)
+    reconstructed_checksum = crc_processor.deserialize_checksum(checksum_bytes)
     assert reconstructed_checksum == expected_checksum
 
     # Verifies output datatypes
@@ -1195,7 +1191,7 @@ def test_crc_processor_errors():
     message = (
         f"CRC checksum calculation failed. The datatype of the input buffer ({invalid_buffer_type.dtype}) "
         f"is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer inputs. "
-        f"CODE: {crc_processor._processor.calculate_checksum_buffer_datatype_error}."
+        f"CODE: {CRCStatusCode.DATA_BUFFER_DATATYPE_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
@@ -1210,7 +1206,7 @@ def test_crc_processor_errors():
     )
     with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_checksum_to_bytes(invalid_input)
+        _ = crc_processor.serialize_checksum(invalid_input)
 
     # Tests invalid buffer input type checksum-to-integer conversion error
     invalid_input = None
@@ -1220,18 +1216,18 @@ def test_crc_processor_errors():
     )
     with pytest.raises(TypeError, match=error_format(message)):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_bytes_to_checksum(invalid_input)
+        _ = crc_processor.deserialize_checksum(invalid_input)
 
     # Tests invalid buffer dtype checksum-to-integer conversion error
     invalid_buffer = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint16)
     message = (
         f"Bytes to CRC checksum conversion failed. The datatype of the input buffer to be converted "
         f"({invalid_buffer.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as buffer "
-        f"inputs. CODE: {crc_processor._processor.convert_checksum_invalid_buffer_datatype_error}."
+        f"inputs. CODE: {CRCStatusCode.CHECKSUM_BUFFER_DATATYPE_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_bytes_to_checksum(invalid_buffer)
+        _ = crc_processor.deserialize_checksum(invalid_buffer)
 
     # Tests invalid buffer size checksum to integer conversion error
     invalid_buffer = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint8)  # Correct dtype this time
@@ -1239,11 +1235,11 @@ def test_crc_processor_errors():
         f"Bytes to CRC checksum conversion failed. The byte-size of the input buffer to be converted "
         f"({invalid_buffer.size}) does not match the size required to represent the specified checksum datatype "
         f"({crc_processor._processor.crc_byte_length}). "
-        f"CODE: {crc_processor._processor.convert_checksum_invalid_buffer_size_error}."
+        f"CODE: {CRCStatusCode.CHECKSUM_BUFFER_SIZE_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
-        _ = crc_processor.convert_bytes_to_checksum(invalid_buffer)
+        _ = crc_processor.deserialize_checksum(invalid_buffer)
 
 
 def test_serial_mock():
