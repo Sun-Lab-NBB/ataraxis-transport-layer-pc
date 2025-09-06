@@ -7,6 +7,7 @@ from ataraxis_base_utilities import error_format
 from ataraxis_transport_layer_pc import (
     CRCProcessor,
     COBSProcessor,
+    COBSStatusCode,
 )
 from ataraxis_transport_layer_pc.helper_modules import SerialMock
 
@@ -121,7 +122,7 @@ def test_cobs_processor_encode_decode_errors():
     message = (
         f"Failed to encode the payload using COBS scheme. The size of the input payload "
         f"({empty_payload.size}) is too small. A minimum size of {processor._processor.minimum_payload_size} elements "
-        f"(bytes) is required. CODE: {processor._processor.payload_too_small_error}."
+        f"(bytes) is required. CODE: {COBSStatusCode.PAYLOAD_TOO_SMALL_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(empty_payload, delimiter)
@@ -131,7 +132,7 @@ def test_cobs_processor_encode_decode_errors():
     message = (
         f"Failed to encode the payload using COBS scheme. The size of the input payload ({large_payload.size}) is "
         f"too large. A maximum size of {processor._processor.maximum_payload_size} elements (bytes) is required. "
-        f"CODE: {processor._processor.payload_too_large_error}."
+        f"CODE: {COBSStatusCode.PAYLOAD_TOO_LARGE_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(large_payload, delimiter)
@@ -141,7 +142,7 @@ def test_cobs_processor_encode_decode_errors():
     message = (
         f"Failed to encode the payload using COBS scheme. The datatype of the input payload "
         f"({wrong_dtype_payload.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as "
-        f"payload inputs. CODE: {processor._processor.invalid_payload_datatype_error}."
+        f"payload inputs. CODE: {COBSStatusCode.INVALID_PAYLOAD_DATATYPE_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.encode_payload(wrong_dtype_payload, delimiter)
@@ -173,7 +174,7 @@ def test_cobs_processor_encode_decode_errors():
     message = (
         f"Failed to decode payload using COBS scheme. The size of the input packet ({small_packet.size}) is too "
         f"small. A minimum size of {processor._processor.minimum_packet_size} elements (bytes) is required. "
-        f"CODE: {processor._processor.packet_too_small_error}."
+        f"CODE: {COBSStatusCode.PACKET_TOO_SMALL_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(small_packet, delimiter)
@@ -183,7 +184,7 @@ def test_cobs_processor_encode_decode_errors():
     message = (
         f"Failed to decode payload using COBS scheme. The size of the input packet ({large_packet.size}) is too "
         f"large. A maximum size of {processor._processor.maximum_packet_size} elements (bytes) is required. "
-        f"CODE: {processor._processor.packet_too_large_error}."
+        f"CODE: {COBSStatusCode.PACKET_TOO_LARGE_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(large_packet, delimiter)
@@ -193,17 +194,17 @@ def test_cobs_processor_encode_decode_errors():
     message = (
         f"Failed to decode payload using COBS scheme. The datatype of the input packet ({wrong_dtype_packet.dtype}) is "
         f"not supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
-        f"CODE: {processor._processor.invalid_packet_datatype_error}."
+        f"CODE: {COBSStatusCode.INVALID_PACKET_DATATYPE_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(wrong_dtype_packet, delimiter)
 
     # Tests packet decoder corruption error where an unencoded delimiter (0) is found before reaching the end of the
-    # packet (delimiter_found_too_early_error)
+    # packet (delimiter_found_too_early_error).
     corrupted_packet = np.array([4, 1, 2, 3, 0, 5, 0], dtype=np.uint8)
     message = (
         f"Failed to decode payload using COBS scheme. Found unencoded delimiter before reaching the end of "
-        f"the packet. Packet is likely corrupted. CODE: {processor._processor.delimiter_found_too_early_error}."
+        f"the packet. Packet is likely corrupted. CODE: {COBSStatusCode.DELIMITER_FOUND_TOO_EARLY_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet, delimiter)
@@ -215,7 +216,7 @@ def test_cobs_processor_encode_decode_errors():
         f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter "
         f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
         f"because the decoding does not end at the final index of the packet. Packet is likely "
-        f"corrupted. CODE: {processor._processor.delimiter_not_found_error}."
+        f"corrupted. CODE: {COBSStatusCode.DELIMITER_NOT_FOUND_ERROR}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet, delimiter)
@@ -1095,7 +1096,7 @@ def test_crc_processor(polynomial, initial_crc, final_xor, test_data, expected_c
     checksum = crc_processor.calculate_crc_checksum(test_data)
     assert checksum == expected_checksum
 
-    # Tests checksum to bytes conversion
+    # Tests checksum-to-bytes conversion
     checksum_bytes = crc_processor.convert_checksum_to_bytes(checksum)
     assert np.array_equal(checksum_bytes, expected_bytes)
 
@@ -1132,7 +1133,7 @@ def test_crc_processor_errors():
     final_xor_value = np.uint16(0x0000)
     crc_processor = CRCProcessor(polynomial, initial_crc_value, final_xor_value)
 
-    # Verifies that using unsupported datatype for the class initialization arguments correctly triggers appropriate
+    # Verifies that using unsupported datatype for the class initialization arguments correctly triggers the appropriate
     # type errors:
     # Polynomial
     invalid_argument_type = None
@@ -1211,7 +1212,7 @@ def test_crc_processor_errors():
         # noinspection PyTypeChecker
         _ = crc_processor.convert_checksum_to_bytes(invalid_input)
 
-    # Tests invalid buffer input type checksum to integer conversion error
+    # Tests invalid buffer input type checksum-to-integer conversion error
     invalid_input = None
     message = (
         f"Unable to convert the array of bytes to the CRC checksum. A uint8 numpy ndarray expected as 'buffer' "
@@ -1221,7 +1222,7 @@ def test_crc_processor_errors():
         # noinspection PyTypeChecker
         _ = crc_processor.convert_bytes_to_checksum(invalid_input)
 
-    # Tests invalid buffer dtype checksum to integer conversion error
+    # Tests invalid buffer dtype checksum-to-integer conversion error
     invalid_buffer = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint16)
     message = (
         f"Bytes to CRC checksum conversion failed. The datatype of the input buffer to be converted "

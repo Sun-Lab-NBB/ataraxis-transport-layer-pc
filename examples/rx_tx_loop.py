@@ -8,16 +8,15 @@
 # API documentation: https://ataraxis-transport-layer-pc-api-docs.netlify.app/.
 # Authors: Ivan Kondratyev (Inkaros), Katlynn Ryu.
 
-# Imports the TransportLayer class
-# Imports sleep to delay execution after establishing the connection
-from time import sleep
-
+# Imports PrecisionTimer to delay execution after establishing the connection
 # Imports dataclass to demonstrate struct-like data transmission
-from dataclasses import dataclass
+from dataclasses import field, dataclass
 
 # Imports numpy, which is used to generate data payloads
 import numpy as np
+from ataraxis_time import PrecisionTimer
 
+# Imports the TransportLayer class
 from ataraxis_transport_layer_pc import TransportLayer
 
 # Instantiates a new TransportLayer object. Most class initialization arguments should scale with any microcontroller.
@@ -26,7 +25,7 @@ from ataraxis_transport_layer_pc import TransportLayer
 # documentation website if you want to fine-tune other class parameters to better match your use case.
 tl_class = TransportLayer(port="/dev/ttyACM2", baudrate=115200, microcontroller_serial_buffer_size=8192)
 
-# Note, the buffer size 8192 assumes you are using Teensy 3.0+. Most Arduino boards have buffers capped at 64 or 256
+# Note, buffer size 8192 assumes you are using Teensy 3.0+. Most Arduino boards have buffers capped at 64 or 256
 # bytes. While this demonstration will likely work even if the buffer size is not valid, it is critically
 # important to set this value correctly for production runtimes.
 
@@ -43,8 +42,8 @@ test_array = np.zeros(4, dtype=np.uint8)  # [0, 0, 0, 0]
 # While Python does not have C++-like structures, dataclasses can be used for a similar purpose.
 @dataclass()  # It is important for the class to NOT be frozen!
 class TestStruct:
-    test_flag: np.bool = np.bool(True)
-    test_float: np.float32 = np.float32(6.66)
+    test_flag: np.bool = field(default_factory=lambda: np.bool(True))
+    test_float: np.float32 = field(default_factory=lambda: np.float32(6.66))
 
     def __repr__(self) -> str:
         return f"TestStruct(test_flag={self.test_flag}, test_float={round(float(self.test_float), ndigits=2)})"
@@ -52,10 +51,10 @@ class TestStruct:
 
 test_struct = TestStruct()
 
-
 # Some Arduino boards reset after receiving a connection request. To make this example universal, sleeps for 2 seconds
 # to ensure the microcontroller is ready to receive data.
-sleep(2)
+timer = PrecisionTimer("s")
+timer.delay_noblock(delay=2, allow_sleep=True)
 
 print("Transmitting the data to the microcontroller...")
 
@@ -92,7 +91,7 @@ if data_received:
     next_index = 0  # Resets the index to 0.
     test_scalar, next_index = tl_class.read_data(test_scalar, next_index)
     test_array, next_index = tl_class.read_data(test_array, next_index)
-    test_struct, _ = tl_class.read_data(test_struct, next_index)  # Again, the index after last object is not saved.
+    test_struct, _ = tl_class.read_data(test_struct, next_index)  # Again, the index after the last object is not saved.
 
     # Verifies the received data
     assert test_scalar == np.uint32(987654321)  # The microcontroller overwrites the scalar with reverse order.

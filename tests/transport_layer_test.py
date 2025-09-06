@@ -17,7 +17,7 @@ from ataraxis_transport_layer_pc import TransportLayer
 
 @dataclass
 class SampleDataClass:
-    """A simple dataclass used to test 'structure' serialization capability of the TransportLayer class. Has
+    """A simple dataclass used to test the 'structure' serialization capability of the TransportLayer class. Has
      to use numpy arrays and scalars as field types to support serialization.
 
     Attributes:
@@ -163,7 +163,7 @@ def test_init_errors() -> None:
             minimum_received_payload_size=invalid_min_size,
         )
 
-    # Maximum transmitted payload size exceeds microcontroller's buffer size - 8:
+    # Maximum transmitted payload size exceeds the microcontroller's buffer size - 8:
     mc_buffer = 56
     max_payload = 254
     message = (
@@ -370,7 +370,7 @@ def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffe
     assert protocol.available  # Should be True since data is now available for reception
     assert protocol.receive_data()
     assert protocol.bytes_in_reception_buffer == len(expected_buffer)
-    # Verifies that received serialized payload matches the transmitted one
+    # Verifies that the received serialized payload matches the transmitted one
     assert np.array_equal(previous_buffer[:current_index], protocol.reception_buffer[:current_index])
 
     # Step 4: Reads and verifies each data item
@@ -409,7 +409,7 @@ def test_receive_bytes_available(protocol) -> None:
     test cases.
     """
     # _bytes_available() is designed to receive data broken into chunks. This functionality is hard to test indirectly
-    # without using two instances of TransportLayer class. Instead, this method directly verifies that functionality
+    # without using two instances of the TransportLayer class. Instead, this method directly verifies that functionality
     # by simulating receiving the data in chunks.
 
     # Reuses the payload from the test_receive_data_errors()
@@ -545,7 +545,7 @@ def test_write_data_errors(protocol) -> None:
 
 
 def test_receive_data_errors(protocol):
-    """Verifies the error handling behavior of TransportLayer class receive_data() method."""
+    """Verifies the error handling behavior of the TransportLayer class receive_data () method."""
     # Generates a test payload and uses TransportLayer internal methods to encode, checksum, and assemble the
     # data packet around the payload. This simulates the steps typically taken as part of the send_data() method
     # runtime.
@@ -557,8 +557,9 @@ def test_receive_data_errors(protocol):
     test_data = np.concatenate((preamble, packet, checksum), axis=0)
 
     # Also generates a buffer that does not have a start byte to test errors associated with handling communication
-    # line noise
-    empty_buffer = np.random.randint(low=0, high=128, dtype=np.uint8, size=20)  # Will never be 129 (START byte value)
+    # line noise:
+    # Will never be 129 (START byte value)
+    empty_buffer = np.random.default_rng().integers(low=0, high=128, dtype=np.uint8, size=20)
 
     # CODE 101. A buffer without a start byte is interpreted as a noise-filled buffer. Since start-byte-associated
     # errors are disabled, the receive_data() method should return False, but should not raise an error.
@@ -713,7 +714,7 @@ def test_receive_data_errors(protocol):
 
 
 def test_send_data_errors(protocol):
-    """Verifies the error handling behavior of TransportLayer class send_data() method."""
+    """Verifies the error handling behavior of the TransportLayer class send_data () method."""
     # Tests calling send_data() with an empty transmission_buffer.
     message = (
         f"Failed to encode the payload using COBS scheme. The size of the input payload "

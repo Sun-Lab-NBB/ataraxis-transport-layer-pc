@@ -1,19 +1,6 @@
-"""This module contains the low-level helper classes that support the runtime of TransportLayer class methods.
+"""This module contains the low-level helper classes that support the runtime of TransportLayer class methods."""
 
-This module includes the CRCProcessor and COBSProcessor classes used to serialize and deserialize transmitted payloads
-and SerialMock class used to test the TransportLayer class.
-
-All methods of CRCProcessor and COBSProcessor classes are implemented using Numba and Numpy to optimize runtime
-execution speed. This allows compiling the classes to machine-code whenever they are first called by any TransportLayer
-class and achieves execution speeds that are at least 5 times as fast as the equivalent pure-python implementation.
-For user convenience, these classes are wrapped into pure-python API, which adds a minor overhead, but simplifies
-working with the wrapped classes.
-
-The SerialMock class is a pure-python class whose main job is to 'overload' the methods of the pySerial's Serial
-class, so that TransportLayer can be tested without a properly configured Microcontroller. It has no
-practical use outside of this specific role.
-"""
-
+from enum import IntEnum
 from typing import Any
 
 from numba import uint8, uint16, uint32  # type: ignore
@@ -23,46 +10,58 @@ from numba.experimental import jitclass  # type: ignore
 from ataraxis_base_utilities import console
 
 
+class COBSStatusCode(IntEnum):
+    """Maps integer status codes for COBS processor operations to human-readable names."""
+
+    STANDBY = 11
+    """Initial state for the COBS processor."""
+    PAYLOAD_TOO_SMALL_ERROR = 12
+    """The input payload array size was below the minimum allowed size during encoding."""
+    PAYLOAD_TOO_LARGE_ERROR = 13
+    """The input payload array size was above the maximum allowed size during encoding."""
+    INVALID_PAYLOAD_DATATYPE_ERROR = 14
+    """The input payload array datatype was not valid for the encoding method (not uint8)."""
+    PAYLOAD_ENCODED = 15
+    """Payload was successfully encoded (converted to a packet)."""
+    PACKET_TOO_SMALL_ERROR = 16
+    """The input packet array size was below the minimum allowed size during decoding."""
+    PACKET_TOO_LARGE_ERROR = 17
+    """The input packet array size was above the maximum allowed size during decoding."""
+    DELIMITER_NOT_FOUND_ERROR = 18
+    """The decoder method did not encounter an unencoded delimiter value while attempting to decode a packet."""
+    DELIMITER_FOUND_TOO_EARLY_ERROR = 19
+    """The decoder method encountered the unencoded delimiter before reaching the end of the packet."""
+    INVALID_PACKET_DATATYPE_ERROR = 20
+    """The input packet array datatype was not valid for the decoder method (not uint8)."""
+    PAYLOAD_DECODED = 21
+    """Packet was successfully decoded into payload."""
+
+
 class _COBSProcessor:  # pragma: no cover
     """Provides methods for encoding and decoding data using the Consistent Overhead Byte Stuffing (COBS) scheme.
 
     This class is intended to be initialized through Numba's 'jitclass' function. The intended way to do so is through
-    first initializing a COBSProcessor (no underscore) class and then accessing the jit-compiled core through the
-    'processor' property. Initializing this class directly will not have the tangible performance benefits offered by
-    the jit-compiled class.
+    first initializing the wrapper COBSProcessor class and then accessing the jit-compiled core through the 'processor'
+    property. Initializing this class directly will not have the tangible performance benefits offered by the
+    jit-compiled class.
 
     Notes:
         See the original paper for the details on COBS methodology and specific data packet layouts:
         S. Cheshire and M. Baker, "Consistent overhead byte stuffing," in IEEE/ACM Transactions on Networking, vol. 7,
         no. 2, pp. 159-172, April 1999, doi: 10.1109/90.769765.
 
-        To support error-handling, the class returns fixed byte error-codes. Available error codes can be obtained
-        via class attributes. Each method returns the status (success or error) code by setting the class 'status'
+        To support error-handling, class methods return fixed byte error-codes. All error codes are stored in the
+        COBSStatusCode enumeration. Each method returns the status (success or error) code by setting the class 'status'
         attribute to the latest runtime code.
 
     Attributes:
         status: Tracks the latest method runtime status byte-code.
-        standby: The integer code used during class initialization (before any method is called).
         maximum_payload_size: The maximum size of the payload, in bytes. Due to COBS, cannot exceed 254 bytes.
         minimum_payload_size: The minimum size of the payload, in bytes. No algorithmic minimum enforced, but
             does not make sense to have it below 1 byte.
         maximum_packet_size: The maximum size of the packet, in bytes. Due to COBS, it cannot exceed 256 bytes
             (254 payload bytes + 1 overhead + 1 delimiter byte).
         minimum_packet_size: The minimum size of the packet, in bytes. Due to COBS cannot be below 3 bytes.
-        payload_too_small_error: The input payload array size was below the min_payload_size during encoding.
-        payload_too_large_error: The input payload array size was above the max_payload_size during encoding.
-        invalid_payload_datatype_error: The input payload array datatype was not valid for the encoding
-            method (not uint8).
-        payload_encoded: Payload was successfully encoded (into a packet).
-        packet_too_small_error: The input packet array size was below the min_packet_size during decoding.
-        packet_too_large_error: The input packet array size was above the max_packet_size during decoding.
-        delimiter_not_found_error: The decoder method did not encounter an unencoded delimiter during its
-            runtime.
-        delimiter_found_too_early_error: The decoder method encountered the unencoded delimiter before reaching
-            the end of the packet.
-        invalid_packet_datatype_error: The input packet array datatype was not valid for the decoder method
-            (not uint8).
-        payload_decoded: Packet was successfully decoded into payload.
     """
 
     def __init__(self) -> None:
@@ -72,46 +71,27 @@ class _COBSProcessor:  # pragma: no cover
         self.maximum_packet_size: int = 256
         self.minimum_packet_size: int = 3
 
-        # Status codes. Follow a similar approach to TransportLayer class implemented in ataraxis-micro-controller
-        # library, where the codes are unique across the entire library and stay in the range of 11 to 50.
-        self.standby: int = 11
-        self.payload_too_small_error: int = 12
-        self.payload_too_large_error: int = 13
-        self.invalid_payload_datatype_error: int = 14
-        self.payload_encoded: int = 15
-        self.packet_too_small_error: int = 16
-        self.packet_too_large_error: int = 17
-        self.delimiter_not_found_error: int = 18
-        self.delimiter_found_too_early_error: int = 19
-        self.invalid_packet_datatype_error: int = 20
-        self.payload_decoded: int = 21
-
-        self.status: int = self.standby  # Initializes to standby
+        self.status: int = COBSStatusCode.STANDBY  # Initializes to standby
 
     def encode_payload(self, payload: NDArray[np.uint8], delimiter: np.uint8 = np.uint8(0)) -> NDArray[np.uint8]:
-        """Encodes the input payload into a transmittable packet using COBS scheme.
-
-        Eliminates all instances of the delimiter value from the payload by replacing each with the distance to the
-        next consecutive instance or, if no more instances are discovered, to the end of the payload. Next, prepends an
-        overhead byte value to the beginning of the payload. The overhead byte stores the distance to the first
-        instance of the (eliminated) delimiter value or the end of the payload. Finally, appends an unencoded
-        delimiter byte value to the end of the payload to mark the end of the packet.
+        """Encodes the input payload into a transmittable packet using the COBS scheme.
 
         Args:
-            payload: The numpy array that stores the payload to be encoded using COBS scheme. Has to use uint8
-                datatype and be between 1 and 254 bytes in length.
-            delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter.
+            payload: The numpy array that stores the payload to be encoded using COBS scheme. The payload has to be
+                between 1 and 254 bytes in length.
+            delimiter: The value that is used as the packet delimiter. It is recommended to use the value '0' for
+                maximum security.
 
         Returns:
-            The packet uint8 numpy array encoded using COBS scheme, if the method succeeds or an empty
-            uninitialized numpy array otherwise. Sets the class status to the method runtime status code.
+            The packet numpy array encoded using the COBS scheme, if the method succeeds. An empty
+            uninitialized numpy array otherwise.
         """
         # Saves payload size to a separate variable
         size = payload.size
 
         # Prevents execution if the packet is too small. It is meaningless to send empty packets.
         if size < self.minimum_payload_size:
-            self.status = self.payload_too_small_error
+            self.status = COBSStatusCode.PAYLOAD_TOO_SMALL_ERROR
             return np.empty(0, dtype=payload.dtype)
 
         # Prevents execution if the payload is too large. Due to using byte-streams and COBS encoding, the
@@ -119,13 +99,13 @@ class _COBSProcessor:  # pragma: no cover
         # distance to the end of the packet. 254 bytes is the maximum size that still fits that requirement once
         # overhead and delimiter are added to the payload.
         if size > self.maximum_payload_size:
-            self.status = self.payload_too_large_error
+            self.status = COBSStatusCode.PAYLOAD_TOO_LARGE_ERROR
             return np.empty(0, dtype=payload.dtype)
 
         # Ensures that the input payload uses uint8 datatype. Since the library uses byte-streams for
         # communication, this is an important prerequisite.
         if payload.dtype is not np.dtype(np.uint8):
-            self.status = self.invalid_payload_datatype_error
+            self.status = COBSStatusCode.INVALID_PAYLOAD_DATATYPE_ERROR
             return np.empty(0, dtype=payload.dtype)
 
         # Initializes the output array, uses payload size + 2 as size to make space for the overhead and
@@ -140,8 +120,8 @@ class _COBSProcessor:  # pragma: no cover
 
         # Iterates over the payload in reverse and replaces every instance of the delimiter value inside the
         # payload with the distance to the next delimiter value (or the value added to the end of the payload).
-        # This process ensures that the delimiter value is only found at the end of the packet and, if delimiter
-        # is not 0, potentially also as the overhead byte value. This encodes the payload using COBS scheme.
+        # This process ensures that the delimiter value is only found at the end of the packet and, if the delimiter
+        # is not 0, potentially also as the overhead byte value. This encodes the payload using the COBS scheme.
         for i in range(size - 1, -1, -1):  # Loops over every index of the payload
             if payload[i] == delimiter:
                 # If any of the payload values match the delimiter value, replaces that value in the packet with
@@ -161,29 +141,20 @@ class _COBSProcessor:  # pragma: no cover
         packet[0] = next_delimiter_position
 
         # Returns the encoded packet array to caller
-        self.status = self.payload_encoded
+        self.status = COBSStatusCode.PAYLOAD_ENCODED
         return packet
 
     def decode_payload(self, packet: NDArray[np.uint8], delimiter: np.uint8 = np.uint8(0)) -> NDArray[np.uint8]:
         """Decodes the COBS-encoded payload from the input packet.
 
-        Traverses the input packet by jumping between encoded delimiter values and restoring them to the original value.
-        Removes the overhead and the delimiter bytes once the payload has been decoded. This method doubles-up as packet
-        corruption detector. Specifically, it expects that the input packet always ends with the unencoded delimiter
-        and that there are no unencoded delimiter occurrences amongst the traversed variables. Any deviation from this
-        expectation is interpreted as packet corruption.
-
         Args:
-            packet: The numpy array that stores COBS-encoded packet. The array should be using uint8 datatype
-                and has to be entirely filled with the packet data. That means that the first index (0) should
-                store the overhead byte and the last valid index of the packet should store the unencoded
-                delimiter. The packet should be between 3 and 256 bytes in length.
-            delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter. It is used to
-                optimize the decoding flow and to verify the unencoded delimiter at the end of the packet.
+            packet: The numpy array that stores COBS-encoded packet.
+            delimiter: The value that is used as the packet delimiter. It is used to optimize the decoding flow and to
+                verify the unencoded delimiter at the end of the packet.
 
         Returns:
-            The payload uint8 numpy array decoded from the packet if the method succeeds or an empty
-            uninitialized numpy array otherwise. Sets the class status to the method runtime status code.
+            The payload numpy array decoded from the packet if the method succeeds. An empty uninitialized numpy array
+            otherwise.
         """
         # noinspection DuplicatedCode
         size = packet.size  # Extracts packet size for the checks below
@@ -196,20 +167,20 @@ class _COBSProcessor:  # pragma: no cover
         # space for the overhead byte, one payload byte and the delimiter byte (3 bytes).
         # noinspection DuplicatedCode
         if size < self.minimum_packet_size:
-            self.status = self.packet_too_small_error
+            self.status = COBSStatusCode.PACKET_TOO_SMALL_ERROR
             return np.empty(0, dtype=packet.dtype)
 
         # Also prevents execution if the size of the packet is too large. The maximum size is enforced due to
         # how the COBS encoding works, as it requires having at most 255 bytes between the overhead byte and the
         # end of the packet.
         if size > self.maximum_packet_size:
-            self.status = self.packet_too_large_error
+            self.status = COBSStatusCode.PACKET_TOO_LARGE_ERROR
             return np.empty(0, dtype=packet.dtype)
 
         # Ensures that the input packet uses uint8 datatype. Since the library uses byte-streams for
         # communication, this is an important prerequisite.
         if packet.dtype is not np.dtype(np.uint8):
-            self.status = self.invalid_packet_datatype_error
+            self.status = COBSStatusCode.INVALID_PACKET_DATATYPE_ERROR
             return np.empty(0, dtype=packet.dtype)
 
         # Tracks the currently evaluated variable's index in the packet array. Initializes to 0 (overhead byte
@@ -233,12 +204,12 @@ class _COBSProcessor:  # pragma: no cover
                 if read_index == size - 1:
                     # If the delimiter is found at the end of the packet, extracts and returns the decoded
                     # packet to the caller.
-                    self.status = self.payload_decoded
+                    self.status = COBSStatusCode.PAYLOAD_DECODED
                     return packet[1:-1]
                 # If the delimiter is encountered before reaching the end of the packet, this indicates that
                 # the packet was corrupted during transmission and the CRC-check failed to recognize the
                 # data corruption. In this case, returns an error code.
-                self.status = self.delimiter_found_too_early_error
+                self.status = COBSStatusCode.DELIMITER_FOUND_TOO_EARLY_ERROR
                 return np.empty(0, dtype=packet.dtype)
 
             # If the read_index pointed value is not an unencoded delimiter, first extracts the value and saves
@@ -252,26 +223,16 @@ class _COBSProcessor:  # pragma: no cover
         # If this point is reached, that means that the method did not encounter an unencoded delimiter before
         # reaching the end of the packet. While the reasons for this are numerous, overall that means that the
         # packet is malformed and the data is corrupted, so returns an error code.
-        self.status = self.delimiter_not_found_error
+        self.status = COBSStatusCode.DELIMITER_NOT_FOUND_ERROR
         return np.empty(0, dtype=packet.dtype)
 
 
 class COBSProcessor:
-    """Wraps a jit-compiled _COBSProcessor class that provides methods for encoding and decoding data using the
-    Consistent Overhead Byte Stuffing (COBS) scheme.
+    """Exposes a pure-python API for encoding and decoding data using the Consistent Overhead Byte Stuffing (COBS)
+    scheme.
 
-    This class functions as a wrapper that provides a consistent Python API for the internal instance of a
-    jit-compiled _COBSProcessor class. This allows achieving python-like experience when using the class, while
-    simultaneously benefiting from fast compiled code generated through numba jit-optimization. The wrapper
-    automatically converts internal class runtime status codes into exception error messages where appropriate to
-    notify users about runtime errors.
-
-    Notes:
-        For the maximum execution speed, you can access the private methods directly via the 'processor' property,
-        although this is highly discouraged.
-
-        See the API documentation for the _COBSProcessor class for more details about the COBS encoding and decoding
-        methodology.
+    This class wraps a JIT-compiled COBS processor implementation, combining the convenience of a pure-python API with
+    the speed of the C-compiled processing code.
 
     Attributes:
         _processor: Stores the jit-compiled _COBSProcessor class, which carries out all computations.
@@ -283,25 +244,14 @@ class COBSProcessor:
         # instantiated with the jitclass function.
         cobs_spec = [
             ("status", uint8),
-            ("standby", uint8),
             ("maximum_payload_size", uint8),
             ("minimum_payload_size", uint8),
             ("maximum_packet_size", uint16),
             ("minimum_packet_size", uint8),
-            ("payload_too_small_error", uint8),
-            ("payload_too_large_error", uint8),
-            ("invalid_payload_datatype_error", uint8),
-            ("payload_encoded", uint8),
-            ("packet_too_small_error", uint8),
-            ("packet_too_large_error", uint8),
-            ("delimiter_not_found_error", uint8),
-            ("delimiter_found_too_early_error", uint8),
-            ("invalid_packet_datatype_error", uint8),
-            ("payload_decoded", uint8),
         ]
 
-        # Instantiates the jit class and saves it to wrapper class attribute. Developer hint: when used as function,
-        # jitclass returns an uninitialized compiled object, so initializing is crucial here.
+        # Instantiates the jit class and saves it to the wrapper class attribute. Developer hint: when used as a
+        # function, jitclass returns an uninitialized compiled object, so initializing is crucial here.
         self._processor: _COBSProcessor = jitclass(cls_or_spec=_COBSProcessor, spec=cobs_spec)()
 
     def __repr__(self) -> str:
@@ -321,12 +271,12 @@ class COBSProcessor:
         The encoding produces the following packet structure: [Overhead] ... [COBS Encoded Payload] ... [Delimiter].
 
         Args:
-            payload: The numpy array that stores the payload to be encoded using COBS scheme. Has to use uint8
-                datatype and be between 1 and 254 bytes in length.
-            delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter.
+            payload: The numpy array that stores the payload to be encoded using COBS scheme. Has to be between 1 and
+                254 bytes in length.
+            delimiter: The value that is used as the packet delimiter.
 
         Returns:
-            The packet uint8 numpy array encoded using COBS scheme.
+            The numpy array that stores the serialized packet encoded using the COBS scheme.
 
         Raises:
             TypeError: If the payload or delimiter arguments are not of the correct numpy datatype.
@@ -360,21 +310,17 @@ class COBSProcessor:
     def _resolve_encoding_status(self, payload: NDArray[np.uint8]) -> None:
         """Resolves the status of the encode_payload() method runtime.
 
-        If the status was not successful, raises the appropriate error message.
+        If the status indicates that the runtime failed, raises the appropriate error message.
 
         Args:
             payload: The payload that was passed to the encoding method.
-
-        Raises:
-            ValueError: If input payload parameters were not valid.
-            RuntimeError: If the status code returned by the encoder method is not one of the expected values.
         """
         # Success code, verification is complete
-        if self._processor.status == self._processor.payload_encoded:
+        if self._processor.status == COBSStatusCode.PAYLOAD_ENCODED:
             return
 
         # Payload too small
-        if self._processor.status == self._processor.payload_too_small_error:
+        if self._processor.status == COBSStatusCode.PAYLOAD_TOO_SMALL_ERROR:
             message = (
                 f"Failed to encode the payload using COBS scheme. The size of the input payload "
                 f"({payload.size}) is too small. A minimum size of {self._processor.minimum_payload_size} elements "
@@ -383,7 +329,7 @@ class COBSProcessor:
             console.error(message, error=ValueError)
 
         # Payload too large
-        elif self._processor.status == self._processor.payload_too_large_error:
+        elif self._processor.status == COBSStatusCode.PAYLOAD_TOO_LARGE_ERROR:
             message = (
                 f"Failed to encode the payload using COBS scheme. The size of the input payload ({payload.size}) is "
                 f"too large. A maximum size of {self._processor.maximum_payload_size} elements (bytes) is required. "
@@ -392,7 +338,7 @@ class COBSProcessor:
             console.error(message, error=ValueError)
 
         # Invalid payload datatype
-        elif self._processor.status == self._processor.invalid_payload_datatype_error:
+        elif self._processor.status == COBSStatusCode.INVALID_PAYLOAD_DATATYPE_ERROR:
             message = (
                 f"Failed to encode the payload using COBS scheme. The datatype of the input payload "
                 f"({payload.dtype}) is not supported. Only uint8 (byte) numpy arrays are currently supported as "
@@ -414,18 +360,14 @@ class COBSProcessor:
         [Overhead] ... [COBS Encoded Payload] ... [Delimiter].
 
         Args:
-            packet: The numpy array that stores COBS-encoded packet. The array should be using uint8 datatype and has to
-                be entirely filled with the packet data. The first index (0) should store the overhead byte, and the
-                last valid index of the packet should store the unencoded delimiter. The packet should be between 3 and
-                256 bytes in length.
-            delimiter: The numpy uint8 value (0 through 255) that is used as the packet delimiter. This input is used to
-                optimize the decoding flow and to verify the unencoded delimiter at the end of the packet.
+            packet: The numpy array that stores COBS-encoded packet.
+            delimiter: The value that is used as the packet delimiter.
 
         Returns:
-            The payload uint8 numpy array decoded from the packet.
+            The numpy array that stores the payload decoded from the packet.
 
         Raises:
-            TypeError: If the packet or delimiter arguments are not of a correct numpy datatype.
+            TypeError: If the packet or delimiter arguments are not of the correct numpy datatype.
             ValueError: If decoding failed for any reason.
         """
         # Prevents using the method for unsupported input types
@@ -455,22 +397,17 @@ class COBSProcessor:
     def _resolve_decoding_status(self, packet: NDArray[np.uint8]) -> None:
         """Resolves the status of the decode_payload() method runtime.
 
-        If the status was not successful, raises the appropriate error message.
+        If the status indicates that the runtime failed, raises the appropriate error message.
 
         Args:
             packet: The packet array that was passed to the decoding method.
-
-        Raises:
-            ValueError: If the parameters of the input packet are not valid. This includes the case of the packet being
-                corrupted.
-            RuntimeError: If the status code returned by the decoder method is not one of the expected values.
         """
         # Runtime successful, verification is complete
-        if self._processor.status == self._processor.payload_decoded:
+        if self._processor.status == COBSStatusCode.PAYLOAD_DECODED:
             return
 
         # Packet too small
-        if self._processor.status == self._processor.packet_too_small_error:
+        if self._processor.status == COBSStatusCode.PACKET_TOO_SMALL_ERROR:
             message = (
                 f"Failed to decode payload using COBS scheme. The size of the input packet ({packet.size}) is too "
                 f"small. A minimum size of {self._processor.minimum_packet_size} elements (bytes) is required. "
@@ -479,7 +416,7 @@ class COBSProcessor:
             console.error(message, error=ValueError)
 
         # Packet too large
-        elif self._processor.status == self._processor.packet_too_large_error:
+        elif self._processor.status == COBSStatusCode.PACKET_TOO_LARGE_ERROR:
             message = (
                 f"Failed to decode payload using COBS scheme. The size of the input packet ({packet.size}) is too "
                 f"large. A maximum size of {self._processor.maximum_packet_size} elements (bytes) is required. "
@@ -488,7 +425,7 @@ class COBSProcessor:
             console.error(message, error=ValueError)
 
         # Invalid packet datatype
-        elif self._processor.status == self._processor.invalid_packet_datatype_error:
+        elif self._processor.status == COBSStatusCode.INVALID_PACKET_DATATYPE_ERROR:
             message = (
                 f"Failed to decode payload using COBS scheme. The datatype of the input packet ({packet.dtype}) is "
                 f"not supported. Only uint8 (byte) numpy arrays are currently supported as packet inputs. "
@@ -496,9 +433,9 @@ class COBSProcessor:
             )
             console.error(message, error=ValueError)
 
-        # Delimiter isn't found at the end of the packet or 'jumping' does not point at the end of teh packet. Indicates
+        # Delimiter isn't found at the end of the packet or 'jumping' does not point at the end of the packet. Indicates
         # packet corruption.
-        elif self._processor.status == self._processor.delimiter_not_found_error:
+        elif self._processor.status == COBSStatusCode.DELIMITER_NOT_FOUND_ERROR:
             message = (
                 f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter "
                 f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
@@ -508,7 +445,7 @@ class COBSProcessor:
             console.error(message, error=ValueError)
 
         # Delimiter encountered before reaching the end of the packet. Indicates packet corruption.
-        elif self._processor.status == self._processor.delimiter_found_too_early_error:
+        elif self._processor.status == COBSStatusCode.DELIMITER_FOUND_TOO_EARLY_ERROR:
             message = (
                 f"Failed to decode payload using COBS scheme. Found unencoded delimiter before reaching the end of "
                 f"the packet. Packet is likely corrupted. CODE: {self._processor.status}."
@@ -524,13 +461,24 @@ class COBSProcessor:
 
     @property
     def processor(self) -> _COBSProcessor:
-        """Returns the jit-compiled _COBSProcessor class instance.
+        """Returns the jit-compiled cobs processor class instance.
 
-        This accessor represents a convenient way of unwrapping the jit-compiled class, so that its methods can be
-        used directly. This is helpful for using them from other jit-methods or to bypass the overhead of error
-        checking.
+        This accessor allows external methods to directly interface with the JIT-compiled class, bypassing the Python
+        wrapper.
         """
         return self._processor
+
+
+class CRCStatusCode(IntEnum):
+    """Maps integer status codes for CRC processor operations to human-readable names."""
+
+    STANDBY = 51
+    CALCULATE_CHECKSUM_BUFFER_DATATYPE_ERROR = 52
+    CHECKSUM_CALCULATED = 53
+    CHECKSUM_CONVERTED_TO_BYTES = 54
+    CONVERT_CHECKSUM_INVALID_BUFFER_DATATYPE_ERROR = 55
+    CONVERT_CHECKSUM_INVALID_BUFFER_SIZE_ERROR = 56
+    CHECKSUM_CONVERTED_TO_INTEGER = 57
 
 
 class _CRCProcessor:  # pragma: no cover
@@ -577,7 +525,7 @@ class _CRCProcessor:  # pragma: no cover
 
     Args:
         polynomial: The polynomial used to generate the CRC lookup table. Can be provided as a HEX number
-            (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16 and uint32 datatypes are
+            (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32 datatypes are
             supported.
         initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
             This value depends on the chosen polynomial algorithm and should use the same datatype as the polynomial
@@ -598,6 +546,7 @@ class _CRCProcessor:  # pragma: no cover
         # Resolves the crc_type and polynomial size based on the input polynomial. Makes use of the recently added
         # dtype comparison support
         crc_type: type[np.unsignedinteger[Any]]
+        # noinspection PyTypeChecker
         if isinstance(polynomial, uint8):
             crc_type = np.uint8
             polynomial_size = np.uint8(1)
@@ -640,8 +589,8 @@ class _CRCProcessor:  # pragma: no cover
 
         Notes:
             While error runtimes always return value 0, any 0-value returned by this method is potentially a valid
-            value. To determine if the method runtime was successful, use 'status' class attribute. The returned value
-            is not meaningful until it is verified using the status code!
+            value. To determine if the method runtime was successful, use the 'status' class attribute. The returned
+            value is not meaningful until it is verified using the status code!
 
         Args:
             buffer: The uint8 numpy array that stores the data to be checksummed.
@@ -663,7 +612,7 @@ class _CRCProcessor:  # pragma: no cover
 
         # Loops over each byte inside the buffer and iteratively calculates CRC checksum for the buffer
         for byte in buffer:
-            # Calculates the index to retrieve from CRC table. To do so, combines the high byte of the CRC
+            # Calculates the index to retrieve from the CRC table. To do so, combines the high byte of the CRC
             # checksum with the (possibly) modified (corrupted) data_byte using bitwise XOR.
             table_index = (crc_checksum >> (8 * (self.crc_byte_length - 1))) ^ byte
 
@@ -715,7 +664,7 @@ class _CRCProcessor:  # pragma: no cover
 
         Notes:
             While error runtimes always return 0, any 0-value returned by this method is potentially a valid
-            value. To determine if the method runtime was successful or failed, use 'status' class attribute.
+            value. To determine if the method runtime was successful or failed, use the 'status' class attribute.
             The returned value is not meaningful until it is verified using the status code!
 
         Returns:
@@ -837,7 +786,7 @@ class CRCProcessor:
     the integrity of transferred data packets.
 
     This class functions as a wrapper that provides a consistent Python API for the internal instance of a
-    jit-compiled _CRCProcessor class. This allows achieving python-like experience when using the class while
+    jit-compiled _CRCProcessor class. This allows achieving a python-like experience when using the class while
     simultaneously benefiting from fast compiled code generated through numba jit-optimization. The wrapper
     automatically converts internal class runtime status codes into exception error messages where appropriate to
     notify users about runtime errors.
@@ -853,7 +802,7 @@ class CRCProcessor:
 
     Args:
         polynomial: The polynomial used to generate the CRC lookup table. Can be provided as a HEX number
-            (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16 and uint32 datatypes are
+            (e.g., 0x1021). Currently only non-reversed polynomials of numpy uint8, uint16, and uint32 datatypes are
             supported.
         initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
             This value depends on the chosen polynomial algorithm and should use the same datatype as the polynomial
@@ -873,9 +822,9 @@ class CRCProcessor:
         final_xor_value: np.uint8 | np.uint16 | np.uint32,
     ) -> None:
         # Ensures that all inputs use the same valid type. Note, uint64 is currently not supported primarily to maintain
-        # implicit compatibility with older AVR boards that do not support uint64 type. That said, both the C++ and this
-        # Python codebase are written in a way that will natively scale to uint 64 if this static guard is modified to
-        # allow it.
+        # implicit compatibility with older AVR boards that do not support the uint64 type. That said, both the C++ and
+        # this Python codebase are written in a way that will natively scale to uint 64 if this static guard is
+        # modified to allow it.
         if not isinstance(polynomial, (np.uint8, np.uint16, np.uint32)):
             message = (
                 f"Unable to initialize the CRCProcessor class. A numpy uint8, uint16 or uint32 scalar expected as "
@@ -1181,21 +1130,16 @@ class CRCProcessor:
 
 
 class SerialMock:
-    """Mocks the behavior of PySerial's `Serial` class for testing purposes.
+    """Mocks the behavior of the PySerial's `Serial` class for testing purposes.
 
-    This class provides a mock implementation of the `Serial` class, enabling unit tests for TransportLayer class
-    without requiring an actual hardware connection. It replicates the core functionalities of PySerial's `Serial`
-    class that are relevant to testing, such as reading and writing data, while simplifying the overall behavior.
-
-    Key differences from `Serial`:
-        The `tx_buffer` and `rx_buffer` attributes are exposed directly, allowing test cases to verify the state of
-        transmitted and received data. The class only supports methods used by `TransportLayer` for testing, and
-        omits other methods not relevant to this specific use case.
+    This class provides a mock implementation of the `Serial` class, enabling unit tests for the TransportLayer class
+    without a hardware connection. It replicates the core functionalities of the PySerial's `Serial` class that are
+    relevant for testing, such as reading and writing data.
 
     Attributes:
-        is_open: Boolean flag indicating if the mock serial port is open.
-        tx_buffer: Byte buffer that stores transmitted data.
-        rx_buffer: Byte buffer that stores received data.
+        is_open: A flag indicating if the mock serial port is open.
+        tx_buffer: A byte buffer that stores transmitted data.
+        rx_buffer: A byte buffer that stores received data.
     """
 
     def __init__(self) -> None:
@@ -1221,66 +1165,71 @@ class SerialMock:
         """Writes data to the `tx_buffer`.
 
         Args:
-            data: Data to be written to the output buffer. Must be a bytes' object.
+            data: The serialized data to be written to the output buffer.
 
         Raises:
             TypeError: If `data` is not a bytes' object.
-            Exception: If the mock serial port is not open.
+            RuntimeError: If the mock serial port is not open.
         """
         if self.is_open:
             if isinstance(data, bytes):
                 self.tx_buffer += data
             else:
-                raise TypeError("Data must be a 'bytes' object")
+                message = "Data must be a 'bytes' object"
+                raise TypeError(message)
         else:
-            raise Exception("Mock serial port is not open")
+            message = "Mock serial port is not open"
+            raise RuntimeError(message)
 
     def read(self, size: int = 1) -> bytes:
         """Reads a specified number of bytes from the `rx_buffer`.
 
         Args:
-            size: Number of bytes to read from the input buffer. Defaults to 1.
+            size: The number of bytes to read from the input buffer.
 
         Returns:
             A bytes' object containing the requested data from the `rx_buffer`.
 
         Raises:
-            Exception: If the mock serial port is not open.
+            RuntimeError: If the mock serial port is not open.
         """
         if self.is_open:
             data = self.rx_buffer[:size]
             self.rx_buffer = self.rx_buffer[size:]
             return data
-        raise Exception("Mock serial port is not open")
+        message = "Mock serial port is not open"
+        raise RuntimeError(message)
 
     def reset_input_buffer(self) -> None:
-        """Clears the `rx_buffer`.
+        """Clears the `rx_buffer` attribute.
 
         Raises:
-            Exception: If the mock serial port is not open.
+            RuntimeError: If the mock serial port is not open.
         """
         if self.is_open:
             self.rx_buffer = b""
         else:
-            raise Exception("Mock serial port is not open")
+            message = "Mock serial port is not open"
+            raise RuntimeError(message)
 
     def reset_output_buffer(self) -> None:
-        """Clears the `tx_buffer`.
+        """Clears the `tx_buffer` attribute.
 
         Raises:
-            Exception: If the mock serial port is not open.
+            RuntimeError: If the mock serial port is not open.
         """
         if self.is_open:
             self.tx_buffer = b""
         else:
-            raise Exception("Mock serial port is not open")
+            message = "Mock serial port is not open"
+            raise RuntimeError(message)
 
     @property
     def in_waiting(self) -> int:
-        """Returns the number of bytes available in the `rx_buffer`."""
+        """Returns the number of bytes stored in the `rx_buffer`."""
         return len(self.rx_buffer)
 
     @property
     def out_waiting(self) -> int:
-        """Returns the number of bytes available in the `tx_buffer`."""
+        """Returns the number of bytes stored in the `tx_buffer`."""
         return len(self.tx_buffer)
