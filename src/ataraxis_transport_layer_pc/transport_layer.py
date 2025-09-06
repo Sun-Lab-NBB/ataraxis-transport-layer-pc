@@ -435,7 +435,6 @@ class TransportLayer:
     @property
     def available(self) -> bool:
         """Returns True if enough bytes are available from the serial port to justify attempting to receive a packet."""
-
         # in_waiting is twice as fast as using the read() method. The 'true' outcome of this check is capped at the
         # minimum packet size to minimize the chance of having to call read() more than once. The method counts the
         # bytes available for reading and left over from previous packet parsing operations.

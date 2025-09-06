@@ -549,9 +549,9 @@ class _CRCProcessor:  # pragma: no cover
             polynomial_size = np.uint8(4)
 
         # Local variables
-        self.polynomial: crc_type = polynomial  # type: ignore[valid-type]
-        self.initial_crc_value: crc_type = initial_crc_value  # type: ignore[valid-type]
-        self.final_xor_value: crc_type = final_xor_value  # type: ignore[valid-type]
+        self.polynomial: np.uint8 | np.uint16 | np.uint32 = polynomial
+        self.initial_crc_value: np.uint8 | np.uint16 | np.uint32 = initial_crc_value
+        self.final_xor_value: np.uint8 | np.uint16 | np.uint32 = final_xor_value
         self.crc_byte_length: np.uint8 = polynomial_size
         self.crc_table = np.empty(256, dtype=crc_type)  # Initializes to empty for efficiency
 
@@ -600,7 +600,7 @@ class _CRCProcessor:  # pragma: no cover
         # polynomial 0x1021 has it set to 0x0000 (0), so it is actually not used. Other polynomials may require
         # this step, so it is kept here for compatibility reasons. The exact algorithmic purpose of the XOR
         # depends on the specific polynomial used.
-        crc_checksum ^= self.final_xor_value  # type: ignore[operator]
+        crc_checksum ^= self.final_xor_value
 
         # Sets the status to indicate runtime success and returns calculated checksum to the caller.
         self.status = CRCStatusCode.CHECKSUM_CALCULATED
