@@ -6,7 +6,7 @@ API documentation: https://ataraxis-transport-layer-pc-api-docs.netlify.app/.
 Authors: Ivan Kondratyev (Inkaros), Katlynn Ryu.
 """
 
-from .helper_modules import CRCProcessor, COBSProcessor, CRCStatusCode, COBSStatusCode
+from .helper_modules import CRCProcessor, COBSProcessor
 from .transport_layer import (
     TransportLayer,
     PacketParsingStatus,
@@ -17,9 +17,7 @@ from .transport_layer import (
 
 __all__ = [
     "COBSProcessor",
-    "COBSStatusCode",
     "CRCProcessor",
-    "CRCStatusCode",
     "DataManipulationCodes",
     "PacketParsingStatus",
     "TransportLayer",

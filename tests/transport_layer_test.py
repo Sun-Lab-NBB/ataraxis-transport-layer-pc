@@ -54,7 +54,7 @@ def test_init_and_repr(protocol) -> None:
     representation_string = (
         f"TransportLayer(port & baudrate=MOCKED, polynomial={protocol._crc_processor.polynomial}, "
         f"start_byte={protocol._start_byte}, delimiter_byte={protocol._delimiter_byte}, timeout={protocol._timeout} "
-        f"us, maximum_tx_payload_size = {protocol._max_tx_payload_size}, "
+        f"us, maximum_tx_payload_size={protocol._max_tx_payload_size}, "
         f"maximum_rx_payload_size={protocol._max_rx_payload_size})"
     )
     assert repr(protocol) == representation_string
@@ -416,7 +416,7 @@ def test_receive_bytes_available(protocol) -> None:
     test_payload: NDArray[np.uint8] = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
     preamble = np.array([129, 10], dtype=np.uint8)
     packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
-    checksum = protocol._crc_processor.calculate_crc_checksum(packet)
+    checksum = protocol._crc_processor.calculate_checksum(packet)
     checksum = protocol._crc_processor.serialize_checksum(checksum)
     test_data = np.concatenate((preamble, packet, checksum), dtype=np.uint8, axis=0)
 
@@ -552,7 +552,7 @@ def test_receive_data_errors(protocol):
     test_payload: NDArray[np.uint8] = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
     preamble = np.array([129, 10], dtype=np.uint8)
     packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
-    checksum = protocol._crc_processor.calculate_crc_checksum(packet)
+    checksum = protocol._crc_processor.calculate_checksum(packet)
     checksum = protocol._crc_processor.serialize_checksum(checksum)
     test_data = np.concatenate((preamble, packet, checksum), axis=0)
 
@@ -697,7 +697,7 @@ def test_receive_data_errors(protocol):
     # the CRC fails to detect the corruption. However, the corruption can break COBS-encoding, which COBS will detect.
     packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
     packet[5] = 2  # Replaces one of the COBS_encoded values with a different value, introducing a COBS error
-    checksum = protocol._crc_processor.calculate_crc_checksum(packet)
+    checksum = protocol._crc_processor.calculate_checksum(packet)
     checksum = protocol._crc_processor.serialize_checksum(checksum)
     test_data = np.concatenate((preamble, packet, checksum), axis=0)
 
