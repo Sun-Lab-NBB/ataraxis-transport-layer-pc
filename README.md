@@ -19,25 +19,22 @@ ___
 This is the Python implementation of the ataraxis-transport-layer (AXTL) library, designed to run on 
 host-computers (PCs). It provides methods for bidirectionally communicating with microcontrollers running the 
 [ataraxis-transport-layer-mc](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) companion library written in 
-C++. The library abstracts the steps necessary for data transmission, such as serializing data into payloads, 
-packing the payloads into packets, and transmitting packets as byte-streams. It also abstracts the reverse sequence of 
-steps necessary to verify and decode the payload from the packet received as a stream of bytes. The library is 
-specifically designed to support time-critical applications, such as scientific experiments, and achieves microsecond
-communication speeds for high-end microcontroller-PC configurations.
+C++. The library abstracts all steps necessary to safely send and receive data over the USB and UART communication
+interfaces. It is specifically designed to support time-critical applications, such as scientific experiments, and can 
+achieve microsecond communication speeds for modern microcontroller-PC hardware combinations.
 
 ___
 
 ## Features
 
 - Supports Windows, Linux, and macOS.
-- Uses Consistent Overhead Byte Stuffing (COBS) to encode payloads.
-- Supports Cyclic Redundancy Check (CRC) 8-, 16- and 32-bit polynomials to ensure data integrity during transmission.
-- Uses Just-in-Time (JIT) compilation and NumPy to optimize data processing and communication speeds.
-- Wraps JIT-compiled methods into pure-python interfaces to improve the user experience.
-- Has a [companion](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) libray written in C++ to simplify 
-  PC-MicroController communication.
+- Uses Consistent Overhead Byte Stuffing (COBS) to encode payloads during transmission.
+- Supports Circular Redundancy Check (CRC) 8-, 16- and 32-bit polynomials to ensure data integrity during transmission.
+- Allows fine-tuning all library components to support a wide range of application contexts.
+- Uses Just-in-Time (JIT) compilation and NumPy to optimized runtime performance in time-critical applications.
+- Has a [companion](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) microcontroller libray written in C++.
 - GPL 3 License.
-- 
+
 ___
 
 ## Table of Contents
@@ -51,12 +48,16 @@ ___
 - [Authors](#authors)
 - [License](#license)
 - [Acknowledgements](#Acknowledgments)
+
 ___
 
 ## Dependencies
 
-All library dependencies are installed automatically by all supported installation methods 
-(see [Installation](#installation) section).
+For users, all library dependencies are installed automatically by all supported installation methods 
+(see the [Installation](#installation) section).
+
+***Note!*** Developers should see the [Developers](#developers) section for information on installing additional 
+development dependencies.
 
 ___
 
@@ -64,17 +65,18 @@ ___
 
 ### Source
 
-Note, installation from source is ***highly discouraged*** for everyone who is not an active project developer.
-Developers should see the [Developers](#Developers) section for more details on installing from source.
+Note, installation from source is ***highly discouraged*** for anyone who is not an active project developer.
 
-1. Download this repository to the local machine using the preferred method, such as Git-cloning. Use one
-   of the stable releases from [GitHub](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc/releases).
-2. Unpack the downloaded zip and note the path to the binary wheel (`.whl`) file contained in the archive.
-3. Run ```python -m pip install WHEEL_PATH```, replacing the 'WHEEL_PATH' with the path to the wheel file, to install 
-   the wheel into the active python environment.
+1. Download this repository to the local machine using the preferred method, such as git-cloning. Use one of the 
+   [stable releases](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc/releases) that include precompiled 
+   binary and source code distribution (sdist) wheels.
+2. If the downloaded distribution is stored as a compressed archive, unpack it using the appropriate decompression tool.
+3. ```cd``` to the root directory of the prepared project distribution.
+4. Run ```python -m pip install .``` to install the project. Alternatively, if using a distribution with precompiled
+   binaries, use ```python -m pip install WHEEL_PATH```, replacing 'WHEEL_PATH' with the path to the wheel file.
 
 ### pip
-Use the following command to install the library using pip: ```pip install ataraxis-transport-layer-pc```.
+Use the following command to install the library using pip: ```pip install ataraxis-transport-layer-pc```
 
 ___
 
@@ -200,60 +202,53 @@ ___
 
 ## Developers
 
-This section provides installation, dependency, and build-system instructions for the developers that want to
-modify the source code of this library. Additionally, it contains instructions for recreating the conda environments
-that were used during development from the included .yml files.
+This section provides installation, dependency, and build-system instructions for project developers.
 
-### Installing the library
+### Installing the Project
+
+***Note!*** This installation method requires **mamba version 2.3.2 or above**. Currently, all Sun lab automation 
+pipelines require that mamba is installed through the [miniforge3](https://github.com/conda-forge/miniforge) installer.
 
 1. Download this repository to the local machine using the preferred method, such as git-cloning.
-2. ```cd``` to the root directory of the project.
-3. Install development dependencies. There are multiple ways of satisfying this requirement:
-    1. **_Preferred Method:_** Use mamba, uv, or pip to install
-       [tox](https://tox.wiki/en/latest/user_guide.html) or use an environment that has it installed and
-       call ```tox -e import``` to automatically import the os-specific development environment included with the
-       project source code. Alternatively, use ```tox -e create``` to create the environment from scratch and 
-       automatically install the necessary dependencies using the pyproject.toml file.
-    2. Run ```python -m pip install .'[dev]'``` command to install development dependencies and the library using 
-       pip. Some platforms may require a slightly modified version of this command: 
-       ```python -m pip install .[dev]```.
+2. If the downloaded distribution is stored as a compressed archive, unpack it using the appropriate decompression tool.
+3. ```cd``` to the root directory of the prepared project distribution.
+4. Install the core Sun lab development dependencies into the ***base*** mamba environment via the 
+   ```mamba install tox uv tox-uv``` command.
+5. Use the ```tox -e create``` command to create the project-specific development environment followed by 
+   ```tox -e install``` command to install the project into that environment as a library.
 
 ### Additional Dependencies
 
-In addition to installing the development environment, separately install the following dependencies:
+In addition to installing the project and all user dependencies, install the following dependencies:
 
-1. [Python](https://www.python.org/downloads/) distributions, one for each version supported by the project. 
-   Currently, this library supports the three latest stable versions. The easiest way to get tox to work as intended is 
-   to have separate python distributions. Alternatively, use [pyenv](https://github.com/pyenv/pyenv) to install multiple
-   Python versions. This is needed for the 'test' task to work as intended.
+1. [Python](https://www.python.org/downloads/) distributions, one for each version supported by the developed project. 
+   Currently, this library supports the three latest stable versions. It is recommended to use a tool like 
+   [pyenv](https://github.com/pyenv/pyenv) to install and manage the required versions.
 
 ### Development Automation
 
 This project comes with a fully configured set of automation pipelines implemented using 
-[tox](https://tox.wiki/en/latest/user_guide.html). Check [tox.ini file](tox.ini) for details about 
+[tox](https://tox.wiki/en/latest/user_guide.html). Check the [tox.ini file](tox.ini) for details about the 
 available pipelines and their implementation. Alternatively, call ```tox list``` from the root directory of the project
 to see the list of available tasks.
 
-**Note!** All commits to this project have to successfully complete the ```tox``` task before being pushed to GitHub. 
-To minimize the runtime duration for this task, use ```tox --parallel```.
-
-For more information, check the 'Usage' section of the 
-[ataraxis-automation project](https://github.com/Sun-Lab-NBB/ataraxis-automation#Usage) documentation.
+**Note!** All pull requests for this project have to successfully complete the ```tox``` task before being merged. 
+To expedite the task’s runtime, use the ```tox --parallel``` command to run some tasks in-parallel.
 
 ### Automation Troubleshooting
 
 Many packages used in 'tox' automation pipelines (uv, mypy, ruff) and 'tox' itself may experience runtime failures. In 
-most cases, this is related to their caching behavior. Despite a considerable effort to disable caching behavior known 
-to be problematic, in some cases it cannot or should not be eliminated. If an unintelligible error is encountered with 
-any of the automation components, deleting the corresponding .cache (.tox, .ruff_cache, .mypy_cache, etc.) manually  
-or via a CLI command is very likely to fix the issue.
+most cases, this is related to their caching behavior. If an unintelligible error is encountered with 
+any of the automation components, deleting the corresponding .cache (.tox, .ruff_cache, .mypy_cache, etc.) manually 
+or via a CLI command typically solves the issue.
 
 ___
 
 ## Versioning
 
-This project uses [semantic versioning](https://semver.org/). For the versions available, see the 
-[tags on this repository](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc/tags).
+This project uses [semantic versioning](https://semver.org/). See the 
+[tags on this repository](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc/tags) for the available project 
+releases.
 
 ---
 
@@ -276,9 +271,8 @@ ___
   development of this library.
 - [PowerBroker2](https://github.com/PowerBroker2) and his 
   [pySerialTransfer](https://github.com/PowerBroker2/pySerialTransfer) for inspiring this library and serving as an 
-  example and benchmark. Check pySerialTransfer as a good alternative with non-overlapping functionality that may be 
-  better for your project.
-- The creators of all other projects used in our development automation pipelines and source code 
-  [see pyproject.toml](pyproject.toml).
+  example and benchmark. Check pySerialTransfer project as a good alternative to this library with a non-overlapping 
+  set of features.
+- The creators of all other dependencies and projects listed in the [pyproject.toml](pyproject.toml) file.
 
 ---
