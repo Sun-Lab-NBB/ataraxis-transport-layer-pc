@@ -1,7 +1,7 @@
 # ataraxis-transport-layer-pc
 
 A Python library that provides methods for establishing and maintaining bidirectional communication with Arduino and 
-Teensy microcontrollers over USB or UART serial interfaces.
+Teensy microcontrollers over USB and UART serial interfaces.
 
 ![PyPI - Version](https://img.shields.io/pypi/v/ataraxis-transport-layer-pc)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ataraxis-transport-layer-pc)

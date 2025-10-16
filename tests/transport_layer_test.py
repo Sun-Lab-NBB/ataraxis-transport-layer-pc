@@ -34,7 +34,7 @@ class SampleDataClass:
 def protocol() -> TransportLayer:
     """Returns a TransportLayer instance with test mode enabled.
 
-    This asset is used to streamline STL initialization for testing purposes.
+    This asset is used to streamline the class initialization for testing purposes.
     """
     protocol = TransportLayer(
         port="COM7",
@@ -86,42 +86,6 @@ def test_init_errors() -> None:
     with pytest.raises(ValueError, match=error_format(message)):
         TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, baudrate=baudrate)
 
-    # Invalid start_byte argument
-    start_byte = 300
-    message = (
-        f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
-        f"'start_byte' argument, but encountered {start_byte} of type {type(start_byte).__name__}."
-    )
-    with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, start_byte=start_byte)
-
-    # Invalid delimiter_byte argument
-    delimiter_byte = 300
-    message = (
-        f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 255 for "
-        f"'delimiter_byte' argument, but encountered {delimiter_byte} of type {type(delimiter_byte).__name__}."
-    )
-    with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(
-            port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, delimiter_byte=delimiter_byte
-        )
-
-    # Invalid timeout argument
-    timeout = -5000
-    message = (
-        f"Unable to initialize TransportLayer class. Expected an integer value of 0 or above for "
-        f"'timeout' argument, but encountered {timeout} of type {type(timeout).__name__}."
-    )
-    with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, timeout=timeout)
-
-    # Delimiter and Start byte are the same error
-    message = "Unable to initialize TransportLayer class. The 'start_byte' and 'delimiter_byte' cannot be the same."
-    with pytest.raises(ValueError, match=error_format(message)):
-        TransportLayer(
-            port="COM7", microcontroller_serial_buffer_size=64, baudrate=1000000, start_byte=129, delimiter_byte=129
-        )
-
     # Invalid microcontroller_serial_buffer_size argument
     message = (
         f"Unable to initialize TransportLayer class. Expected a positive integer value for "
@@ -130,56 +94,6 @@ def test_init_errors() -> None:
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         TransportLayer(port="COM7", microcontroller_serial_buffer_size=None, baudrate=1000000)
-
-    # Invalid maximum_transmitted_payload_size argument
-    invalid_max_size = None
-    message = (
-        f"Unable to initialize TransportLayer class. Expected an integer value between 0 and 254 for "
-        f"'maximum_transmitted_payload_size' argument, but encountered {invalid_max_size} "
-        f"of type {type(invalid_max_size).__name__}."
-    )
-    with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
-        TransportLayer(
-            port="COM7",
-            microcontroller_serial_buffer_size=64,
-            baudrate=1000000,
-            maximum_transmitted_payload_size=invalid_max_size,
-        )
-
-    # Invalid minimum_transmitted_payload_size argument
-    invalid_min_size = None
-    message = (
-        f"Unable to initialize TransportLayer class. Expected an integer value between 1 and 254 for "
-        f"'minimum_received_payload_size' argument, but encountered {invalid_min_size} "
-        f"of type {type(invalid_min_size).__name__}."
-    )
-    with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
-        TransportLayer(
-            port="COM7",
-            microcontroller_serial_buffer_size=64,
-            baudrate=1000000,
-            minimum_received_payload_size=invalid_min_size,
-        )
-
-    # Maximum transmitted payload size exceeds the microcontroller's buffer size - 8:
-    mc_buffer = 56
-    max_payload = 254
-    message = (
-        f"Unable to initialize TransportLayer class. After accounting for the maximum possible size of packet "
-        f"service bytes (8), transmitted packets using maximum payload size "
-        f"({max_payload}) will not fit inside the microcontroller's Serial buffer, which "
-        f"only has space for {mc_buffer} bytes."
-    )
-    with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
-        TransportLayer(
-            port="COM7",
-            microcontroller_serial_buffer_size=mc_buffer,
-            baudrate=1000000,
-            maximum_transmitted_payload_size=max_payload,
-        )
 
 
 @pytest.mark.parametrize(
@@ -350,33 +264,27 @@ def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffe
         expected_buffer: Expected buffer state after writing the data
     """
     # Step 1: Writes all data items to the transmission buffer
-    current_index = 0
     for item in data:
-        end_index = protocol.write_data(item, start_index=current_index)
-        current_index = end_index
+        protocol.write_data(item)  # No index tracking needed
 
-    # Verifies buffer state after writing the data
-    assert np.array_equal(protocol.transmission_buffer[:current_index], expected_buffer)
+    # Verifies buffer state after writing
+    assert np.array_equal(protocol.transmission_buffer[: protocol.bytes_in_transmission_buffer], expected_buffer)
     assert protocol.bytes_in_transmission_buffer == len(expected_buffer)
 
-    # Step 2: Sends the data to the SerialMock's transmission buffer
-    previous_buffer = protocol.transmission_buffer  # Saves the current transmission buffer state for Step 3
-    assert protocol.send_data()
-    assert protocol.bytes_in_transmission_buffer == 0  # Buffer should be reset after sending
+    # Step 2: Sends the data
+    protocol.send_data()
+    assert protocol.bytes_in_transmission_buffer == 0
 
-    # Step 3: Simulates reception via copying the data inside the Serial Mock (tx -> rx)
-    assert not protocol.available  # No data should be available until the assignment operation below.
+    # Step 3: Simulates reception
+    assert not protocol.available
     protocol._port.rx_buffer = protocol._port.tx_buffer
-    assert protocol.available  # Should be True since data is now available for reception
+    assert protocol.available
     assert protocol.receive_data()
     assert protocol.bytes_in_reception_buffer == len(expected_buffer)
-    # Verifies that the received serialized payload matches the transmitted one
-    assert np.array_equal(previous_buffer[:current_index], protocol.reception_buffer[:current_index])
 
     # Step 4: Reads and verifies each data item
-    current_index = 0
     for item in data:
-        # Creates the appropriate zero-initialized prototype for reading
+        # Creates appropriate prototypes
         if isinstance(item, np.ndarray):
             prototype = np.zeros_like(item)
         elif isinstance(item, SampleDataClass):
@@ -385,10 +293,9 @@ def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffe
             prototype = type(item)(0)
 
         # Reads the data
-        received_item, end_index = protocol.read_data(prototype, start_index=current_index)
-        current_index = end_index
+        received_item = protocol.read_data(prototype)
 
-        # Verifies the received data matches the original
+        # Verifies the received data
         if isinstance(item, np.ndarray):
             assert np.array_equal(received_item, item)
         elif isinstance(item, SampleDataClass):
@@ -412,13 +319,19 @@ def test_receive_bytes_available(protocol) -> None:
     # without using two instances of the TransportLayer class. Instead, this method directly verifies that functionality
     # by simulating receiving the data in chunks.
 
-    # Reuses the payload from the test_receive_data_errors()
-    test_payload: NDArray[np.uint8] = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
+    test_payload = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
     preamble = np.array([129, 10], dtype=np.uint8)
-    packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
-    checksum = protocol._crc_processor.calculate_checksum(packet)
-    checksum = protocol._crc_processor.serialize_checksum(checksum)
-    test_data = np.concatenate((preamble, packet, checksum), dtype=np.uint8, axis=0)
+
+    # Encodes with COBS
+    packet = protocol._cobs_processor.encode_payload(test_payload)
+
+    # Adds CRC checksum
+    packet_with_crc = np.empty(len(packet) + protocol._crc_processor.crc_byte_length, dtype=np.uint8)
+    packet_with_crc[: len(packet)] = packet
+    protocol._crc_processor.calculate_checksum(packet_with_crc, check=False)
+
+    # Combines all parts
+    test_data = np.concatenate((preamble, packet_with_crc), dtype=np.uint8)
 
     # Breaks the packet into 2 chunks
     chunk_1 = test_data[:8]
@@ -481,9 +394,9 @@ def test_read_data_errors(protocol) -> None:
     large_array = np.empty(shape=300, dtype=np.uint8)
     message = (
         f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
-        f"bytes available to fully fill the object starting at the index {0}. Specifically, given "
-        f"the object size of {large_array.nbytes} bytes, the required payload size is {0 + large_array.nbytes} bytes, "
-        f"but the available size is {protocol.bytes_in_reception_buffer} bytes."
+        f"unconsumed bytes to recreate the object. Specifically, the object requires {large_array.nbytes} "
+        f"bytes, but the available payload size is {protocol.bytes_in_reception_buffer - protocol._consumed_bytes} "
+        f"bytes."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
@@ -549,37 +462,26 @@ def test_receive_data_errors(protocol):
     # Generates a test payload and uses TransportLayer internal methods to encode, checksum, and assemble the
     # data packet around the payload. This simulates the steps typically taken as part of the send_data() method
     # runtime.
-    test_payload: NDArray[np.uint8] = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
+    test_payload = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
     preamble = np.array([129, 10], dtype=np.uint8)
-    packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
-    checksum = protocol._crc_processor.calculate_checksum(packet)
-    checksum = protocol._crc_processor.serialize_checksum(checksum)
-    test_data = np.concatenate((preamble, packet, checksum), axis=0)
+
+    # Encodes the packet
+    packet = protocol._cobs_processor.encode_payload(test_payload)
+    packet_with_crc = np.empty(len(packet) + protocol._crc_processor.crc_byte_length, dtype=np.uint8)
+    packet_with_crc[: len(packet)] = packet
+    protocol._crc_processor.calculate_checksum(packet_with_crc, check=False)
+    test_data = np.concatenate((preamble, packet_with_crc), dtype=np.uint8)
 
     # Also generates a buffer that does not have a start byte to test errors associated with handling communication
     # line noise:
-    # Will never be 129 (START byte value)
     empty_buffer = np.random.default_rng().integers(low=0, high=128, dtype=np.uint8, size=20)
 
-    # CODE 101. A buffer without a start byte is interpreted as a noise-filled buffer. Since start-byte-associated
+    # A buffer without a start byte is interpreted as a noise-filled buffer. Since start-byte-associated
     # errors are disabled, the receive_data() method should return False, but should not raise an error.
     protocol._port.rx_buffer = empty_buffer.tobytes()
     assert not protocol.receive_data()
 
-    # CODE 102. Receiving a message with start byte errors turned on and without start byte raises a RuntimeError
-    protocol._allow_start_byte_errors = True
-    protocol._port.rx_buffer = empty_buffer.tobytes()  # Since rx_buffer is consumed each call, it needs to be reset
-    message = (
-        "Failed to parse the incoming serial packet data. Unable to find the start_byte "
-        "(129) value among the bytes stored inside the serial buffer."
-    )
-    with pytest.raises(
-        RuntimeError,
-        match=error_format(message),
-    ):
-        protocol.receive_data()
-
-    # CODE 0. Packet size byte not received in time.
+    # Packet size byte wasn't received in time.
     empty_buffer[-1] = 129  # Sets the last byte of the empty_buffer to stat byte value.
     protocol._port.rx_buffer = empty_buffer.tobytes()
     message = (
@@ -596,13 +498,13 @@ def test_receive_data_errors(protocol):
     protocol._leftover_bytes = b""  # Clears leftover bytes to prevent it from accumulating unprocessed bytes.
     empty_buffer[-1] = 129
 
-    # CODE 2. Packet reception stalls while waiting for additional payload bytes.
+    # Packet reception stalls while waiting for additional payload bytes.
     test_data[1] = 110  # Sets packet size to a number that exceeds the number of available bytes
     test_data[13] = 1  # Replaces the original delimiter byte to avoid Delimiter Byte Found Too Early error
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
         "Failed to parse the incoming serial packet data. The byte number 14 out of 113 "
-        "was not received in time (20000 microseconds), following the reception of the previous byte. "
+        "was not received in time (10000 microseconds), following the reception of the previous byte. "
         "Packet reception staled."
     )
     with pytest.raises(
@@ -616,7 +518,7 @@ def test_receive_data_errors(protocol):
     # Does not reset the packet size, as the test below also modifies this value
     test_data[13] = 0
 
-    # CODE 103. The received message contains an invalid payload_size value (second value of the packet)
+    # The received message contains an invalid payload_size value (second value of the packet)
     test_data[1] = 255  # Replaces the packet size with an invalid value
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
@@ -635,7 +537,7 @@ def test_receive_data_errors(protocol):
     protocol._leftover_bytes = b""
     test_data[1] = 10
 
-    # CODE 104. Delimiter byte value found before reaching the end of the encoded packet.
+    # Delimiter byte value found before reaching the end of the encoded packet.
     test_data[-3] = 0  # Inserts the delimiter 1 position before the actual delimiter position
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
@@ -654,7 +556,7 @@ def test_receive_data_errors(protocol):
     protocol._leftover_bytes = b""
     test_data[-3] = 10  # This was the initial value at index -4
 
-    # CODE 105. Delimiter byte not found at the end of the encoded packet.
+    # Delimiter byte wasn't found at the end of the encoded packet.
     test_data[-2] = 10  # Overrides the delimiter
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
@@ -673,19 +575,14 @@ def test_receive_data_errors(protocol):
     test_data[-2] = 0  # Restores the delimiter
 
     # CRC Checksum verification error.
-    # Translates the real and invalid checksums into hexadecimals used in error messages
-    expected_checksum = hex(protocol._crc_processor.deserialize_checksum(test_data[-1:].copy()))  # to Hexadecimal
-    received_checksum = hex(protocol._crc_processor.deserialize_checksum(np.array([0x00], dtype=np.uint8)))
-
     # Replaces the checksum in the test_data packet with an invalid checksum
     test_data[-1:] = np.array([0x00], dtype=np.uint8)  # Fake checksum
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
-        f"Failed to verify the received serial packet's integrity. The checksum value transmitted with the packet "
-        f"{received_checksum} did not match the expected value based on the packet data {expected_checksum}. This "
-        f"indicates the packet was corrupted during transmission or reception."
+        f"Failed to process the received serial packet. This indicates that the packet was corrupted during "
+        f"transmission or reception."
     )
-    with pytest.raises(ValueError, match=error_format(message)):
+    with pytest.raises(RuntimeError, match=error_format(message)):
         protocol.receive_data()
 
     # Cleans up and resets the test buffer
@@ -695,33 +592,18 @@ def test_receive_data_errors(protocol):
     # For this test, creates a special test payload by introducing an error after COBS-encoding the payload, but
     # before generating the CRC checksum. This simulates for a very rare case where the packet corruption is so major
     # the CRC fails to detect the corruption. However, the corruption can break COBS-encoding, which COBS will detect.
-    packet = protocol._cobs_processor.encode_payload(payload=test_payload, delimiter=np.uint8(0))
+    packet = protocol._cobs_processor.encode_payload(payload=test_payload)
     packet[5] = 2  # Replaces one of the COBS_encoded values with a different value, introducing a COBS error
-    checksum = protocol._crc_processor.calculate_checksum(packet)
-    checksum = protocol._crc_processor.serialize_checksum(checksum)
-    test_data = np.concatenate((preamble, packet, checksum), axis=0)
+    packet_with_crc = np.empty(len(packet) + protocol._crc_processor.crc_byte_length, dtype=np.uint8)
+    packet_with_crc[: len(packet)] = packet
+    protocol._crc_processor.calculate_checksum(packet_with_crc, check=False)
+    test_data = np.concatenate((preamble, packet_with_crc), dtype=np.uint8)
 
     # Checks the COBS error
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
-        f"Failed to decode payload using COBS scheme. The decoder did not find the unencoded delimiter "
-        f"at the end of the packet. This is either because the end-value is not an unencoded delimiter or "
-        f"because the decoding does not end at the final index of the packet. Packet is likely "
-        f"corrupted. CODE: {18}."
+        f"Failed to process the received serial packet. This indicates that the packet was corrupted during "
+        f"transmission or reception."
     )
-    with pytest.raises(ValueError, match=error_format(message)):
+    with pytest.raises(RuntimeError, match=error_format(message)):
         protocol.receive_data()
-
-
-def test_send_data_errors(protocol):
-    """Verifies the error handling behavior of the TransportLayer class send_data () method."""
-    # Tests calling send_data() with an empty transmission_buffer.
-    message = (
-        f"Failed to encode the payload using COBS scheme. The size of the input payload "
-        f"({0}) is too small. A minimum size of 1 elements (bytes) is required. CODE: 12."
-    )
-    with pytest.raises(
-        ValueError,
-        match=error_format(message),
-    ):
-        protocol.send_data()
