@@ -13,7 +13,7 @@ dependencies:
   - filelock=3.20.0=pyhd8ed1ab_0
   - ld_impl_linux-64=2.44=ha97dd6f_2
   - libexpat=2.7.1=hecca717_0
-  - libffi=3.4.6=h2dba641_1
+  - libffi=3.5.2=h9ec8514_0
   - libgcc=15.2.0=h767d61c_7
   - libgomp=15.2.0=h767d61c_7
   - liblzma=5.8.1=hb9d3cd8_2
@@ -29,8 +29,8 @@ dependencies:
   - platformdirs=4.5.0=pyhcf101f3_0
   - pluggy=1.6.0=pyhd8ed1ab_0
   - pyproject-api=1.10.0=pyhcf101f3_0
-  - python=3.14.0=h5989046_101_cp314
-  - python-uv=0.9.2=pyhcf101f3_0
+  - python=3.14.0=h32b2ec7_102_cp314
+  - python-uv=0.9.5=pyhcf101f3_0
   - python_abi=3.14=8_cp314
   - readline=8.2=h8c095d6_2
   - tk=8.6.13=noxft_hd72426e_102
@@ -39,7 +39,7 @@ dependencies:
   - tox-uv=1.29.0=pyhd8ed1ab_0
   - typing_extensions=4.15.0=pyhcf101f3_0
   - tzdata=2025b=h78e105d_0
-  - uv=0.9.2=h30787bc_0
+  - uv=0.9.5=h30787bc_0
   - virtualenv=20.35.3=pyhd8ed1ab_0
   - zstd=1.5.7=hb8e6e7a_2
 
