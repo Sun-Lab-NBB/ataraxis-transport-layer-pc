@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "ataraxis-transport-layer-pc"
-version = "2.0.0"
+version = "3.0.0rc1"
 description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB and UART serial interfaces."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -44,8 +44,8 @@ classifiers = [
 # Runtime project dependencies.
 dependencies = [
     "numpy>=2,<3",
-    "numba>=0.63.0b1",
-    "llvmlite>=0.46.0.dev",
+    "numba>=0.63.0b1,<1",
+    "llvmlite>=0.46.0.dev,<1",
     "intel-cmplr-lib-rt>=2025,<2026; platform_system != 'Darwin'",
     "pyserial>=3,<4",
     "ataraxis-time>=5,<6",
