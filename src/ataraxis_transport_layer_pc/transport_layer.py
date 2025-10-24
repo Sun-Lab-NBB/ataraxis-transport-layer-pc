@@ -11,7 +11,7 @@ import numpy as np
 from serial import Serial
 from numpy.typing import NDArray
 from serial.tools import list_ports
-from ataraxis_time import PrecisionTimer
+from ataraxis_time import PrecisionTimer, TimerPrecisions
 from ataraxis_base_utilities import console
 from serial.tools.list_ports_common import ListPortInfo
 
@@ -253,7 +253,7 @@ class TransportLayer:
 
         # On very fast CPUs, the timer can be sub-microsecond precise. On older systems, this may not necessarily hold.
         # Either way, microsecond precision is safe for most target systems.
-        self._timer = PrecisionTimer("us")
+        self._timer = PrecisionTimer(TimerPrecisions.MICROSECOND)
 
         # Initializes serial packet attributes and casts all to numpy types.
         self._start_byte: np.uint8 = np.uint8(129)
