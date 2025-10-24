@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "ataraxis-transport-layer-pc"
-version = "3.0.0rc4"
+version = "3.0.0rc5"
 description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB and UART serial interfaces."
 readme = "README.md"
 license = { file = "LICENSE" }

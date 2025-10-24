@@ -362,6 +362,7 @@ class TransportLayer:
     def reset_reception_buffer(self) -> None:
         """Resets the instance's reception buffer, discarding any stored data."""
         self._bytes_in_reception_buffer = 0
+        self._consumed_bytes = 0
 
     def write_data(
         self,
