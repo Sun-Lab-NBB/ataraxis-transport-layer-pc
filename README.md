@@ -31,7 +31,7 @@ ___
 - Uses Consistent Overhead Byte Stuffing (COBS) to encode payloads during transmission.
 - Supports Circular Redundancy Check (CRC) 8-, 16- and 32-bit polynomials to ensure data integrity during transmission.
 - Allows fine-tuning all library components to support a wide range of application contexts.
-- Uses Just-in-Time (JIT) compilation and NumPy to optimized runtime performance in time-critical applications.
+- Uses Just-in-Time (JIT) compilation and NumPy to optimize runtime performance in time-critical applications.
 - Has a [companion](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) microcontroller libray written in C++.
 - GPL 3 License.
 

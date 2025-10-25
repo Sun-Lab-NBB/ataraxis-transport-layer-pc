@@ -214,7 +214,7 @@ class TransportLayer:
         # Tracks whether the serial port is open. This is used solely to avoid a __del__ error during testing.
         self._opened: bool = False
 
-        # Verifies that input arguments are valid. Does not check polynomial parameters, that is offloaded to the
+        # Verifies that input arguments are valid. Does not check polynomial parameters that are offloaded to the
         # CRCProcessor class.
         if not isinstance(port, str):
             message = (
@@ -415,7 +415,7 @@ class TransportLayer:
                 # Calls the write method recursively onto the value of each field
                 data_value = getattr(data_object, field.name)
 
-                # If this call fails, it will raise an error that wll terminate this loop early
+                # If this call fails, it raises an error that terminates this loop early
                 self.write_data(data_object=data_value)
 
             # The recurrent write_data calls resolve errors and update the payload size trackers as necessary, so if
@@ -464,7 +464,7 @@ class TransportLayer:
             )  # pragma: no cover
             console.error(message=message, error=RuntimeError)  # pragma: no cover
 
-            # This fallback is to appease MyPy and will neve rbe reached
+            # This fallback is to appease MyPy and cannot be reached
             raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
@@ -574,7 +574,7 @@ class TransportLayer:
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
-            ValueError: If the payload stored inside the reception buffer does not have the enough unconsumed bytes
+            ValueError: If the payload stored inside the reception buffer does not have enough unconsumed bytes
                 available to reconstruct the requested object. If the input object is a multidimensional or empty
                 numpy array.
         """
@@ -625,7 +625,7 @@ class TransportLayer:
             # the method runs without errors, returns to caller without further processing
             return data_object
 
-        # If the input value is not a valid numpy scalar, an array using a valid scalar datatype or a python dataclass,
+        # If the input value is not a valid numpy scalar, an array using a valid scalar datatype or a python dataclass
         # raises TypeError exception.
         else:
             message = (
@@ -696,8 +696,8 @@ class TransportLayer:
             A two-element tuple. The first element is the numpy array that uses the datatype and size derived from the
             input array_object, which holds the extracted data. The second element is the index that immediately follows
             the last index that was read during method runtime to support chained read calls. If method runtime fails,
-            returns an empty numpy array as the first element and one of the TransportLayerStatus values as the second
-            element.
+            returns an empty numpy array as the first element and one of the TransportLayerStatus values as the
+            second element.
         """
         # Calculates the end index for the read operation. This is based on how many bytes are required to represent the
         # object and the start_index for the read operation.
@@ -764,7 +764,7 @@ class TransportLayer:
             payload_buffer: The buffer that stores the payload to be encoded into a packet.
             cobs_processor: The inner _COBSProcessor jitclass instance.
             crc_processor: The inner _CRCProcessor jitclass instance.
-            payload_size: The number of bytes that makes up the payload.
+            payload_size: The number of bytes that make up the payload.
             start_byte: The byte-value used to mark the beginning of each transmitted packet.
 
         Returns:

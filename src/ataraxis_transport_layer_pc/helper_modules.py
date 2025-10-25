@@ -49,7 +49,7 @@ class _COBSProcessor:  # pragma: no cover
         """Encodes the input payload into a transmittable packet using the COBS scheme.
 
         Args:
-            payload: The payload to be encoded using COBS scheme.
+            payload: The payload to be encoded using the COBS scheme.
 
         Returns:
             The packet encoded using the COBS scheme.
