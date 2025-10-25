@@ -83,7 +83,7 @@ ___
 ## Usage
 
 ### TransportLayer
-The TransportLayer class provides the API for bidirectional communication over USB or UART serial interfaces. It 
+The TransportLayer class provides the API for bidirectional communication over USB and UART serial interfaces. It 
 ensures proper encoding and decoding of data packets using the Consistent Overhead Byte Stuffing (COBS) 
 scheme and ensures transmitted packet integrity through the use of the Cyclic Redundancy Check (CRC) checksums.
 
@@ -116,7 +116,7 @@ sequence.
 
 #### Baudrates
 For microcontrollers using the UART interface, it is essential to set the baudrate to a value supported by the 
-microcontroller’s hardware. Usually, manufactures provide a list of supported baudrates for each 
+microcontroller’s hardware. Usually, microcontroller manufacturers provide a list of supported baudrates for each 
 microcontroller. Additionally, the baudrate values used in the microcontroller and PC versions of the library have to 
 match. If any of these conditions are not satisfied, the connection can become unstable, leading to the corruption of 
 exchanged data packets.
