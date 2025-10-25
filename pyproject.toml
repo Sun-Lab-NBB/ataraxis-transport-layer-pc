@@ -1,16 +1,16 @@
 # Defines the build system used for the project.
 [build-system]
-requires = ["hatchling>=1,<2"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 # Project metdata section. Provides the genral ID information about the project.
 [project]
 name = "ataraxis-transport-layer-pc"
-version = "2.0.0"
-description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB or UART serial interfaces."
+version = "3.0.0"
+description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB and UART serial interfaces."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11, <3.14"
+requires-python = ">=3.12,<3.14"
 authors = [
     { name = "Ivan Kondratyev" },
     { name = "Katlynn Ryu" },
@@ -30,9 +30,9 @@ classifiers = [
     # License
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     # Supported Python Versions
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    # "Programming Language :: Python :: 3.14", # Waiting on numba to support 3.14
     # Supported OS systems
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
@@ -44,11 +44,11 @@ classifiers = [
 # Runtime project dependencies.
 dependencies = [
     "numpy>=2,<3",
-    "numba>=0,<1",
-    "intel-cmplr-lib-rt>=2025,<2026; platform_machine == 'x86_64'",
+    "numba>=0.62.1,<1",
+    "intel-cmplr-lib-rt>=2025,<2026; platform_system != 'Darwin'",
     "pyserial>=3,<4",
-    "ataraxis-time>=3,<4",
-    "ataraxis-base-utilities>=3,<4",
+    "ataraxis-time>=5,<6",
+    "ataraxis-base-utilities>=5,<6",
 ]
 
 [project.urls]
@@ -66,7 +66,7 @@ dev = [
     "tox-uv>=1,<2",
 
     # Development Automation
-    "ataraxis-automation>=6.0.1,<7",
+    "ataraxis-automation>=7,<8",
 
     # Types:
     "types-pyserial>=3,<4",
@@ -89,7 +89,7 @@ packages = ["src/ataraxis_transport_layer_pc", "examples"]
 [tool.ruff]
 line-length = 120         # The Maximum column length is set to 120 for this project.
 indent-width = 4          # Same as black, indents are 4 spaces
-target-version = "py311"  # Targets the lowest supported version of python
+target-version = "py312"  # Targets the lowest supported version of python
 src = ["src"]             # The name of the source directory
 
 # Excludes 'service' .py files, such as the sphinx configuration file from linting.
@@ -100,7 +100,6 @@ lint.select = ["ALL"]
 
 # General ignore directives
 lint.ignore = [
-    "UP038",  # This rule is deprecated.
     "W291",  # Conflicts with docstring formatting
     "ANN401",  # While suboptimal, ANY is a helpful type when used with caution
     "C901",  # Sometimes complex functions are necessary
@@ -208,5 +207,4 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "pass",
-    "\\.\\.\\."
 ]
