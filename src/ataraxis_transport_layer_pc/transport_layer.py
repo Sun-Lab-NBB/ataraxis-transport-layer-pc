@@ -468,7 +468,7 @@ class TransportLayer:
             raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
     def _write_scalar_data(
         target_buffer: NDArray[np.uint8],
         scalar_object: Any,
@@ -506,7 +506,7 @@ class TransportLayer:
         return required_size
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
     def _write_array_data(
         target_buffer: NDArray[np.uint8],
         array_object: NDArray[Any],
@@ -675,7 +675,7 @@ class TransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
     def _read_array_data(
         source_buffer: NDArray[np.uint8],
         array_object: NDArray[Any],
@@ -750,7 +750,7 @@ class TransportLayer:
         self.reset_transmission_buffer()
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
     def _construct_packet(
         payload_buffer: NDArray[np.uint8],
         cobs_processor: _COBSProcessor,
@@ -1082,7 +1082,7 @@ class TransportLayer:
         return False
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
     def _parse_packet(
         unparsed_bytes: NDArray[np.uint8],
         start_byte: np.uint8,
@@ -1292,7 +1292,7 @@ class TransportLayer:
         return TransportLayerStatus.NOT_ENOUGH_CRC_BYTES.value, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
-    @njit(nogil=True, cache=True)  # type: ignore[misc] # pragma: no cover
+    @njit(nogil=True, cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
     # pragma: no cover
     def _process_packet(
         reception_buffer: NDArray[np.uint8],
