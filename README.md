@@ -33,7 +33,7 @@ ___
 - Allows fine-tuning all library components to support a wide range of application contexts.
 - Uses Just-in-Time (JIT) compilation and NumPy to optimize runtime performance in time-critical applications.
 - Has a [companion](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) microcontroller library written in C++.
-- GPL 3 License.
+- Apache 2.0 License.
 
 ___
 
@@ -384,7 +384,7 @@ ___
 
 ## License
 
-This project is licensed under the GPL3 License: see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache 2.0 License: see the [LICENSE](LICENSE) file for details.
 
 ___
 
