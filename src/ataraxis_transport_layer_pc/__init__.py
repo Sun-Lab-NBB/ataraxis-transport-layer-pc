@@ -1,8 +1,9 @@
-"""This library provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy
+"""Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy
 microcontrollers over USB and UART serial interfaces.
 
-See https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc for more details.
-API documentation: https://ataraxis-transport-layer-pc-api-docs.netlify.app/.
+See the `documentation <https://ataraxis-transport-layer-pc-api-docs.netlify.app/>`_ for the description of available
+assets. See the `source code repository <https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc>`_ for more details.
+
 Authors: Ivan Kondratyev (Inkaros), Katlynn Ryu.
 """
 
