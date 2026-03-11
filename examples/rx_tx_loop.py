@@ -1,8 +1,11 @@
-# This example is intended to be sued together with the quickstart loop for the companion library:
-# https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc#quickstart.
-# See https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc for more details.
-# API documentation: https://ataraxis-transport-layer-pc-api-docs.netlify.app/.
-# Authors: Ivan Kondratyev (Inkaros), Katlynn Ryu.
+"""Demonstrates bidirectional serial communication with a microcontroller using TransportLayer.
+
+Intended to be used together with the quickstart loop for the companion library:
+https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc#quickstart.
+See https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc for more details.
+API documentation: https://ataraxis-transport-layer-pc-api-docs.netlify.app/.
+Authors: Ivan Kondratyev (Inkaros), Katlynn Ryu.
+"""
 
 from dataclasses import field, dataclass
 import numpy as np
@@ -37,10 +40,11 @@ test_array = np.zeros(4, dtype=np.uint8)  # [0, 0, 0, 0]
 # While Python does not have C++-like structures, it has dataclasses that fulfill a similar role.
 @dataclass()  # It is important for the class to NOT be frozen!
 class TestStruct:
-    test_flag: np.bool = field(default_factory=lambda: np.bool(True))
+    test_flag: np.bool_ = field(default_factory=lambda: np.bool_(True))
     test_float: np.float32 = field(default_factory=lambda: np.float32(6.66))
 
     def __repr__(self) -> str:
+        """Returns a string representation of the TestStruct instance."""
         return f"TestStruct(test_flag={self.test_flag}, test_float={round(float(self.test_float), ndigits=2)})"
 
 
@@ -91,7 +95,7 @@ if data_received:
 
     # The rest of the data is transmitted without any modifications.
     assert np.array_equal(test_array, np.array([0, 0, 0, 0]))
-    assert test_struct.test_flag == np.bool(True)
+    assert test_struct.test_flag == np.bool_(True)
     assert test_struct.test_float == np.float32(6.66)
 
 # Prints the received data values to the terminal for visual inspection.

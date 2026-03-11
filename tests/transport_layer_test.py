@@ -1,10 +1,7 @@
-"""This file contains the test functions that verify the functionality and error-handling of all
-TransportLayer class methods. Special care is taken to fully test the 4 major methods: write_data(),
-read_data(), send_data(), and receive_data(). You can also use this file if you need more examples on how to use
-class methods.
-"""
+"""Contains tests for classes and methods provided by the transport_layer module."""
 
 from typing import Any
+from unittest.mock import PropertyMock, patch
 from dataclasses import dataclass
 
 import numpy as np
@@ -13,29 +10,22 @@ from numpy.typing import NDArray
 from ataraxis_base_utilities import error_format
 
 from ataraxis_transport_layer_pc import TransportLayer
+from ataraxis_transport_layer_pc.helper_modules import SerialMock
 
 
 @dataclass
 class SampleDataClass:
-    """A simple dataclass used to test the 'structure' serialization capability of the TransportLayer class. Has
-     to use numpy arrays and scalars as field types to support serialization.
+    """Defines a test dataclass for verifying the 'structure' serialization capability of the TransportLayer class."""
 
-    Attributes:
-        uint_value: Any numpy unsigned integer scalar value. Used to test the ability to serialize scalar dataclass
-            fields.
-        uint_array: Any numpy array value. Used to test the ability to serialize numpy array dataclass fields.
-    """
-
-    uint_value: np.unsignedinteger
-    uint_array: np.ndarray
+    uint_value: np.uint8
+    """A numpy unsigned integer scalar value used to test scalar dataclass field serialization."""
+    uint_array: NDArray[np.uint8]
+    """A numpy array value used to test numpy array dataclass field serialization."""
 
 
 @pytest.fixture()
 def protocol() -> TransportLayer:
-    """Returns a TransportLayer instance with test mode enabled.
-
-    This asset is used to streamline the class initialization for testing purposes.
-    """
+    """Creates a TransportLayer instance with test mode enabled for testing."""
     protocol = TransportLayer(
         port="COM7",
         microcontroller_serial_buffer_size=1024,
@@ -245,24 +235,13 @@ def test_init_errors() -> None:
         ),
         # Case 6: Sample Data Class
         (
-            (SampleDataClass(uint_value=np.uint8(50), uint_array=np.array([1, 2, 3], np.uint8)),),
+            (SampleDataClass(uint_value=np.uint8(50), uint_array=np.array([1, 2, 3], dtype=np.uint8)),),
             np.array([50, 1, 2, 3], dtype=np.uint8),
         ),
     ],
 )
 def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffer: NDArray[Any]) -> None:
-    """Verifies the functioning of TransportLayer write_data(), send_data(), receive_data() and read_data()
-    methods.
-
-    This test suite cycles the data through the four major methods used by the class to carry out bidirectional serial
-    communication. Additionally, it tests all supported data types using mark parametrization to efficiently allocate
-    test cases to different cores.
-
-    Args:
-        protocol: The TransportLayer instance to test.
-        data: Tuple containing test data of various types.
-        expected_buffer: Expected buffer state after writing the data
-    """
+    """Verifies the functioning of TransportLayer write_data(), send_data(), receive_data() and read_data() methods."""
     # Step 1: Writes all data items to the transmission buffer
     for item in data:
         protocol.write_data(item)  # No index tracking needed
@@ -352,7 +331,7 @@ def test_receive_bytes_available(protocol) -> None:
 
 
 def test_read_data_errors(protocol) -> None:
-    """Verifies the error handling behavior of TransportLayer read_data() method"""
+    """Verifies the error handling behavior of TransportLayer read_data() method."""
     # Sets the received bytes tracker to 5. The instance interprets this as meaning that it has 5 bytes available for
     # reading inside the reception buffer. This is necessary to trigger the error cases below.
     protocol._bytes_in_reception_buffer = 5
@@ -404,7 +383,7 @@ def test_read_data_errors(protocol) -> None:
 
 
 def test_write_data_errors(protocol) -> None:
-    """Verifies the error handling behavior of TransportLayer write_data() method"""
+    """Verifies the error handling behavior of TransportLayer write_data() method."""
     # Invalid data type
     invalid_data = None
     message = (
@@ -437,7 +416,7 @@ def test_write_data_errors(protocol) -> None:
         "Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with 2 "
         "dimensions as input data_object. At this time, only one-dimensional (flat) arrays are supported."
     )
-    invalid_array: np.ndarray = np.zeros((2, 2), dtype=np.uint8)
+    invalid_array: NDArray[np.uint8] = np.zeros((2, 2), dtype=np.uint8)
     with pytest.raises(ValueError, match=error_format(message)):
         # noinspection PyTypeChecker
         protocol.write_data(invalid_array)
@@ -457,8 +436,8 @@ def test_write_data_errors(protocol) -> None:
         protocol.write_data(large_data)
 
 
-def test_receive_data_errors(protocol):
-    """Verifies the error handling behavior of the TransportLayer class receive_data () method."""
+def test_receive_data_errors(protocol) -> None:
+    """Verifies the error handling behavior of the TransportLayer class receive_data() method."""
     # Generates a test payload and uses TransportLayer internal methods to encode, checksum, and assemble the
     # data packet around the payload. This simulates the steps typically taken as part of the send_data() method
     # runtime.
@@ -607,3 +586,31 @@ def test_receive_data_errors(protocol):
     )
     with pytest.raises(RuntimeError, match=error_format(message)):
         protocol.receive_data()
+
+
+def test_reception_buffer_property(protocol) -> None:
+    """Verifies that the reception_buffer property returns a copy of the internal reception buffer."""
+    buffer = protocol.reception_buffer
+    assert isinstance(buffer, np.ndarray)
+    assert buffer.dtype == np.uint8
+
+
+def test_bytes_available_timeout_loop(protocol) -> None:
+    """Verifies the _bytes_available() timeout loop branch where bytes arrive during the timed wait.
+
+    This test covers the path where leftover bytes and the initial serial port check are both insufficient, but bytes
+    become available during the timeout loop iteration.
+    """
+    # Sets up leftover bytes that are insufficient on their own.
+    protocol._leftover_bytes = b"\x01\x02"
+    # Pre-loads the rx_buffer with bytes for the read() call to consume when the loop branch triggers.
+    protocol._port.rx_buffer = b"\x03\x04\x05"
+
+    # Patches in_waiting to return 0 on the first (pre-loop) call, then 3 on the second (in-loop) call. This simulates
+    # bytes arriving asynchronously between the pre-loop check and the loop iteration.
+    with patch.object(SerialMock, "in_waiting", new_callable=PropertyMock, side_effect=[0, 3]):
+        result = protocol._bytes_available(required_bytes_count=5, timeout=100_000)
+
+    assert result
+    # Verifies that all 5 bytes are now available in leftover_bytes.
+    assert protocol._leftover_bytes == b"\x01\x02\x03\x04\x05"

@@ -1,4 +1,4 @@
-"""Contains tests for classes and methods stored inside the helper_modules module."""
+"""Contains tests for classes and methods provided by the helper_modules module."""
 
 import numpy as np
 import pytest
@@ -36,8 +36,6 @@ def test_cobs_processor_encode_decode(input_buffer, encoded_buffer) -> None:
     """Verifies the functioning of the COBSProcessor's encode_payload() and decode_payload() methods."""
     # Instantiates the tested class
     processor = COBSProcessor()
-    delimiter = np.uint8(0)
-
     # Tests successful payload encoding
     encoded_packet = processor.encode_payload(input_buffer)
     assert encoded_packet.tolist() == encoded_buffer.tolist()
@@ -60,13 +58,15 @@ def test_cobs_processor_repr() -> None:
     assert repr(processor) == message
 
 
-def test_crc_processor_repr():
+def test_crc_processor_repr() -> None:
     """Verifies the __repr__ method of the CRCProcessor class."""
     polynomial = np.uint8(0x07)
     initial_crc_value = np.uint8(0x00)
     final_xor_value = np.uint8(0x00)
 
-    processor = CRCProcessor(polynomial, initial_crc_value, final_xor_value)
+    processor = CRCProcessor(
+        polynomial=polynomial, initial_crc_value=initial_crc_value, final_xor_value=final_xor_value
+    )
 
     expected_repr = (
         f"CRCProcessor(polynomial={hex(processor._processor.polynomial)}, "
@@ -77,7 +77,7 @@ def test_crc_processor_repr():
     assert repr(processor) == expected_repr
 
 
-def test_serial_mock_repr():
+def test_serial_mock_repr() -> None:
     """Verifies the __repr__ method of the SerialMock class."""
     serial_mock = SerialMock()
     expected_repr = "SerialMock(open=False)"
@@ -88,18 +88,16 @@ def test_serial_mock_repr():
     assert repr(serial_mock) == expected_repr
 
 
-def test_cobs_processor_decode_errors():
+def test_cobs_processor_decode_errors() -> None:
     """Verifies the error-handling behavior of the COBSProcessor's decode_payload() method."""
     # Instantiates the tested class
     processor = COBSProcessor()
-    payload = np.array([1, 2, 3, 4, 5], dtype=np.uint8)
-    delimiter = np.uint8(0)
 
     # Tests packet decoder corruption error where an unencoded delimiter (0) is found before reaching the end of the
     # packet (delimiter_found_too_early_error).
     corrupted_packet = np.array([4, 1, 2, 3, 0, 5, 0], dtype=np.uint8)
     message = (
-        "Failed to decode the payload using the COBS scheme as the decoder did not find an unencoded delimiter"
+        "Failed to decode the payload using the COBS scheme as the decoder did not find an unencoded delimiter "
         "at the expected location during the decoding process. Packet is likely corrupted."
     )
     with pytest.raises(ValueError, match=error_format(message)):
@@ -109,14 +107,14 @@ def test_cobs_processor_decode_errors():
     # that matter, at all (delimiter_not_found_error)
     corrupted_packet = np.array([6, 1, 2, 3, 4, 5, 6], dtype=np.uint8)
     message = (
-        "Failed to decode the payload using the COBS scheme as the decoder did not find an unencoded delimiter"
+        "Failed to decode the payload using the COBS scheme as the decoder did not find an unencoded delimiter "
         "at the expected location during the decoding process. Packet is likely corrupted."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet)
 
 
-def test_crc_processor_generate_table_crc_8():
+def test_crc_processor_generate_table_crc_8() -> None:
     """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC8 polynomials."""
     # Defines crc-8 polynomial parameters and test values
     polynomial = np.uint8(0x07)
@@ -392,7 +390,7 @@ def test_crc_processor_generate_table_crc_8():
     assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint8))
 
 
-def test_crc_processor_generate_table_crc_16():
+def test_crc_processor_generate_table_crc_16() -> None:
     """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC16 polynomials."""
     # Defines crc-16 polynomial parameters and test values
     polynomial = np.uint16(0x1021)
@@ -668,7 +666,7 @@ def test_crc_processor_generate_table_crc_16():
     assert np.array_equal(crc_processor.crc_table, np.array(expected_array, dtype=np.uint16))
 
 
-def test_crc_processor_generate_table_crc_32():
+def test_crc_processor_generate_table_crc_32() -> None:
     """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC32 polynomials."""
     # Defines crc-32 polynomial parameters and test values
     polynomial = np.uint32(0x000000AF)
@@ -979,12 +977,18 @@ def test_crc_processor_generate_table_crc_32():
         ),
     ],
 )
-def test_crc_processor(polynomial, initial_crc, final_xor, test_data, expected_checksum, expected_bytes, crc_type):
+def test_crc_processor(
+    polynomial, initial_crc, final_xor, test_data, expected_checksum, expected_bytes, crc_type
+) -> None:
     """Verifies the functioning of the CRCProcessor's calculate_checksum() method for CRC8, CRC16, and CRC32
     polynomials.
     """
     # Instantiates the CRCProcessor with the given parameters
-    crc_processor = CRCProcessor(crc_type(polynomial), crc_type(initial_crc), crc_type(final_xor))
+    crc_processor = CRCProcessor(
+        polynomial=crc_type(polynomial),
+        initial_crc_value=crc_type(initial_crc),
+        final_xor_value=crc_type(final_xor),
+    )
 
     # Creates a buffer with space for the CRC bytes
     # noinspection PyTypeChecker
@@ -1010,20 +1014,24 @@ def test_crc_processor_properties() -> None:
     initial_crc_value = np.uint8(0x00)
     final_xor_value = np.uint8(0x00)
 
-    processor = CRCProcessor(polynomial, initial_crc_value, final_xor_value)
+    processor = CRCProcessor(
+        polynomial=polynomial, initial_crc_value=initial_crc_value, final_xor_value=final_xor_value
+    )
 
     assert processor.polynomial == polynomial
     assert processor.initial_crc_value == initial_crc_value
     assert processor.final_xor_value == final_xor_value
 
 
-def test_crc_processor_errors():
-    """Tests error handling behavior of CRCProcessor's calculate_checksum() method."""
+def test_crc_processor_errors() -> None:
+    """Verifies the error handling behavior of CRCProcessor's calculate_checksum() method."""
     # Instantiates tested class
     polynomial = np.uint16(0x1021)
     initial_crc_value = np.uint16(0xFFFF)
     final_xor_value = np.uint16(0x0000)
-    crc_processor = CRCProcessor(polynomial, initial_crc_value, final_xor_value)
+    crc_processor = CRCProcessor(
+        polynomial=polynomial, initial_crc_value=initial_crc_value, final_xor_value=final_xor_value
+    )
 
     # Tests CRC verification failure
     # First, creates a valid packet with the checksum
@@ -1051,7 +1059,7 @@ def test_crc_processor_errors():
         crc_processor.calculate_checksum(buffer_with_checksum, check=True)
 
 
-def test_serial_mock():
+def test_serial_mock() -> None:
     """Verifies the functioning and error-handling behavior of all SerialMock class methods."""
     # Creates an instance of SerialMock to test
     mock_serial = SerialMock()
@@ -1111,5 +1119,3 @@ def test_serial_mock():
         mock_serial.reset_input_buffer()
     with pytest.raises(Exception):
         mock_serial.reset_output_buffer()
-
-    # Logging Instead of Console Errors
