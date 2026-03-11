@@ -1,15 +1,16 @@
 # Defines the build system used for the project.
 [build-system]
-requires = ["hatchling==1.28.0"]
+requires = ["hatchling>=1,<2"]
 build-backend = "hatchling.build"
 
-# Project metdata section. Provides the genral ID information about the project.
+# Project metadata section. Provides the general ID information about the project.
 [project]
 name = "ataraxis-transport-layer-pc"
-version = "3.1.1"
+version = "4.0.0"
 description = "Provides methods for establishing and maintaining bidirectional communication with Arduino and Teensy microcontrollers over USB and UART serial interfaces."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.15"
 authors = [
     { name = "Ivan Kondratyev" },
@@ -19,7 +20,7 @@ maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
 
-keywords = ["ataraxis", "serial", "communication", "USB", "UART"]
+keywords = ["ataraxis", "sunlab", "serial", "communication", "USB", "UART"]
 
 classifiers = [
     # Development status
@@ -27,38 +28,43 @@ classifiers = [
     # Intended audience and project topic
     "Intended Audience :: Developers",
     "Topic :: Communications",
-    # License
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     # Supported Python Versions
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    # Supported OS systems
+    # Supported Operating Systems
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS :: MacOS X",
     # Typing
-    "Typing :: Typed"
+    "Typing :: Typed",
 ]
 
 # Runtime project dependencies.
 dependencies = [
+    # Numerical Computing
     "numpy>=2,<3",
     "numba>=0.63,<1",
-    "intel-cmplr-lib-rt>=2025,<2026; platform_system != 'Darwin'",
+    "intel-cmplr-lib-rt>=2025,<2026; sys_platform != 'darwin'",
+
+    # Serial Communication
     "pyserial>=3,<4",
-    "ataraxis-time>=5,<6",
-    "ataraxis-base-utilities>=5,<6",
+
+    # Ataraxis
+    "ataraxis-time>=6,<7",
+    "ataraxis-base-utilities>=6,<7",
 ]
 
 [project.urls]
 Homepage = "https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc"
 Documentation = "https://ataraxis-transport-layer-pc-api-docs.netlify.app/"
 
-# Specifies additional dependencies that can be installed alongside the main library.
-[project.optional-dependencies]
+# Exposes a CLI command that lists all active USB ports alongside their descriptive information.
+[project.scripts]
+axtl-ports = "ataraxis_transport_layer_pc.transport_layer:print_available_ports"
 
-# Dependencies that support developing this project.
+# Development dependencies (PEP 735). Not published to PyPI.
+[dependency-groups]
 dev = [
     # Tox
     "tox>=4,<5",
@@ -66,18 +72,13 @@ dev = [
     "tox-uv>=1,<2",
 
     # Development Automation
-    "ataraxis-automation>=7,<8",
+    "ataraxis-automation>=8,<9",
 
-    # Types:
+    # Types
     "types-pyserial>=3,<4",
 ]
 
-# Exposes a cli command that lists all active USB ports alongside their descriptive information. This is used to
-# discover USB ports used by compatibel microcontrollers.
-[project.scripts]
-axtl-ports = "ataraxis_transport_layer_pc.transport_layer:print_available_ports"
-
-# Specifies files that should not be included in the source-code distribution, but are also not part of gitignore.
+# Specifies files that should not be included in the source-code distribution.
 [tool.hatch.build.targets.sdist]
 exclude = [".github", "recipe"]
 
@@ -87,12 +88,12 @@ packages = ["src/ataraxis_transport_layer_pc", "examples"]
 
 # Ruff Configuration.
 [tool.ruff]
-line-length = 120         # The Maximum column length is set to 120 for this project.
+line-length = 120         # Deviates from the commonly used '80' standard.
 indent-width = 4          # Same as black, indents are 4 spaces
 target-version = "py312"  # Targets the lowest supported version of python
-src = ["src"]             # The name of the source directory
+src = ["src"]             # The name of the root source code directory
 
-# Excludes 'service' .py files, such as the sphinx configuration file from linting.
+# Excludes 'service' .py files, such as the sphinx configuration file, from linting.
 extend-exclude = ["conf.py"]
 
 # Checks for all potential violations and uses the exclusions below to target-disable specific ones.
@@ -100,23 +101,23 @@ lint.select = ["ALL"]
 
 # General ignore directives
 lint.ignore = [
-    "W291",  # Conflicts with docstring formatting
-    "ANN401",  # While suboptimal, ANY is a helpful type when used with caution
-    "C901",  # Sometimes complex functions are necessary
-    "PLR0913",  # Sometimes complex functions are necessary
-    "PLR0912",  # Sometimes complex functions are necessary
-    "PLR0915",  # Sometimes complex type defenitions are necessary
+    "W291",    # Conflicts with docstring formatting
+    "ANN401",  # Any type is needed
+    "C901",    # Sometimes complex functions are necessary
+    "PLR0913", # Sometimes complex functions are necessary
+    "PLR0912", # Sometimes complex functions are necessary
+    "PLR0915", # Sometimes complex type definitions are necessary
     "PLR0911", # Sometimes complex return graphs are necessary
-    "FBT001", # Sometimes positional boolean atguments are necessary
-    "FBT002", # Sometimes positional boolean arguments are necessary
-    "SLF001",  # Sometimes accessing private members is necessary
-    "COM812", # Conflicts with the formatter
-    "ISC001", # Conflicts with the formatter
-    "PT001", # https://github.com/astral-sh/ruff/issues/8796#issuecomment-182590771
-    "PT023", # https://github.com/astral-sh/ruff/issues/8796#issuecomment-1825907715
-    "D107", # Project-specific, __init__ is documented inside the main class docstring where applicable
-    "D205", # Bugs out for file descriptions
-    "PLW0603", # While global statement usage is not ideal, it greatly streamlines certain development patterns
+    "FBT001",  # Positional boolean arguments are necessary
+    "FBT002",  # Boolean default values are necessary
+    "SLF001",  # Private member access is necessary
+    "COM812",  # Conflicts with the formatter
+    "ISC001",  # Conflicts with the formatter
+    "PT001",   # https://github.com/astral-sh/ruff/issues/8796#issuecomment-182590771
+    "PT023",   # https://github.com/astral-sh/ruff/issues/8796#issuecomment-1825907715
+    "D107",    # __init__ is documented inside the main class docstring where applicable
+    "D205",    # Bugs out for file descriptions
+    "PLW0603", # While global statement usage is not ideal, it streamlines certain development patterns
 ]
 
 # Additional formatting configurations
@@ -144,7 +145,7 @@ convention = "google"
 [tool.ruff.lint.isort]
 case-sensitive = true              # Takes case into account when sorting imports
 combine-as-imports = true          # Combines multiple "as" imports for the same package
-force-wrap-aliases = true          # Wraps "as" imports so that each uses a separate line (after combining for package)
+force-wrap-aliases = true          # Wraps "as" imports so that each uses a separate line
 force-sort-within-sections = true  # Forces "as" and "from" imports for the same package to be close
 length-sort = true                 # Places shorter imports first
 
