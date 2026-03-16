@@ -42,6 +42,8 @@ ___
 - [Dependencies](#dependencies)
 - [Installation](#installation)
 - [Usage](#usage)
+  - [TransportLayer](#transportlayer)
+  - [CLI Commands](#cli-commands)
 - [API Documentation](#api-documentation)
 - [Developers](#developers)
 - [Versioning](#versioning)
