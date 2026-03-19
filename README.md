@@ -21,7 +21,8 @@ host-computers (PCs). It provides methods for bidirectionally communicating with
 [ataraxis-transport-layer-mc](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) companion library written in
 C++. The library abstracts all steps necessary to safely send and receive data over the USB and UART communication
 interfaces. It is specifically designed to support time-critical applications, such as scientific experiments, and can
-achieve microsecond communication speeds for modern microcontroller-PC hardware combinations.
+achieve microsecond communication speeds for modern microcontroller-PC hardware combinations. This library is part of
+the [Ataraxis](https://github.com/Sun-Lab-NBB/ataraxis) framework for AI-assisted scientific hardware control.
 
 ___
 
@@ -358,6 +359,13 @@ Run any environment using `tox -e ENVIRONMENT`. For example, `tox -e lint`.
 ***Note,*** all pull requests for this project have to successfully complete the `tox` task before
 being merged. To expedite the task's runtime, use the `tox --parallel` command to run some tasks
 in parallel.
+
+### AI-Assisted Development
+
+Claude Code skills and other AI development assets for this project are distributed through the
+[ataraxis](https://github.com/Sun-Lab-NBB/ataraxis) marketplace as part of the **automation** plugin. Install the
+plugin from the marketplace to make all associated skills and development tools available to compatible AI coding
+agents.
 
 ### Automation Troubleshooting
 
