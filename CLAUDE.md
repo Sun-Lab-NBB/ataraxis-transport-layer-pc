@@ -54,6 +54,26 @@ same parent directory as this project (`/home/cyberaxolotl/Desktop/GitHubRepos/`
 **Why this matters**: Skills and documentation may reference outdated APIs. Always verify against the actual library
 state to prevent integration errors.
 
+## Available skills
+
+| Skill                   | Description                                                                          |
+|-------------------------|--------------------------------------------------------------------------------------|
+| `/explore-codebase`     | Perform in-depth codebase exploration at session start                               |
+| `/explore-dependencies` | Explore ataraxis dependency APIs for a live API snapshot                             |
+| `/python-style`         | Apply Ataraxis framework Python coding conventions (REQUIRED for all Python changes) |
+| `/readme-style`         | Apply Ataraxis framework README conventions (REQUIRED for README changes)            |
+| `/pyproject-style`      | Apply Ataraxis framework pyproject.toml conventions                                  |
+| `/tox-config`           | Apply Ataraxis framework tox.ini conventions                                         |
+| `/api-docs`             | Apply Ataraxis framework API documentation conventions                               |
+| `/audit-facts`          | Fact-check documentation files against authoritative source code                     |
+| `/audit-style`          | Audit source, config, or docs for style compliance against Sun Lab checklists        |
+| `/commit`               | Draft Ataraxis framework style-compliant git commit messages                         |
+| `/pr`                   | Draft a style-compliant pull request summary for the active branch                   |
+| `/release`              | Draft style-compliant release notes from merged pull requests                        |
+| `/skill-design`         | Generate and verify skill files and CLAUDE.md project instructions                   |
+| `/project-layout`       | Apply Ataraxis framework project directory structure conventions                     |
+| `/cpp-style`            | Apply Ataraxis framework C++ conventions for companion library changes               |
+
 ## Companion library synchronization
 
 This library (`ataraxis-transport-layer-pc`) and its C++ counterpart (`ataraxis-transport-layer-mc`) implement the
@@ -91,26 +111,6 @@ in `ataraxis-transport-layer-mc`, and vice versa.
 - CLI commands (`axtl-ports`)
 - Build system, documentation, and packaging
 
-## Available skills
-
-| Skill                   | Description                                                                          |
-|-------------------------|--------------------------------------------------------------------------------------|
-| `/explore-codebase`     | Perform in-depth codebase exploration at session start                               |
-| `/explore-dependencies` | Explore ataraxis dependency APIs for a live API snapshot                             |
-| `/python-style`         | Apply Ataraxis framework Python coding conventions (REQUIRED for all Python changes) |
-| `/readme-style`         | Apply Ataraxis framework README conventions (REQUIRED for README changes)            |
-| `/pyproject-style`      | Apply Ataraxis framework pyproject.toml conventions                                  |
-| `/tox-config`           | Apply Ataraxis framework tox.ini conventions                                         |
-| `/api-docs`             | Apply Ataraxis framework API documentation conventions                               |
-| `/audit-facts`          | Fact-check documentation files against authoritative source code                     |
-| `/audit-style`          | Audit source, config, or docs for style compliance against Sun Lab checklists        |
-| `/commit`               | Draft Ataraxis framework style-compliant git commit messages                         |
-| `/pr`                   | Draft a style-compliant pull request summary for the active branch                   |
-| `/release`              | Draft style-compliant release notes from merged pull requests                        |
-| `/skill-design`         | Generate and verify skill files and CLAUDE.md project instructions                   |
-| `/project-layout`       | Apply Ataraxis framework project directory structure conventions                     |
-| `/cpp-style`            | Apply Ataraxis framework C++ conventions for companion library changes               |
-
 ## Project context
 
 This is **ataraxis-transport-layer-pc**, a Python library for bidirectional serial communication with Arduino and
@@ -141,9 +141,9 @@ compilation to achieve microsecond-level communication speeds.
 
 ### CLI entry point
 
-| Command      | Entry point                                                         | Purpose                              |
-|--------------|---------------------------------------------------------------------|--------------------------------------|
-| `axtl-ports` | `ataraxis_transport_layer_pc.transport_layer:print_available_ports` | Display available serial ports       |
+| Command      | Entry point                                                         | Purpose                        |
+|--------------|---------------------------------------------------------------------|--------------------------------|
+| `axtl-ports` | `ataraxis_transport_layer_pc.transport_layer:print_available_ports` | Display available serial ports |
 
 ### Public API surface
 

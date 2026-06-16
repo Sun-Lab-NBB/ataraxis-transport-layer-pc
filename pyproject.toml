@@ -110,7 +110,6 @@ lint.ignore = [
     "PLR0911", # Sometimes complex return graphs are necessary
     "FBT001",  # Positional boolean arguments are necessary
     "FBT002",  # Boolean default values are necessary
-    "SLF001",  # Private member access is necessary
     "COM812",  # Conflicts with the formatter
     "ISC001",  # Conflicts with the formatter
     "PT001",   # https://github.com/astral-sh/ruff/issues/8796#issuecomment-182590771
