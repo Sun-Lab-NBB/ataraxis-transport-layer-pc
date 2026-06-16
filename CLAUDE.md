@@ -173,8 +173,10 @@ Exported from `__init__.py` via `__all__`:
   Pythonic APIs while preserving JIT compilation benefits. The wrapper handles input validation and error reporting;
   the jitclass handles computation.
 - **JIT compilation**: Performance-critical methods use `@njit(cache=True)` or `@jitclass`. First invocation compiles
-  to native code (slow); subsequent calls run at C speed. The `# type: ignore[import-untyped]` and
-  `# type: ignore[untyped-decorator]` comments on Numba imports and decorators are expected and should not be removed.
+  to native code (slow); subsequent calls run at C speed. Numba ships type information (`py.typed`), so mypy
+  type-checks the interop: required `# type: ignore` suppressions remain on the `jitclass` import (`attr-defined`),
+  its instantiation calls (`no-untyped-call`), and the in-jitclass `isinstance(value, <numba type>)` checks
+  (`arg-type`). Do not remove them; the `@njit` decorators and `njit` import need no suppression.
 - **Status code returns in JIT methods**: JIT-compiled methods return `TransportLayerStatus` enum values instead of
   raising exceptions (Numba limitation). Python wrapper methods convert status codes to exceptions via
   `console.error()`.

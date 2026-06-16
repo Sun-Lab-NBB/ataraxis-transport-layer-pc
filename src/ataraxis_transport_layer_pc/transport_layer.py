@@ -6,7 +6,7 @@ from enum import IntEnum
 from typing import Any
 from dataclasses import fields, is_dataclass
 
-from numba import njit  # type: ignore[import-untyped]
+from numba import njit
 import numpy as np
 from serial import Serial
 from numpy.typing import NDArray
@@ -667,7 +667,7 @@ class TransportLayer:
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
-    @njit(cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
+    @njit(cache=True)  # pragma: no cover
     def _write_scalar_data(
         target_buffer: NDArray[np.uint8],
         scalar_object: Any,
@@ -705,7 +705,7 @@ class TransportLayer:
         return required_size
 
     @staticmethod
-    @njit(cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
+    @njit(cache=True)  # pragma: no cover
     def _write_array_data(
         target_buffer: NDArray[np.uint8],
         array_object: NDArray[Any],
@@ -746,7 +746,7 @@ class TransportLayer:
         return required_size
 
     @staticmethod
-    @njit(cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
+    @njit(cache=True)  # pragma: no cover
     def _read_array_data(
         source_buffer: NDArray[np.uint8],
         array_object: NDArray[Any],
@@ -795,7 +795,7 @@ class TransportLayer:
         )
 
     @staticmethod
-    @njit(cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
+    @njit(cache=True)  # pragma: no cover
     def _construct_packet(
         payload_buffer: NDArray[np.uint8],
         cobs_processor: _COBSProcessor,
@@ -1066,7 +1066,7 @@ class TransportLayer:
         return False
 
     @staticmethod
-    @njit(cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
+    @njit(cache=True)  # pragma: no cover
     def _parse_packet(
         unparsed_bytes: NDArray[np.uint8],
         start_byte: np.uint8,
@@ -1279,7 +1279,7 @@ class TransportLayer:
         return TransportLayerStatus.NOT_ENOUGH_CRC_BYTES.value, parsed_byte_count, remaining_bytes, parsed_bytes
 
     @staticmethod
-    @njit(cache=True)  # type: ignore[untyped-decorator] # pragma: no cover
+    @njit(cache=True)  # pragma: no cover
     def _process_packet(
         reception_buffer: NDArray[np.uint8],
         packet_size: int,

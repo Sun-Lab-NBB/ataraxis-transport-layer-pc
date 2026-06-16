@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from numba import uint8, uint16, uint32  # type: ignore[import-untyped]
+from numba import uint8, uint16, uint32
 import numpy as np
-from numba.experimental import jitclass  # type: ignore[import-untyped]
+from numba.experimental import jitclass  # type: ignore[attr-defined]
 from ataraxis_base_utilities import console
 
 if TYPE_CHECKING:
@@ -60,7 +60,7 @@ class COBSProcessor:
 
         # Instantiates the jit class and saves it to the wrapper class attribute. Developer hint: when used as a
         # function, jitclass returns an uninitialized compiled object, so initializing is crucial here.
-        self._processor: _COBSProcessor = jitclass(cls_or_spec=_COBSProcessor, spec=cobs_spec)()
+        self._processor: _COBSProcessor = jitclass(cls_or_spec=_COBSProcessor, spec=cobs_spec)()  # type: ignore[no-untyped-call]
 
     def __repr__(self) -> str:
         """Returns a string representation of the COBSProcessor instance."""
@@ -173,7 +173,7 @@ class CRCProcessor:
 
         # Initializes and compiles the internal _CRCProcessor class. This automatically generates the static CRC lookup
         # table.
-        self._processor: _CRCProcessor = jitclass(cls_or_spec=_CRCProcessor, spec=crc_spec)(
+        self._processor: _CRCProcessor = jitclass(cls_or_spec=_CRCProcessor, spec=crc_spec)(  # type: ignore[no-untyped-call]
             polynomial=polynomial,
             initial_crc_value=initial_crc_value,
             final_xor_value=final_xor_value,
@@ -533,10 +533,10 @@ class _CRCProcessor:  # pragma: no cover
         # Resolves the crc_type and polynomial size based on the input polynomial. Makes use of the recently added
         # dtype comparison support.
         crc_type: type[np.unsignedinteger[Any]]
-        if isinstance(polynomial, uint8):
+        if isinstance(polynomial, uint8):  # type: ignore[arg-type]
             crc_type = np.uint8
             polynomial_size = np.uint8(1)
-        elif isinstance(polynomial, uint16):
+        elif isinstance(polynomial, uint16):  # type: ignore[arg-type]
             crc_type = np.uint16
             polynomial_size = np.uint8(2)
         else:
