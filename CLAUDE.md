@@ -29,8 +29,8 @@ appropriate skill results in style violations.
 
 ## Cross-referenced library verification
 
-Ataraxis framework projects often depend on other `ataraxis-*` or `sollertia-*` libraries. These libraries may be
-stored locally in the same parent directory as this project (`/home/cyberaxolotl/Desktop/GitHubRepos/`).
+Ataraxis framework projects often depend on other `ataraxis-*` libraries. These libraries may be stored locally in the
+same parent directory as this project (`/home/cyberaxolotl/Desktop/GitHubRepos/`).
 
 **Before writing code that interacts with a cross-referenced library, you MUST:**
 
