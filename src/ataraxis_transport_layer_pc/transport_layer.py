@@ -47,8 +47,8 @@ class TransportLayerStatus(IntEnum):
     EMPTY_ARRAY_ERROR = -3
     """The data to be written or the prototype to be read is an empty NumPy array."""
     PACKET_SIZE_UNKNOWN = 0
-    """Not enough bytes read to fully parse the packet. The start byte was found, but packet size has not been resolved 
-    and, therefore, not known."""
+    """Not enough bytes read to fully parse the packet. The start byte was found, but the payload_size byte has not yet
+    been read, so the packet size cannot be resolved."""
     PACKET_PARSED = 1
     """Packet fully parsed."""
     NOT_ENOUGH_PACKET_BYTES = 2
@@ -68,8 +68,8 @@ class TransportLayerStatus(IntEnum):
     the last byte of the encoded payload is set to the delimiter value and that the value is not present anywhere else 
     inside the encoded payload region. Encountering the delimiter early indicates packet corruption."""
     DELIMITER_NOT_FOUND = 7
-    """Delimiter byte value not encountered at the end of the encoded payload data block. See code 104 description for 
-    more details, but this code also indicates packet corruption."""
+    """Delimiter byte value not encountered at the end of the encoded payload data block. See the
+    DELIMITER_FOUND_TOO_EARLY description for more details, but this code also indicates packet corruption."""
 
 
 def list_available_ports() -> tuple[ListPortInfo, ...]:  # pragma: no cover
@@ -130,7 +130,7 @@ class TransportLayer:
             be standard (non-reflected / non-reversed).
         initial_crc_value: The value to which the CRC checksum is initialized before calculation.
         final_crc_xor_value: The value with which the CRC checksum is XORed after calculation.
-        test_mode: Determines whether the instance uses a pySerial (real) or a StreamMock (mocked) communication
+        test_mode: Determines whether the instance uses a pySerial (real) or a SerialMock (mocked) communication
             interface. This flag is used during testing and should be disabled for all production runtimes.
 
     Attributes:
@@ -263,8 +263,8 @@ class TransportLayer:
         self._min_rx_payload_size: np.uint8 = np.uint8(1)
 
         # Buffer sizes are up-case to uint16, as they may need to exceed the 256-size limit. They include the respective
-        # payload size, the postamble size (1 to 4 bytes) and 4 static bytes for the preamble and packet metadata.
-        # These 4 bytes are: start_byte, delimiter_byte, overhead_byte, and packet_size byte.
+        # payload size, the postamble size (1, 2, or 4 bytes) and 4 static bytes for the preamble and packet metadata.
+        # These 4 bytes are: start_byte, delimiter_byte, overhead_byte, and payload_size byte.
         tx_buffer_size: np.uint16 = np.uint16(self._max_tx_payload_size) + 4 + np.uint16(self._postamble_size)
         rx_buffer_size: np.uint16 = np.uint16(self._max_rx_payload_size) + 4 + np.uint16(self._postamble_size)
         self._transmission_buffer: NDArray[np.uint8] = np.zeros(shape=tx_buffer_size, dtype=np.uint8)
@@ -614,9 +614,9 @@ class TransportLayer:
         the instance's reception buffer.
 
         Notes:
-            Before attempting to receive the packet, the method uses the available property to check whether the
-            communication interface is likely to store a well-formed packet. It is safe to call this method cyclically
-            (as part of a loop) until a packet is received.
+            Before attempting to receive the packet, the method verifies that the communication interface holds enough
+            bytes to justify parsing. It is safe to call this method cyclically (as part of a loop) until a packet is
+            received.
 
             This method resets the instance's reception buffer before attempting to receive the data, discarding any
             potentially unprocessed data.
@@ -632,7 +632,7 @@ class TransportLayer:
         self.reset_reception_buffer()
 
         # Attempts to receive a new packet. If successful, this method saves the received packet to the
-        # _transmission_buffer and the size of the packet to the _bytes_in_transmission_buffer tracker. If the method
+        # _reception_buffer and the size of the packet to the _bytes_in_reception_buffer tracker. If the method
         # runs into an error, it raises the appropriate RuntimeError.
         if not self._receive_packet():
             # If the packet parsing method does not find any packet bytes to process, it returns False.
@@ -944,8 +944,8 @@ class TransportLayer:
                 continue
 
             # Any code other than partial or full success code is interpreted as the terminal code. All codes other
-            # than 101 are error codes. Code 101 is a non-error non-success terminal code. This clause also contains
-            # the resolution for unexpected status codes.
+            # than NO_BYTES_TO_READ are error codes. NO_BYTES_TO_READ is a non-error non-success terminal code. This
+            # clause also contains the resolution for unexpected status codes.
 
             # No packet to receive. This is a non-error terminal status.
             if status == TransportLayerStatus.NO_BYTES_TO_READ:
@@ -1205,8 +1205,8 @@ class TransportLayer:
                 remaining_packet_bytes -= 1  # Decrements remaining packet bytes counter with each processed byte.
 
                 # If the evaluated byte matches the delimiter byte value and this is not the last byte of the encoded
-                # payload, the packet is likely corrupted. Returns with error code 104: Delimiter byte encountered too
-                # early.
+                # payload, the packet is likely corrupted. Returns the DELIMITER_FOUND_TOO_EARLY status: Delimiter byte
+                # encountered too early.
                 if unparsed_bytes[i] == delimiter_byte and remaining_packet_bytes != 0:
                     remaining_bytes = unparsed_bytes[
                         processed_bytes:
@@ -1224,7 +1224,7 @@ class TransportLayer:
                     break
 
                 # If the last evaluated payload byte is not a delimiter byte value, this also indicates that the
-                # packet is likely corrupted. Returns with code 105: Delimiter byte not found.
+                # packet is likely corrupted. Returns the DELIMITER_NOT_FOUND status: Delimiter byte not found.
                 if remaining_packet_bytes == 0 and unparsed_bytes[i] != delimiter_byte:
                     remaining_bytes = unparsed_bytes[
                         processed_bytes:

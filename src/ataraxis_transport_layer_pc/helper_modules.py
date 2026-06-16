@@ -17,10 +17,10 @@ _ZERO: np.uint8 = np.uint8(0)
 """Zero value used as a default in byte operations."""
 
 _ONE_BYTE: int = 1
-"""Byte length of a CRC-8 polynomial."""
+"""Byte-length of a CRC-8 polynomial, used to select the single-byte checksum type."""
 
 _TWO_BYTE: int = 2
-"""Byte length of a CRC-16 polynomial."""
+"""Byte-length of a CRC-16 polynomial, used to select the two-byte checksum type."""
 
 _BYTE_SIZE: int = 8
 """Number of bits in a single byte."""
@@ -203,7 +203,8 @@ class CRCProcessor:
                 generate and write the CRC checksum to the outgoing packet's postamble section.
 
         Returns:
-            The calculated numpy uint8, uint16, or uint32 integer CRC checksum value.
+            The total size of the buffer, including the appended CRC checksum, when generating a new checksum. When
+            verifying data integrity, returns the value 1 to indicate the data is intact.
 
         Raises:
             ValueError: If the method is unable to verify the incoming packet's data integrity.
@@ -267,6 +268,8 @@ class SerialMock:
         is_open: A flag indicating if the mock serial port is open.
         tx_buffer: A byte buffer that stores transmitted data.
         rx_buffer: A byte buffer that stores received data.
+        in_waiting: A read-only property returning the number of bytes available for reading from the rx_buffer.
+        out_waiting: A read-only property returning the number of bytes pending transmission in the tx_buffer.
     """
 
     def __init__(self) -> None:
