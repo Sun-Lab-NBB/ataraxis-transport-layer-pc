@@ -107,7 +107,7 @@ def print_available_ports() -> None:  # pragma: no cover
             # Linux systems.
             if port.pid is not None:
                 count += 1  # Counts only valid ports.
-                console.echo(f"{count}: {port.device} -> {port.description}")  # Removes unnecessary information.
+                console.echo(message=f"{count}: {port.device} -> {port.description}")  # Removes extra port fields.
 
 
 class TransportLayer:
@@ -237,8 +237,8 @@ class TransportLayer:
         # Based on the class runtime selector, initializes a real or mock serial port manager class.
         self._port: SerialMock | Serial
         if not test_mode:
-            # Statically disables built-in timeout. Our jit- and c-extension classes are more optimized for this job
-            # than Serial's built-in timeout.
+            # Statically disables the built-in timeout. The jit- and c-extension classes are more optimized for this
+            # job than Serial's built-in timeout.
             self._port = Serial(port=port, baudrate=baudrate, timeout=0)  # pragma: no cover
         else:
             self._port = SerialMock()
@@ -262,7 +262,7 @@ class TransportLayer:
         self._max_rx_payload_size: np.uint8 = np.uint8(min((microcontroller_serial_buffer_size - 8), 254))
         self._min_rx_payload_size: np.uint8 = np.uint8(1)
 
-        # Buffer sizes are up-case to uint16, as they may need to exceed the 256-size limit. They include the respective
+        # Buffer sizes are upcast to uint16, as they may need to exceed the 256-value limit. They include the respective
         # payload size, the postamble size (1, 2, or 4 bytes) and 4 static bytes for the preamble and packet metadata.
         # These 4 bytes are: start_byte, delimiter_byte, overhead_byte, and payload_size byte.
         tx_buffer_size: np.uint16 = np.uint16(self._max_tx_payload_size) + 4 + np.uint16(self._postamble_size)
@@ -325,19 +325,15 @@ class TransportLayer:
 
     @property
     def transmission_buffer(self) -> NDArray[np.uint8]:
-        """Returns a copy of the transmission buffer array.
-
-        This buffer stores the 'staged' data to be sent to the Microcontroller. Use this method to safely access the
-        contents of the buffer.
+        """Returns a copy of the transmission buffer array, which stores the data staged to be sent to the
+        Microcontroller.
         """
         return self._transmission_buffer.copy()
 
     @property
     def reception_buffer(self) -> NDArray[np.uint8]:
-        """Returns a copy of the reception buffer array.
-
-        This buffer stores the decoded data received from the Microcontroller. Use this method to safely access the
-        contents of the buffer.
+        """Returns a copy of the reception buffer array, which stores the decoded data received from the
+        Microcontroller.
         """
         return self._reception_buffer.copy()
 
@@ -393,12 +389,20 @@ class TransportLayer:
 
         # If the input object is a supported numpy scalar, calls the scalar data writing method.
         if isinstance(data_object, self._accepted_numpy_scalars):
-            end_index = self._write_scalar_data(self._transmission_buffer, data_object, start_index)
+            end_index = self._write_scalar_data(
+                target_buffer=self._transmission_buffer,
+                scalar_object=data_object,
+                start_index=start_index,
+            )
 
         # If the input object is a numpy array, first ensures that it's datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data writing method.
         elif isinstance(data_object, np.ndarray) and data_object.dtype in self._accepted_numpy_scalars:
-            end_index = self._write_array_data(self._transmission_buffer, data_object, start_index)
+            end_index = self._write_array_data(
+                target_buffer=self._transmission_buffer,
+                array_object=data_object,
+                start_index=start_index,
+            )
 
         # If the input object is a python dataclass, iteratively loops over each field of the class and recursively
         # calls write_data() to write each attribute of the class to the buffer. This implementation supports using
@@ -502,10 +506,10 @@ class TransportLayer:
         # is the most efficient available method.
         if isinstance(data_object, self._accepted_numpy_scalars):
             returned_object, end_index = self._read_array_data(
-                self._reception_buffer,
-                np.array(data_object, dtype=data_object.dtype),
-                start_index,
-                self._bytes_in_reception_buffer,
+                source_buffer=self._reception_buffer,
+                array_object=np.array(data_object, dtype=data_object.dtype),
+                start_index=start_index,
+                payload_size=self._bytes_in_reception_buffer,
             )
             out_object = returned_object[0].copy()
 
@@ -513,10 +517,10 @@ class TransportLayer:
         # numpy types and, if so, calls the array data reading method.
         elif isinstance(data_object, np.ndarray) and data_object.dtype in self._accepted_numpy_scalars:
             out_object, end_index = self._read_array_data(
-                self._reception_buffer,
-                data_object,
-                start_index,
-                self._bytes_in_reception_buffer,
+                source_buffer=self._reception_buffer,
+                array_object=data_object,
+                start_index=start_index,
+                payload_size=self._bytes_in_reception_buffer,
             )
 
         # If the input object is a python dataclass, enters a recursive loop which calls this method for each class
@@ -595,11 +599,11 @@ class TransportLayer:
         # using JIT compilation to increase runtime speed. To maximize compilation benefits, it has to access the
         # inner jitclasses instead of using the python COBS and CRC class wrappers.
         packet = self._construct_packet(
-            self._transmission_buffer,
-            self._cobs_processor.processor,
-            self._crc_processor.processor,
-            self._bytes_in_transmission_buffer,
-            self._start_byte,
+            payload_buffer=self._transmission_buffer,
+            cobs_processor=self._cobs_processor.processor,
+            crc_processor=self._crc_processor.processor,
+            payload_size=self._bytes_in_transmission_buffer,
+            start_byte=self._start_byte,
         )
 
         # Hands the constructed packet off to the communication interface.
@@ -640,10 +644,10 @@ class TransportLayer:
 
         # If the packet is successfully parsed, validates and unpacks the payload into the class reception buffer.
         payload_size = self._process_packet(
-            self._reception_buffer,
-            self._bytes_in_reception_buffer,
-            self._cobs_processor.processor,
-            self._crc_processor.processor,
+            reception_buffer=self._reception_buffer,
+            packet_size=self._bytes_in_reception_buffer,
+            cobs_processor=self._cobs_processor.processor,
+            crc_processor=self._crc_processor.processor,
         )
 
         # Returned payload_size is a positive integer (>= 1) if verification succeeds. If verification
@@ -683,10 +687,10 @@ class TransportLayer:
         """
         # Converts the input scalar to a byte array. This is mostly so that Numba can work with the data via the
         # service method calls below. Note, despite the input being scalar, the array object may have multiple elements.
-        array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)  # scalar → array → byte array
+        array_object = np.frombuffer(np.array([scalar_object]), dtype=np.uint8)
 
         # Calculates the required space inside the buffer to store the data inserted at the start_index.
-        data_size = array_object.size * array_object.itemsize  # Size of each element * the number of elements.
+        data_size = array_object.size * array_object.itemsize
         required_size = start_index + data_size
 
         # If the space to store the data extends outside the available transmission_buffer boundaries, returns 0.
@@ -727,7 +731,7 @@ class TransportLayer:
 
         # Calculates the required space inside the buffer to store the data inserted at the start_index.
         array_data = np.frombuffer(array_object, dtype=np.uint8)  # Serializes to bytes.
-        data_size = array_data.size * array_data.itemsize  # Size of each element * the number of elements.
+        data_size = array_data.size * array_data.itemsize
         required_size = start_index + data_size
 
         if required_size > target_buffer.size:
@@ -866,23 +870,23 @@ class TransportLayer:
             # Calls the packet parsing method. The method reuses some iterative outputs as arguments for later
             # calls.
             status, parsed_bytes_count, remaining_bytes, parsed_bytes = self._parse_packet(
-                remaining_bytes,
-                self._start_byte,
-                self._delimiter_byte,
-                self._max_rx_payload_size,
-                self._min_rx_payload_size,
-                self._postamble_size,
-                start_found,
-                parsed_bytes_count,
-                parsed_bytes,
+                unparsed_bytes=remaining_bytes,
+                start_byte=self._start_byte,
+                delimiter_byte=self._delimiter_byte,
+                max_payload_size=self._max_rx_payload_size,
+                min_payload_size=self._min_rx_payload_size,
+                postamble_size=self._postamble_size,
+                start_found=start_found,
+                parsed_byte_count=parsed_bytes_count,
+                parsed_bytes=parsed_bytes,
             )
 
-            # Converts remaining_bytes_np (numpy array) back to bytes after function runtime.
+            # Converts remaining_bytes (numpy array) back to bytes after function runtime.
             self._leftover_bytes = remaining_bytes.tobytes()
             # Resolves parsing result:
             # Packet parsed. Saves the packet to the _reception_buffer and the packet size to the
             # _bytes_in_reception_buffer tracker.
-            if status == 1:
+            if status == TransportLayerStatus.PACKET_PARSED:
                 self._reception_buffer[: parsed_bytes.size] = parsed_bytes
                 self._bytes_in_reception_buffer = parsed_bytes.size  # Includes encoded payload + CRC postamble!
                 return True  # Success code
@@ -961,8 +965,8 @@ class TransportLayer:
                 )
 
             # Delimiter byte value was encountered before reaching the end of the COBS-encoded payload data region.
-            # 'expected number' is calculated like this: parsed_bytes has space for the encoded packet + CRC. So, to get
-            # the expected delimiter byte number, we just subtract the CRC size from the parsed_bytes size.
+            # The expected delimiter byte number is derived from parsed_bytes, which holds the encoded packet plus the
+            # CRC. Subtracting the CRC size from the parsed_bytes size yields the expected delimiter position.
             elif status == TransportLayerStatus.DELIMITER_FOUND_TOO_EARLY:
                 message = (
                     f"Failed to parse the incoming serial packet data. Delimiter byte value ({self._delimiter_byte}) "
@@ -1105,7 +1109,6 @@ class TransportLayer:
             bytes' object that stores any unprocessed bytes that remain after method runtime. The fourth element
             is the uint8 array that stores some or all of the packet's bytes.
         """
-        # Converts the input 'bytes' object to a numpy array to optimize further buffer manipulations.
         total_bytes = unparsed_bytes.size  # Calculates the total number of bytes available for parsing.
         processed_bytes = 0  # Tracks how many input bytes are processed during method runtime.
         remaining_bytes: NDArray[np.uint8]

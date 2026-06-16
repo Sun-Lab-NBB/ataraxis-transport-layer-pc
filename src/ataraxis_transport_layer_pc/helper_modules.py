@@ -117,10 +117,8 @@ class COBSProcessor:
 
     @property
     def processor(self) -> _COBSProcessor:
-        """Returns the jit-compiled COBS processor class instance.
-
-        This accessor allows external methods to directly interface with the JIT-compiled class, bypassing the Python
-        wrapper.
+        """Returns the jit-compiled COBS processor instance, which external code can use to interface with the
+        compiled class directly and bypass the Python wrapper.
         """
         return self._processor
 
@@ -234,10 +232,8 @@ class CRCProcessor:
 
     @property
     def processor(self) -> _CRCProcessor:
-        """Returns the jit-compiled CRC processor class instance.
-
-        This accessor allows external methods to directly interface with the JIT-compiled class, bypassing the Python
-        wrapper.
+        """Returns the jit-compiled CRC processor instance, which external code can use to interface with the
+        compiled class directly and bypass the Python wrapper.
         """
         return self._processor
 
@@ -301,15 +297,18 @@ class SerialMock:
             TypeError: If `data` is not a bytes' object.
             RuntimeError: If the mock serial port is not open.
         """
-        if self.is_open:
-            if isinstance(data, bytes):
-                self.tx_buffer += data
-            else:
-                message = "Data must be a 'bytes' object"
-                raise TypeError(message)
-        else:
-            message = "Mock serial port is not open"
-            raise RuntimeError(message)
+        if not self.is_open:
+            message = "Unable to write data to the mock serial port. The port is not open."
+            console.error(message=message, error=RuntimeError)
+
+        if not isinstance(data, bytes):
+            message = (
+                f"Unable to write data to the mock serial port. Expected a bytes object for the 'data' argument, but "
+                f"encountered {type(data).__name__}."
+            )
+            console.error(message=message, error=TypeError)
+
+        self.tx_buffer += data
 
     def read(self, size: int = 1) -> bytes:
         """Reads a specified number of bytes from the `rx_buffer`.
@@ -323,12 +322,13 @@ class SerialMock:
         Raises:
             RuntimeError: If the mock serial port is not open.
         """
-        if self.is_open:
-            data = self.rx_buffer[:size]
-            self.rx_buffer = self.rx_buffer[size:]
-            return data
-        message = "Mock serial port is not open"
-        raise RuntimeError(message)
+        if not self.is_open:
+            message = "Unable to read data from the mock serial port. The port is not open."
+            console.error(message=message, error=RuntimeError)
+
+        data = self.rx_buffer[:size]
+        self.rx_buffer = self.rx_buffer[size:]
+        return data
 
     def reset_input_buffer(self) -> None:
         """Clears the `rx_buffer` attribute.
@@ -336,11 +336,11 @@ class SerialMock:
         Raises:
             RuntimeError: If the mock serial port is not open.
         """
-        if self.is_open:
-            self.rx_buffer = b""
-        else:
-            message = "Mock serial port is not open"
-            raise RuntimeError(message)
+        if not self.is_open:
+            message = "Unable to reset the input buffer of the mock serial port. The port is not open."
+            console.error(message=message, error=RuntimeError)
+
+        self.rx_buffer = b""
 
     def reset_output_buffer(self) -> None:
         """Clears the `tx_buffer` attribute.
@@ -348,11 +348,11 @@ class SerialMock:
         Raises:
             RuntimeError: If the mock serial port is not open.
         """
-        if self.is_open:
-            self.tx_buffer = b""
-        else:
-            message = "Mock serial port is not open"
-            raise RuntimeError(message)
+        if not self.is_open:
+            message = "Unable to reset the output buffer of the mock serial port. The port is not open."
+            console.error(message=message, error=RuntimeError)
+
+        self.tx_buffer = b""
 
     @property
     def in_waiting(self) -> int:
@@ -418,7 +418,7 @@ class _COBSProcessor:  # pragma: no cover
         # payload with the distance to the next delimiter value (or the value added to the end of the payload).
         # This process ensures that the delimiter value is only found at the end of the packet and, if the delimiter
         # is not 0, potentially also as the overhead byte value. This encodes the payload using the COBS scheme.
-        for i in range(size - 1, -1, -1):  # Loops over every index of the payload.
+        for i in range(size - 1, -1, -1):
             if payload[i] == self.delimiter:
                 # If any of the payload values match the delimiter value, replaces that value in the packet with
                 # the distance to the next_delimiter_position. This is either the distance to the next encoded
@@ -579,15 +579,15 @@ class _CRCProcessor:  # pragma: no cover
 
         # Calculates the checksum for the packet
         for i in range(packet_size):
-            table_index = (crc_checksum >> (8 * (self.crc_byte_length - 1))) ^ buffer[i]
-            crc_checksum = self._make_polynomial_type((crc_checksum << 8) ^ self.crc_table[table_index])
+            table_index = (crc_checksum >> (_BYTE_SIZE * (self.crc_byte_length - 1))) ^ buffer[i]
+            crc_checksum = self._make_polynomial_type((crc_checksum << _BYTE_SIZE) ^ self.crc_table[table_index])
 
         # If the method is called to verify the incoming packet's integrity, includes the CRC checksum postamble in
         # the calculation.
         if check:
             for i in range(packet_size, packet_size + self.crc_byte_length):
-                table_index = (crc_checksum >> (8 * (self.crc_byte_length - 1))) ^ buffer[i]
-                crc_checksum = self._make_polynomial_type((crc_checksum << 8) ^ self.crc_table[table_index])
+                table_index = (crc_checksum >> (_BYTE_SIZE * (self.crc_byte_length - 1))) ^ buffer[i]
+                crc_checksum = self._make_polynomial_type((crc_checksum << _BYTE_SIZE) ^ self.crc_table[table_index])
 
         # Applies the final XOR
         crc_checksum ^= self.final_xor_value
@@ -596,7 +596,7 @@ class _CRCProcessor:  # pragma: no cover
         # buffer.
         if not check:
             for i in range(self.crc_byte_length):
-                buffer[packet_size + i] = (crc_checksum >> (8 * (self.crc_byte_length - i - 1))) & 0xFF
+                buffer[packet_size + i] = (crc_checksum >> (_BYTE_SIZE * (self.crc_byte_length - i - 1))) & 0xFF
 
             # Returns the total size of the buffer with the post-pended checksum to indicate that the method ran as
             # expected.
@@ -625,7 +625,7 @@ class _CRCProcessor:  # pragma: no cover
             polynomial: The polynomial to use for the generation of the CRC lookup table.
         """
         # Determines the number of bits in the CRC datatype
-        crc_bits = np.uint8(self.crc_byte_length * 8)
+        crc_bits = np.uint8(self.crc_byte_length * _BYTE_SIZE)
 
         # Determines the Most Significant Bit (MSB) mask based on the CRC type
         msb_mask = self._make_polynomial_type(np.left_shift(1, crc_bits - 1))
@@ -663,8 +663,8 @@ class _CRCProcessor:  # pragma: no cover
         polynomial datatype.
 
         This is a minor helper method designed to be used exclusively by other class methods. It allows
-        resolving typing issues originating from the fact that, at the time of writing, numba is unable to use
-        '.itemsize' and other properties of scalar numpy types.
+        resolving typing issues that arise because numba is unable to use '.itemsize' and other properties of
+        scalar numpy types.
 
         Notes:
             The datatype of the polynomial is inferred based on the byte-length of the polynomial as either
