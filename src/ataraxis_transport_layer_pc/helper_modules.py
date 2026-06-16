@@ -226,7 +226,6 @@ class CRCProcessor:
         """Returns the byte-size used by the CRC checksums."""
         return self._processor.crc_byte_length
 
-    # noinspection PyTypeHints
     @property
     def crc_table(self) -> NDArray[CRCType]:
         """Returns the CRC checksum lookup table."""
@@ -447,7 +446,6 @@ class _COBSProcessor:  # pragma: no cover
             The payload decoded from the packet or an empty uninitialized numpy array if the method fails to decode the
             payload.
         """
-        # noinspection DuplicatedCode
         size = packet.size  # Extracts packet size for the checks below.
 
         # This is necessary due to how this method is used by the main class, where the input to this method
@@ -532,7 +530,6 @@ class _CRCProcessor:  # pragma: no cover
         # Resolves the crc_type and polynomial size based on the input polynomial. Makes use of the recently added
         # dtype comparison support.
         crc_type: type[np.unsignedinteger[Any]]
-        # noinspection PyTypeChecker
         if isinstance(polynomial, uint8):
             crc_type = np.uint8
             polynomial_size = np.uint8(1)
@@ -554,7 +551,6 @@ class _CRCProcessor:  # pragma: no cover
         # inside the crc_table placeholder to the calculated values.
         self._generate_crc_table(polynomial=polynomial)
 
-    # noinspection PyTypeHints
     def calculate_checksum(self, buffer: NDArray[np.uint8], check: bool = False) -> np.uint16:
         """Calculates the checksum for the data stored in the input buffer.
 
@@ -573,7 +569,6 @@ class _CRCProcessor:  # pragma: no cover
             integrity and the data is intact and '0' otherwise.
         """
         # Intelligently determines the packet size based on buffer size and CRC checksum length.
-        # noinspection PyTypeChecker
         packet_size = len(buffer) - self.crc_byte_length
 
         # Initializes the checksum
@@ -587,7 +582,6 @@ class _CRCProcessor:  # pragma: no cover
         # If the method is called to verify the incoming packet's integrity, includes the CRC checksum postamble in
         # the calculation.
         if check:
-            # noinspection PyTypeChecker
             for i in range(packet_size, packet_size + self.crc_byte_length):
                 table_index = (crc_checksum >> (8 * (self.crc_byte_length - 1))) ^ buffer[i]
                 crc_checksum = self._make_polynomial_type((crc_checksum << 8) ^ self.crc_table[table_index])

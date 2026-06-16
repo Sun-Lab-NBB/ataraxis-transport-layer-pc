@@ -991,7 +991,6 @@ def test_crc_processor(
     )
 
     # Creates a buffer with space for the CRC bytes
-    # noinspection PyTypeChecker
     buffer_with_space = np.empty(len(test_data) + crc_processor.crc_byte_length, dtype=np.uint8)
     buffer_with_space[: len(test_data)] = test_data
 
@@ -1036,7 +1035,6 @@ def test_crc_processor_errors() -> None:
     # Tests CRC verification failure
     # First, creates a valid packet with the checksum
     test_data = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint8)
-    # noinspection PyTypeChecker
     buffer_with_checksum = np.empty(len(test_data) + crc_processor.crc_byte_length, dtype=np.uint8)
     buffer_with_checksum[: len(test_data)] = test_data
 
@@ -1084,7 +1082,6 @@ def test_serial_mock() -> None:
 
     # Tests write() method with non-bytes data (expecting TypeError)
     with pytest.raises(TypeError):
-        # noinspection PyTypeChecker
         mock_serial.write("Not bytes")
 
     # Tests read() method

@@ -406,7 +406,6 @@ class TransportLayer:
         # Microcontroller TransportLayer class.
         elif is_dataclass(data_object):
             # Loops over each field (attribute) of the dataclass and writes it to the buffer.
-            # noinspection PyDataclass
             for field in fields(data_object):
                 # Calls the write method recursively onto the value of each field.
                 data_value = getattr(data_object, field.name)
@@ -525,7 +524,6 @@ class TransportLayer:
         # similar to the Microcontroller TransportLayer class.
         elif is_dataclass(data_object):
             # Loops over each field of the dataclass.
-            # noinspection PyDataclass
             for field in fields(data_object):
                 # Calls the reader function recursively onto each field of the class.
                 attribute_value = getattr(data_object, field.name)
@@ -554,7 +552,6 @@ class TransportLayer:
         if end_index > start_index:
             # Updates the consumed bytes tracker and returns the object recreated using data from the buffer.
             self._consumed_bytes = end_index
-            # noinspection PyUnboundLocalVariable
             return out_object
         if end_index == TransportLayerStatus.INSUFFICIENT_BUFFER_SPACE_ERROR:
             message = (
@@ -584,7 +581,6 @@ class TransportLayer:
         )  # pragma: no cover
         console.error(message=message, error=RuntimeError)  # pragma: no cover
         # Unreachable: console.error() is NoReturn, but ruff cannot trace NoReturn through method calls (RET503).
-        # noinspection PyUnreachableCode
         raise RuntimeError(message)  # pragma: no cover
 
     def send_data(self) -> None:
@@ -664,7 +660,6 @@ class TransportLayer:
         )
         console.error(message=message, error=RuntimeError)
         # Unreachable: console.error() is NoReturn, but ruff cannot trace NoReturn through method calls (RET503).
-        # noinspection PyUnreachableCode
         raise RuntimeError(message)  # pragma: no cover
 
     @staticmethod
@@ -820,7 +815,6 @@ class TransportLayer:
         packet = cobs_processor.encode_payload(payload_buffer[:payload_size])
 
         # Extends the packet's buffer to include the space for the CRC checksum postamble.
-        # noinspection PyTypeChecker
         crc_packet = np.empty(len(packet) + crc_processor.crc_byte_length, dtype=np.uint8)
         crc_packet[: len(packet)] = packet
 
@@ -1005,7 +999,6 @@ class TransportLayer:
         # Raises the resolved error message as RuntimeError.
         console.error(message=message, error=RuntimeError)  # pragma: no cover
         # Unreachable: console.error() is NoReturn, but ruff cannot trace NoReturn through method calls (RET503).
-        # noinspection PyUnreachableCode
         raise RuntimeError(message)  # pragma: no cover
 
     def _bytes_available(self, required_bytes_count: int = 1, timeout: int = 0) -> bool:

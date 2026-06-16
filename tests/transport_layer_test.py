@@ -64,7 +64,6 @@ def test_init_errors() -> None:
         f"encountered {port} of type {type(port).__name__}."
     )
     with pytest.raises(TypeError, match=error_format(message)):
-        # noinspection PyTypeChecker
         TransportLayer(port=port, microcontroller_serial_buffer_size=64, baudrate=1000000)
 
     # Invalid baudrate argument
@@ -82,7 +81,6 @@ def test_init_errors() -> None:
         f"'microcontroller_serial_buffer_size' argument, but encountered {None} of type {type(None).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         TransportLayer(port="COM7", microcontroller_serial_buffer_size=None, baudrate=1000000)
 
 
@@ -345,7 +343,6 @@ def test_read_data_errors(protocol) -> None:
         f"set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(TypeError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(data_object=unsupported_data_object)
 
     # Empty NdArray prototype
@@ -355,7 +352,6 @@ def test_read_data_errors(protocol) -> None:
         "input data_object. Reading empty arrays is not supported."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(empty_array)
 
     # Multidimensional NdArray input.
@@ -366,7 +362,6 @@ def test_read_data_errors(protocol) -> None:
         f"one-dimensional (flat) arrays are supported."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(multidimensional_array)
 
     # Prototype needs more data than available for reading
@@ -378,7 +373,6 @@ def test_read_data_errors(protocol) -> None:
         f"bytes."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(large_array)
 
 
@@ -393,7 +387,6 @@ def test_write_data_errors(protocol) -> None:
         f"set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(TypeError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.write_data(invalid_data)
 
     # Empty NdArray input. Also tests encountering an error when serializing a data-class instance by assigning an
@@ -408,7 +401,6 @@ def test_write_data_errors(protocol) -> None:
         ValueError,
         match=error_format(message),
     ):
-        # noinspection PyTypeChecker
         protocol.write_data(test_dataclass)
 
     # Multidimensional NdArray input.
@@ -418,7 +410,6 @@ def test_write_data_errors(protocol) -> None:
     )
     invalid_array: NDArray[np.uint8] = np.zeros((2, 2), dtype=np.uint8)
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.write_data(invalid_array)
 
     # An object whose size exceeds the available transmission buffer space.
@@ -432,7 +423,6 @@ def test_write_data_errors(protocol) -> None:
         f"size is {protocol._transmission_buffer.size} bytes."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.write_data(large_data)
 
 
