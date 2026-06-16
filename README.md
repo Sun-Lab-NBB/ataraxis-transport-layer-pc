@@ -234,8 +234,8 @@ There are two key methods associated with sending data to the microcontroller:
   transmission buffer's payload region. Each call appends the data to the end of the payload already stored in the
   transmission buffer.
 - The `send_data()` method encodes the payload stored in the transmission buffer into a packet using COBS, calculates
-  and adds the CRC checksum to the encoded packet, and transmits the packet to the microcontroller. The method requires
-  at least one byte of data to be written to the staging buffer before it can be sent to the microcontroller.
+  and adds the CRC checksum to the encoded packet, and transmits the packet to the microcontroller. At least one byte
+  of data should be written to the transmission buffer before calling this method.
 
 The example below showcases the sequence of steps necessary to send the data to the microcontroller and assumes
 TransportLayer 'tl_class' was initialized following the steps in the [Quickstart](#quickstart) example:
@@ -311,14 +311,14 @@ that want to modify the source code of this library.
 ### Installing the Project
 
 ***Note,*** this installation method requires **mamba version 2.3.2 or above**. Currently, all
-Sun lab automation pipelines require that mamba is installed through the
+Ataraxis framework automation pipelines require that mamba is installed through the
 [miniforge3](https://github.com/conda-forge/miniforge) installer.
 
 1. Download this repository to the local machine using the preferred method, such as git-cloning.
 2. If the downloaded distribution is stored as a compressed archive, unpack it using the
    appropriate decompression tool.
 3. `cd` to the root directory of the prepared project distribution.
-4. Install the core Sun lab development dependencies into the ***base*** mamba environment via the
+4. Install the core Ataraxis framework development dependencies into the ***base*** mamba environment via the
    `mamba install tox uv tox-uv` command.
 5. Use the `tox -e create` command to create the project-specific development environment followed
    by `tox -e install` command to install the project into that environment as a library.

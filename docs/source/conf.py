@@ -3,7 +3,6 @@ import importlib_metadata
 
 # -- Project information -----------------------------------------------------
 project = 'ataraxis-transport-layer-pc'
-# noinspection PyShadowingBuiltins
 copyright = '2026, Sun (NeuroAI) lab'
 authors = ['Ivan Kondratyev', 'Katlynn Ryu']
 # Extracts the project version from the metadata .toml file.

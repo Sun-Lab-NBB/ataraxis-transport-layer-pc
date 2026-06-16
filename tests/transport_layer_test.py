@@ -1,8 +1,7 @@
 """Contains tests for classes and methods provided by the transport_layer module."""
 
-from typing import Any
-from unittest.mock import PropertyMock, patch
 from dataclasses import dataclass
+from unittest.mock import PropertyMock, patch
 
 import numpy as np
 import pytest
@@ -13,19 +12,19 @@ from ataraxis_transport_layer_pc import TransportLayer
 from ataraxis_transport_layer_pc.helper_modules import SerialMock
 
 
-@dataclass
+@dataclass(slots=True)
 class SampleDataClass:
     """Defines a test dataclass for verifying the 'structure' serialization capability of the TransportLayer class."""
 
     uint_value: np.uint8
-    """A numpy unsigned integer scalar value used to test scalar dataclass field serialization."""
+    """Used to test scalar dataclass field serialization."""
     uint_array: NDArray[np.uint8]
-    """A numpy array value used to test numpy array dataclass field serialization."""
+    """Used to test numpy array dataclass field serialization."""
 
 
 @pytest.fixture()
 def protocol() -> TransportLayer:
-    """Creates a TransportLayer instance with test mode enabled for testing."""
+    """Creates a TransportLayer instance with test mode enabled."""
     protocol = TransportLayer(
         port="COM7",
         microcontroller_serial_buffer_size=1024,
@@ -64,7 +63,6 @@ def test_init_errors() -> None:
         f"encountered {port} of type {type(port).__name__}."
     )
     with pytest.raises(TypeError, match=error_format(message)):
-        # noinspection PyTypeChecker
         TransportLayer(port=port, microcontroller_serial_buffer_size=64, baudrate=1000000)
 
     # Invalid baudrate argument
@@ -82,7 +80,6 @@ def test_init_errors() -> None:
         f"'microcontroller_serial_buffer_size' argument, but encountered {None} of type {type(None).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         TransportLayer(port="COM7", microcontroller_serial_buffer_size=None, baudrate=1000000)
 
 
@@ -240,28 +237,25 @@ def test_init_errors() -> None:
         ),
     ],
 )
-def test_data_transmission_cycle(protocol, data: tuple[Any, ...], expected_buffer: NDArray[Any]) -> None:
+def test_data_transmission_cycle(protocol, data, expected_buffer) -> None:
     """Verifies the functioning of TransportLayer write_data(), send_data(), receive_data() and read_data() methods."""
-    # Step 1: Writes all data items to the transmission buffer
     for item in data:
-        protocol.write_data(item)  # No index tracking needed
+        protocol.write_data(item)
 
     # Verifies buffer state after writing
     assert np.array_equal(protocol.transmission_buffer[: protocol.bytes_in_transmission_buffer], expected_buffer)
     assert protocol.bytes_in_transmission_buffer == len(expected_buffer)
 
-    # Step 2: Sends the data
     protocol.send_data()
     assert protocol.bytes_in_transmission_buffer == 0
 
-    # Step 3: Simulates reception
+    # Loops the transmitted bytes back into the reception buffer to simulate packet reception.
     assert not protocol.available
     protocol._port.rx_buffer = protocol._port.tx_buffer
     assert protocol.available
     assert protocol.receive_data()
     assert protocol.bytes_in_reception_buffer == len(expected_buffer)
 
-    # Step 4: Reads and verifies each data item
     for item in data:
         # Creates appropriate prototypes
         if isinstance(item, np.ndarray):
@@ -317,7 +311,7 @@ def test_receive_bytes_available(protocol) -> None:
     chunk_2 = test_data[8:16]
 
     # Verifies that TransportLayer correctly combines data 'leftover' from previous data reception with new data that
-    # became available before the most recent read_data call().
+    # became available before the most recent read_data() call.
     protocol._leftover_bytes = chunk_1.tobytes()
     protocol._port.rx_buffer = chunk_2.tobytes()
     protocol.receive_data()
@@ -331,7 +325,7 @@ def test_receive_bytes_available(protocol) -> None:
 
 
 def test_read_data_errors(protocol) -> None:
-    """Verifies the error handling behavior of TransportLayer read_data() method."""
+    """Verifies the error-handling behavior of TransportLayer read_data() method."""
     # Sets the received bytes tracker to 5. The instance interprets this as meaning that it has 5 bytes available for
     # reading inside the reception buffer. This is necessary to trigger the error cases below.
     protocol._bytes_in_reception_buffer = 5
@@ -345,7 +339,6 @@ def test_read_data_errors(protocol) -> None:
         f"set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(TypeError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(data_object=unsupported_data_object)
 
     # Empty NdArray prototype
@@ -355,7 +348,6 @@ def test_read_data_errors(protocol) -> None:
         "input data_object. Reading empty arrays is not supported."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(empty_array)
 
     # Multidimensional NdArray input.
@@ -366,7 +358,6 @@ def test_read_data_errors(protocol) -> None:
         f"one-dimensional (flat) arrays are supported."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(multidimensional_array)
 
     # Prototype needs more data than available for reading
@@ -378,12 +369,11 @@ def test_read_data_errors(protocol) -> None:
         f"bytes."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.read_data(large_array)
 
 
 def test_write_data_errors(protocol) -> None:
-    """Verifies the error handling behavior of TransportLayer write_data() method."""
+    """Verifies the error-handling behavior of TransportLayer write_data() method."""
     # Invalid data type
     invalid_data = None
     message = (
@@ -393,7 +383,6 @@ def test_write_data_errors(protocol) -> None:
         f"set to supported numpy scalar or array types is also supported."
     )
     with pytest.raises(TypeError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.write_data(invalid_data)
 
     # Empty NdArray input. Also tests encountering an error when serializing a data-class instance by assigning an
@@ -408,7 +397,6 @@ def test_write_data_errors(protocol) -> None:
         ValueError,
         match=error_format(message),
     ):
-        # noinspection PyTypeChecker
         protocol.write_data(test_dataclass)
 
     # Multidimensional NdArray input.
@@ -418,7 +406,6 @@ def test_write_data_errors(protocol) -> None:
     )
     invalid_array: NDArray[np.uint8] = np.zeros((2, 2), dtype=np.uint8)
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.write_data(invalid_array)
 
     # An object whose size exceeds the available transmission buffer space.
@@ -432,12 +419,11 @@ def test_write_data_errors(protocol) -> None:
         f"size is {protocol._transmission_buffer.size} bytes."
     )
     with pytest.raises(ValueError, match=error_format(message)):
-        # noinspection PyTypeChecker
         protocol.write_data(large_data)
 
 
 def test_receive_data_errors(protocol) -> None:
-    """Verifies the error handling behavior of the TransportLayer class receive_data() method."""
+    """Verifies the error-handling behavior of TransportLayer receive_data() method."""
     # Generates a test payload and uses TransportLayer internal methods to encode, checksum, and assemble the
     # data packet around the payload. This simulates the steps typically taken as part of the send_data() method
     # runtime.
@@ -461,7 +447,7 @@ def test_receive_data_errors(protocol) -> None:
     assert not protocol.receive_data()
 
     # Packet size byte wasn't received in time.
-    empty_buffer[-1] = 129  # Sets the last byte of the empty_buffer to stat byte value.
+    empty_buffer[-1] = 129  # Sets the last byte of the empty_buffer to start byte value.
     protocol._port.rx_buffer = empty_buffer.tobytes()
     message = (
         f"Failed to parse the size of the incoming serial packet. The packet size byte was not received in "
@@ -533,7 +519,7 @@ def test_receive_data_errors(protocol) -> None:
 
     # Cleans up and resets the test buffer
     protocol._leftover_bytes = b""
-    test_data[-3] = 10  # This was the initial value at index -4
+    test_data[-3] = 10  # This was the initial value at index -3
 
     # Delimiter byte wasn't found at the end of the encoded packet.
     test_data[-2] = 10  # Overrides the delimiter
@@ -558,8 +544,8 @@ def test_receive_data_errors(protocol) -> None:
     test_data[-1:] = np.array([0x00], dtype=np.uint8)  # Fake checksum
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
-        f"Failed to process the received serial packet. This indicates that the packet was corrupted during "
-        f"transmission or reception."
+        "Failed to process the received serial packet. This indicates that the packet was corrupted during "
+        "transmission or reception."
     )
     with pytest.raises(RuntimeError, match=error_format(message)):
         protocol.receive_data()
@@ -569,7 +555,7 @@ def test_receive_data_errors(protocol) -> None:
 
     # COBS verification error.
     # For this test, creates a special test payload by introducing an error after COBS-encoding the payload, but
-    # before generating the CRC checksum. This simulates for a very rare case where the packet corruption is so major
+    # before generating the CRC checksum. This simulates a very rare case where the packet corruption is so major
     # the CRC fails to detect the corruption. However, the corruption can break COBS-encoding, which COBS will detect.
     packet = protocol._cobs_processor.encode_payload(payload=test_payload)
     packet[5] = 2  # Replaces one of the COBS_encoded values with a different value, introducing a COBS error
@@ -581,8 +567,8 @@ def test_receive_data_errors(protocol) -> None:
     # Checks the COBS error
     protocol._port.rx_buffer = test_data.tobytes()
     message = (
-        f"Failed to process the received serial packet. This indicates that the packet was corrupted during "
-        f"transmission or reception."
+        "Failed to process the received serial packet. This indicates that the packet was corrupted during "
+        "transmission or reception."
     )
     with pytest.raises(RuntimeError, match=error_format(message)):
         protocol.receive_data()
