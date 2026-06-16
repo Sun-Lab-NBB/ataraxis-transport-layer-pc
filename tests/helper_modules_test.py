@@ -103,7 +103,7 @@ def test_cobs_processor_decode_errors() -> None:
     with pytest.raises(ValueError, match=error_format(message)):
         _ = processor.decode_payload(corrupted_packet)
 
-    # Tests packet decoder corruption error where the unencoded payload is not found at the end of the payload or, for
+    # Tests packet decoder corruption error where the unencoded delimiter is not found at the end of the packet or, for
     # that matter, at all (delimiter_not_found_error)
     corrupted_packet = np.array([6, 1, 2, 3, 4, 5, 6], dtype=np.uint8)
     message = (
@@ -115,7 +115,7 @@ def test_cobs_processor_decode_errors() -> None:
 
 
 def test_crc_processor_generate_table_crc_8() -> None:
-    """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC8 polynomials."""
+    """Verifies the functioning of the CRCProcessor's generate_crc_table() method for CRC8 polynomials."""
     # Defines crc-8 polynomial parameters and test values
     polynomial = np.uint8(0x07)
     initial_crc_value = np.uint8(0x00)
@@ -391,7 +391,7 @@ def test_crc_processor_generate_table_crc_8() -> None:
 
 
 def test_crc_processor_generate_table_crc_16() -> None:
-    """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC16 polynomials."""
+    """Verifies the functioning of the CRCProcessor's generate_crc_table() method for CRC16 polynomials."""
     # Defines crc-16 polynomial parameters and test values
     polynomial = np.uint16(0x1021)
     initial_crc_value = np.uint16(0xFFFF)
@@ -667,7 +667,7 @@ def test_crc_processor_generate_table_crc_16() -> None:
 
 
 def test_crc_processor_generate_table_crc_32() -> None:
-    """Verifies the functioning of the CRCProcessor class generate_crc_table() method for CRC32 polynomials."""
+    """Verifies the functioning of the CRCProcessor's generate_crc_table() method for CRC32 polynomials."""
     # Defines crc-32 polynomial parameters and test values
     polynomial = np.uint32(0x000000AF)
     initial_crc_value = np.uint32(0x00000000)
@@ -1023,7 +1023,7 @@ def test_crc_processor_properties() -> None:
 
 
 def test_crc_processor_errors() -> None:
-    """Verifies the error handling behavior of CRCProcessor's calculate_checksum() method."""
+    """Verifies the error-handling behavior of the CRCProcessor's calculate_checksum() method."""
     # Instantiates tested class
     polynomial = np.uint16(0x1021)
     initial_crc_value = np.uint16(0xFFFF)
@@ -1067,15 +1067,12 @@ def test_serial_mock() -> None:
     assert mock_serial.tx_buffer == b""
     assert mock_serial.rx_buffer == b""
 
-    # Tests open() method
     mock_serial.open()
     assert mock_serial.is_open
 
-    # Tests close() method
     mock_serial.close()
     assert not mock_serial.is_open
 
-    # Tests write() method
     mock_serial.open()
     mock_serial.write(b"Hello")
     assert mock_serial.tx_buffer == b"Hello"
@@ -1084,25 +1081,20 @@ def test_serial_mock() -> None:
     with pytest.raises(TypeError):
         mock_serial.write("Not bytes")
 
-    # Tests read() method
     mock_serial.rx_buffer = b"World"
     data = mock_serial.read(3)
     assert data == b"Wor"
     assert mock_serial.rx_buffer == b"ld"
 
-    # Tests reset_input_buffer() method
     mock_serial.reset_input_buffer()
     assert mock_serial.rx_buffer == b""
 
-    # Tests reset_output_buffer() method
     mock_serial.reset_output_buffer()
     assert mock_serial.tx_buffer == b""
 
-    # Tests in_waiting() method
     mock_serial.rx_buffer = b"Data"
     assert mock_serial.in_waiting == 4
 
-    # Tests out_waiting() method
     mock_serial.tx_buffer = b"Output"
     assert mock_serial.out_waiting == 6
 
