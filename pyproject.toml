@@ -20,7 +20,7 @@ maintainers = [
     { name = "Ivan Kondratyev", email = "ik278@cornell.edu" },
 ]
 
-keywords = ["ataraxis", "sunlab", "serial", "communication", "USB", "UART"]
+keywords = ["ataraxis", "serial", "communication", "USB", "UART"]
 
 classifiers = [
     # Development status
@@ -45,7 +45,7 @@ dependencies = [
     # Numerical Computing
     "numpy>=2,<3",
     "numba>=0.63,<1",
-    "intel-cmplr-lib-rt>=2025,<2026; sys_platform != 'darwin'",
+    "intel-cmplr-lib-rt>=2026,<2027; sys_platform != 'darwin'",
 
     # Serial Communication
     "pyserial>=3,<4",

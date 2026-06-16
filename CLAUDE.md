@@ -29,8 +29,8 @@ appropriate skill results in style violations.
 
 ## Cross-referenced library verification
 
-Sun Lab projects often depend on other `ataraxis-*` or `sl-*` libraries. These libraries may be stored locally in the
-same parent directory as this project (`/home/cyberaxolotl/Desktop/GitHubRepos/`).
+Ataraxis framework projects often depend on other `ataraxis-*` or `sollertia-*` libraries. These libraries may be
+stored locally in the same parent directory as this project (`/home/cyberaxolotl/Desktop/GitHubRepos/`).
 
 **Before writing code that interacts with a cross-referenced library, you MUST:**
 
@@ -93,17 +93,17 @@ in `ataraxis-transport-layer-mc`, and vice versa.
 
 ## Available skills
 
-| Skill                    | Description                                                               |
-|--------------------------|---------------------------------------------------------------------------|
-| `/explore-codebase`      | Perform in-depth codebase exploration at session start                    |
-| `/explore-dependencies`  | Explore ataraxis dependency APIs for a live API snapshot                  |
-| `/python-style`          | Apply Sun Lab Python coding conventions (REQUIRED for all Python changes) |
-| `/readme-style`          | Apply Sun Lab README conventions (REQUIRED for README changes)            |
-| `/pyproject-style`       | Apply Sun Lab pyproject.toml conventions                                  |
-| `/tox-config`            | Apply Sun Lab tox.ini conventions                                         |
-| `/api-docs`              | Apply Sun Lab API documentation conventions                               |
-| `/commit`                | Draft Sun Lab style-compliant git commit messages                         |
-| `/skill-design`          | Generate and verify skill files and CLAUDE.md project instructions        |
+| Skill                    | Description                                                                          |
+|--------------------------|--------------------------------------------------------------------------------------|
+| `/explore-codebase`      | Perform in-depth codebase exploration at session start                               |
+| `/explore-dependencies`  | Explore ataraxis dependency APIs for a live API snapshot                             |
+| `/python-style`          | Apply Ataraxis framework Python coding conventions (REQUIRED for all Python changes) |
+| `/readme-style`          | Apply Ataraxis framework README conventions (REQUIRED for README changes)            |
+| `/pyproject-style`       | Apply Ataraxis framework pyproject.toml conventions                                  |
+| `/tox-config`            | Apply Ataraxis framework tox.ini conventions                                         |
+| `/api-docs`              | Apply Ataraxis framework API documentation conventions                               |
+| `/commit`                | Draft Ataraxis framework style-compliant git commit messages                         |
+| `/skill-design`          | Generate and verify skill files and CLAUDE.md project instructions                   |
 
 ## Project context
 
