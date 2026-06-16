@@ -93,17 +93,23 @@ in `ataraxis-transport-layer-mc`, and vice versa.
 
 ## Available skills
 
-| Skill                    | Description                                                                          |
-|--------------------------|--------------------------------------------------------------------------------------|
-| `/explore-codebase`      | Perform in-depth codebase exploration at session start                               |
-| `/explore-dependencies`  | Explore ataraxis dependency APIs for a live API snapshot                             |
-| `/python-style`          | Apply Ataraxis framework Python coding conventions (REQUIRED for all Python changes) |
-| `/readme-style`          | Apply Ataraxis framework README conventions (REQUIRED for README changes)            |
-| `/pyproject-style`       | Apply Ataraxis framework pyproject.toml conventions                                  |
-| `/tox-config`            | Apply Ataraxis framework tox.ini conventions                                         |
-| `/api-docs`              | Apply Ataraxis framework API documentation conventions                               |
-| `/commit`                | Draft Ataraxis framework style-compliant git commit messages                         |
-| `/skill-design`          | Generate and verify skill files and CLAUDE.md project instructions                   |
+| Skill                   | Description                                                                          |
+|-------------------------|--------------------------------------------------------------------------------------|
+| `/explore-codebase`     | Perform in-depth codebase exploration at session start                               |
+| `/explore-dependencies` | Explore ataraxis dependency APIs for a live API snapshot                             |
+| `/python-style`         | Apply Ataraxis framework Python coding conventions (REQUIRED for all Python changes) |
+| `/readme-style`         | Apply Ataraxis framework README conventions (REQUIRED for README changes)            |
+| `/pyproject-style`      | Apply Ataraxis framework pyproject.toml conventions                                  |
+| `/tox-config`           | Apply Ataraxis framework tox.ini conventions                                         |
+| `/api-docs`             | Apply Ataraxis framework API documentation conventions                               |
+| `/audit-facts`          | Fact-check documentation files against authoritative source code                     |
+| `/audit-style`          | Audit source, config, or docs for style compliance against Sun Lab checklists        |
+| `/commit`               | Draft Ataraxis framework style-compliant git commit messages                         |
+| `/pr`                   | Draft a style-compliant pull request summary for the active branch                   |
+| `/release`              | Draft style-compliant release notes from merged pull requests                        |
+| `/skill-design`         | Generate and verify skill files and CLAUDE.md project instructions                   |
+| `/project-layout`       | Apply Ataraxis framework project directory structure conventions                     |
+| `/cpp-style`            | Apply Ataraxis framework C++ conventions for companion library changes               |
 
 ## Project context
 
@@ -172,8 +178,9 @@ Exported from `__init__.py` via `__all__`:
 - **Status code returns in JIT methods**: JIT-compiled methods return `TransportLayerStatus` enum values instead of
   raising exceptions (Numba limitation). Python wrapper methods convert status codes to exceptions via
   `console.error()`.
-- **Resumable packet parsing**: `_parse_packet()` implements a 4-stage state machine that can resume across multiple
-  calls when insufficient bytes are available, accumulating partial data in `_leftover_bytes`.
+- **Resumable packet parsing**: `_parse_packet()` implements a 4-stage parsing state machine, while `_receive_packet()`
+  drives resumption across at most 3 iterations when insufficient bytes are available, accumulating partial data in
+  `_leftover_bytes`.
 - **SerialMock for testing**: `TransportLayer` accepts `test_mode=True` to substitute `SerialMock` for the real
   `Serial` port, enabling full unit testing without hardware.
 

@@ -234,8 +234,8 @@ There are two key methods associated with sending data to the microcontroller:
   transmission buffer's payload region. Each call appends the data to the end of the payload already stored in the
   transmission buffer.
 - The `send_data()` method encodes the payload stored in the transmission buffer into a packet using COBS, calculates
-  and adds the CRC checksum to the encoded packet, and transmits the packet to the microcontroller. The method requires
-  at least one byte of data to be written to the staging buffer before it can be sent to the microcontroller.
+  and adds the CRC checksum to the encoded packet, and transmits the packet to the microcontroller. At least one byte
+  of data should be written to the transmission buffer before calling this method.
 
 The example below showcases the sequence of steps necessary to send the data to the microcontroller and assumes
 TransportLayer 'tl_class' was initialized following the steps in the [Quickstart](#quickstart) example:
