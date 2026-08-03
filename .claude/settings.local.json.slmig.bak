@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "sl-migration"
+  ],
+  "enableAllProjectMcpServers": true
+}
