@@ -126,10 +126,12 @@ class TransportLayer:
             manufacturer (UART / USB controller specification).
         baudrate: The baudrate to use for communication if the microcontroller uses the UART interface. Should match
             the value used by the microcontroller. This parameter is ignored when using the USB interface.
-        polynomial: The polynomial to use for the generation of the CRC lookup table. The polynomial must
-            be standard (non-reflected / non-reversed).
+        polynomial: The polynomial to use for the generation of the CRC lookup table. The polynomial must be expressed
+            in the standard non-reflected, MSB-aligned form used by published CRC parameter catalogues.
         initial_crc_value: The value to which the CRC checksum is initialized before calculation.
         final_crc_xor_value: The value with which the CRC checksum is XORed after calculation.
+        reflected: Determines whether the CRC checksum is computed least significant bit first and written to the
+            packet postamble least significant byte first. This must match the setting used by the microcontroller.
         test_mode: Determines whether the instance uses a pySerial (real) or a SerialMock (mocked) communication
             interface. This flag is used during testing and should be disabled for all production runtimes.
 
@@ -205,6 +207,7 @@ class TransportLayer:
         initial_crc_value: CRCType = _ZERO,
         final_crc_xor_value: CRCType = _ZERO,
         *,
+        reflected: bool = False,
         test_mode: bool = False,
     ) -> None:
         # Tracks whether the serial port is open. This is used solely to avoid a __del__ error during testing.
@@ -248,6 +251,7 @@ class TransportLayer:
             polynomial=polynomial,
             initial_crc_value=initial_crc_value,
             final_xor_value=final_crc_xor_value,
+            reflected=reflected,
         )
         self._cobs_processor = COBSProcessor()
 
