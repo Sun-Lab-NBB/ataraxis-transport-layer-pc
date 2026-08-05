@@ -169,6 +169,7 @@ class CRCProcessor:
             ("final_xor_value", crc_type),
             ("crc_byte_length", uint8),
             ("crc_table", crc_type[:]),
+            ("expected_residue", crc_type),
         ]
 
         # Initializes and compiles the internal _CRCProcessor class. This automatically generates the static CRC lookup
@@ -522,6 +523,7 @@ class _CRCProcessor:  # pragma: no cover
         final_xor_value: Stores the final XOR value used for the CRC checksum calculation.
         crc_byte_length: Stores the length of the CRC polynomial in bytes.
         crc_table: The array that stores the CRC lookup table.
+        expected_residue: Stores the checksum value that verifying an intact packet produces.
     """
 
     def __init__(
@@ -553,6 +555,10 @@ class _CRCProcessor:  # pragma: no cover
         # Generates the lookup table based on the target polynomial parameters and iteratively sets each variable
         # inside the crc_table placeholder to the calculated values.
         self._generate_crc_table(polynomial=polynomial)
+
+        # Resolves the checksum value that verification produces for an intact packet. The value is determined by the
+        # polynomial and the final XOR value alone, so it is computed once and reused for every verification.
+        self.expected_residue: CRCType = self._compute_expected_residue()
 
     def calculate_checksum(self, buffer: NDArray[np.uint8], check: bool = False) -> np.uint16:
         """Calculates the checksum for the data stored in the input buffer.
@@ -603,9 +609,9 @@ class _CRCProcessor:  # pragma: no cover
             return np.uint16(len(buffer))
 
         # If the method is called to verify the data integrity, returns 1 if it succeeds and 0 otherwise.
-        # Running the CRC calculation on the data with post-pended checksum should always return 0 for valid
-        # data packets
-        if crc_checksum == 0:
+        # Running the CRC calculation on the data with post-pended checksum always produces the expected residue for
+        # valid data packets.
+        if crc_checksum == self.expected_residue:
             return np.uint16(1)
         # Otherwise, the data is corrupted.
         return np.uint16(0)
@@ -657,6 +663,27 @@ class _CRCProcessor:  # pragma: no cover
             # (index). This value is the remainder of the polynomial division of the byte (treated as a
             # CRC-sized number), by the CRC polynomial.
             self.crc_table[byte] = crc
+
+    def _compute_expected_residue(self) -> CRCType:
+        """Computes the checksum value that verifying an intact packet produces.
+
+        Verification runs the checksum calculation over the packet together with its checksum postamble. The value this
+        produces for an intact packet is determined by the polynomial and the final XOR value alone, so it is resolved
+        once during class initialization and reused for every verification.
+
+        Returns:
+            The checksum value that indicates an intact packet.
+        """
+        residue = self._make_polynomial_type(0)
+
+        # Feeds the final XOR value through a zeroed checksum register, mirroring the way verification consumes the
+        # checksum postamble appended to the packet.
+        for i in range(self.crc_byte_length):
+            postamble_byte = (self.final_xor_value >> (_BYTE_SIZE * (self.crc_byte_length - i - 1))) & 0xFF
+            table_index = (residue >> (_BYTE_SIZE * (self.crc_byte_length - 1))) ^ postamble_byte
+            residue = self._make_polynomial_type((residue << _BYTE_SIZE) ^ self.crc_table[table_index])
+
+        return self._make_polynomial_type(residue ^ self.final_xor_value)
 
     def _make_polynomial_type(self, value: Any) -> CRCType:
         """Converts the input value to the appropriate numpy unsigned integer type based on the class instance
