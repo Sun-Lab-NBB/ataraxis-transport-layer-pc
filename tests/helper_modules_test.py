@@ -1007,6 +1007,37 @@ def test_crc_processor(
     assert result == 1
 
 
+@pytest.mark.parametrize(
+    "polynomial, initial_crc, final_xor, crc_type",
+    [
+        (0x07, 0x00, 0x55, np.uint8),
+        (0x8005, 0xFFFF, 0xFFFF, np.uint16),  # CRC-16/USB
+        (0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, np.uint32),  # CRC-32/BZIP2
+    ],
+)
+def test_crc_processor_nonzero_final_xor(polynomial, initial_crc, final_xor, crc_type) -> None:
+    """Verifies that CRCProcessor verifies packets generated with a non-zero final XOR value."""
+    crc_processor = CRCProcessor(
+        polynomial=crc_type(polynomial),
+        initial_crc_value=crc_type(initial_crc),
+        final_xor_value=crc_type(final_xor),
+    )
+
+    test_data = np.array([0x01, 0x02, 0x03, 0x04, 0x05], dtype=np.uint8)
+    buffer_with_space = np.empty(len(test_data) + crc_processor.crc_byte_length, dtype=np.uint8)
+    buffer_with_space[: len(test_data)] = test_data
+
+    crc_processor.calculate_checksum(buffer_with_space, check=False)
+
+    # Verifies that the intact packet passes the integrity check
+    assert crc_processor.calculate_checksum(buffer_with_space, check=True) == 1
+
+    # Verifies that corrupting the packet payload is detected
+    buffer_with_space[2] ^= 0x01
+    with pytest.raises(ValueError, match="CRC verification: Failed"):
+        crc_processor.calculate_checksum(buffer_with_space, check=True)
+
+
 def test_crc_processor_properties() -> None:
     """Verifies the properties of the CRCProcessor class."""
     polynomial = np.uint8(0x07)
