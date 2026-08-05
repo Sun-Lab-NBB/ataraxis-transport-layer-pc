@@ -72,6 +72,7 @@ def test_crc_processor_repr() -> None:
         f"CRCProcessor(polynomial={hex(processor._processor.polynomial)}, "
         f"initial_crc_value={hex(processor._processor.initial_crc_value)}, "
         f"final_xor_value={hex(processor._processor.final_xor_value)}, "
+        f"reflected={processor._processor.reflected}, "
         f"crc_byte_length={processor._processor.crc_byte_length})"
     )
     assert repr(processor) == expected_repr
@@ -1038,6 +1039,80 @@ def test_crc_processor_nonzero_final_xor(polynomial, initial_crc, final_xor, crc
         crc_processor.calculate_checksum(buffer_with_space, check=True)
 
 
+@pytest.mark.parametrize(
+    "polynomial, crc_type, anchor_entries",
+    [
+        (0x31, np.uint8, {0: 0x00, 1: 0x5E, 2: 0xBC, 128: 0x8C, 255: 0x35}),  # CRC-8/MAXIM-DOW
+        (0x8005, np.uint16, {0: 0x0000, 1: 0xC0C1, 2: 0xC181, 128: 0xA001, 255: 0x4040}),  # CRC-16/ARC
+        (
+            0x04C11DB7,
+            np.uint32,
+            {0: 0x00000000, 1: 0x77073096, 2: 0xEE0E612C, 128: 0xEDB88320, 255: 0x2D02EF8D},
+        ),  # CRC-32/ISO-HDLC
+    ],
+)
+def test_crc_processor_generate_table_reflected(polynomial, crc_type, anchor_entries) -> None:
+    """Verifies that CRCProcessor generates the published reflected lookup table for each reflected polynomial."""
+    crc_processor = CRCProcessor(
+        polynomial=crc_type(polynomial),
+        initial_crc_value=crc_type(0),
+        final_xor_value=crc_type(0),
+        reflected=True,
+    )
+
+    # The entry at index 128 is the reflected polynomial itself, because the single set high bit shifts out once and
+    # pulls in exactly one copy of the polynomial. This pins the internal reflection of the polynomial on its own.
+    for index, expected_entry in anchor_entries.items():
+        assert crc_processor.crc_table[index] == expected_entry
+
+
+@pytest.mark.parametrize(
+    "polynomial, initial_crc, final_xor, reflected, crc_type, expected_postamble",
+    [
+        (0x07, 0x00, 0x00, False, np.uint8, [0xF4]),  # CRC-8/SMBUS
+        (0x31, 0x00, 0x00, True, np.uint8, [0xA1]),  # CRC-8/MAXIM-DOW
+        (0x1021, 0xFFFF, 0x0000, False, np.uint16, [0x29, 0xB1]),  # CRC-16/IBM-3740
+        (0x8005, 0xFFFF, 0xFFFF, True, np.uint16, [0xC8, 0xB4]),  # CRC-16/USB
+        (0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, False, np.uint32, [0xFC, 0x89, 0x19, 0x18]),  # CRC-32/BZIP2
+        (0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, True, np.uint32, [0x26, 0x39, 0xF4, 0xCB]),  # CRC-32/ISO-HDLC
+    ],
+)
+def test_crc_processor_catalogue_check_values(
+    polynomial, initial_crc, final_xor, reflected, crc_type, expected_postamble
+) -> None:
+    """Verifies that CRCProcessor reproduces the published check value for each supported CRC configuration."""
+    crc_processor = CRCProcessor(
+        polynomial=crc_type(polynomial),
+        initial_crc_value=crc_type(initial_crc),
+        final_xor_value=crc_type(final_xor),
+        reflected=reflected,
+    )
+
+    # Published CRC catalogues state their check value for the input "123456789", so seeding the packet region with
+    # that string makes the generated postamble directly comparable to the catalogue value. The reflected entries
+    # expect the reversed byte order, which additionally pins down how each configuration lays out the postamble.
+    packet = np.frombuffer(b"123456789", dtype=np.uint8)
+    buffer = np.zeros(len(packet) + crc_processor.crc_byte_length, dtype=np.uint8)
+    buffer[: len(packet)] = packet
+
+    assert crc_processor.calculate_checksum(buffer, check=False) == len(buffer)
+    assert list(buffer[len(packet) :]) == expected_postamble
+
+    # Verifies that the intact packet passes the integrity check
+    assert crc_processor.calculate_checksum(buffer, check=True) == 1
+
+    # Verifies that corrupting the packet payload is detected
+    buffer[4] ^= 0x01
+    with pytest.raises(ValueError, match="CRC verification: Failed"):
+        crc_processor.calculate_checksum(buffer, check=True)
+
+    # Restores the payload, corrupts the checksum postamble instead, and verifies that this is also detected
+    buffer[4] ^= 0x01
+    buffer[-1] ^= 0x01
+    with pytest.raises(ValueError, match="CRC verification: Failed"):
+        crc_processor.calculate_checksum(buffer, check=True)
+
+
 def test_crc_processor_properties() -> None:
     """Verifies the properties of the CRCProcessor class."""
     polynomial = np.uint8(0x07)
@@ -1051,6 +1126,12 @@ def test_crc_processor_properties() -> None:
     assert processor.polynomial == polynomial
     assert processor.initial_crc_value == initial_crc_value
     assert processor.final_xor_value == final_xor_value
+    assert processor.reflected is False
+
+    reflected_processor = CRCProcessor(
+        polynomial=polynomial, initial_crc_value=initial_crc_value, final_xor_value=final_xor_value, reflected=True
+    )
+    assert reflected_processor.reflected is True
 
 
 def test_crc_processor_errors() -> None:

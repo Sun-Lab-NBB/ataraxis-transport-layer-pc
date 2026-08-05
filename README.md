@@ -30,7 +30,7 @@ ___
 
 - Supports Windows, Linux, and macOS.
 - Uses Consistent Overhead Byte Stuffing (COBS) to encode payloads during transmission.
-- Supports Cyclic Redundancy Check (CRC) 8-, 16- and 32-bit polynomials to ensure data integrity during transmission.
+- Supports standard and reflected Cyclic Redundancy Check (CRC) 8-, 16- and 32-bit polynomials for data integrity.
 - Allows fine-tuning all library components to support a wide range of application contexts.
 - Uses Just-in-Time (JIT) compilation and NumPy to optimize runtime performance in time-critical applications.
 - Has a [companion](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-mc) microcontroller library written in C++.
@@ -100,6 +100,10 @@ layout:
 To optimize runtime efficiency, the class generates two buffers at initialization time that store the incoming and
 outgoing data packets. Additionally, the class generates a static lookup table to speed up the CRC checksum calculations
 at runtime.
+
+***Note,*** the CRC parameters are specified in the standard non-reflected, MSB-aligned form used by published CRC
+parameter catalogues. Reflected variants, such as CRC-16/USB or CRC-32/ISO-HDLC, are selected with the separate
+reflection flag rather than by passing an already bit-reversed polynomial.
 
 ***Note,*** TransportLayer's write_data() and read_data() methods ***exclusively*** work with the **PAYLOAD** region of
 each data buffer. End users can safely ignore all packet-related information and focus on working with transmitted and

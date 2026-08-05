@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from numba import uint8, uint16, uint32
+from numba import uint8, uint16, uint32, boolean
 import numpy as np
 from numba.experimental import jitclass  # type: ignore[attr-defined]
 from ataraxis_base_utilities import console
@@ -136,10 +136,12 @@ class CRCProcessor:
         not verified during runtime and must be enforced through the use of the TransportLayer class.
 
     Args:
-        polynomial: The polynomial to use for the generation of the CRC lookup table. The polynomial must be standard
-            (non-reflected / non-reversed).
+        polynomial: The polynomial to use for the generation of the CRC lookup table. The polynomial must be expressed
+            in the standard non-reflected, MSB-aligned form used by published CRC parameter catalogues.
         initial_crc_value: The value to which the CRC checksum is initialized before calculation.
         final_xor_value: The value with which the CRC checksum is XORed after calculation.
+        reflected: Determines whether the processor consumes each data byte least significant bit first and writes the
+            checksum postamble least significant byte first.
 
     Attributes:
         _processor: Stores the jit-compiled _CRCProcessor instance, which carries out all computations.
@@ -153,6 +155,8 @@ class CRCProcessor:
         polynomial: CRCType,
         initial_crc_value: CRCType,
         final_xor_value: CRCType,
+        *,
+        reflected: bool = False,
     ) -> None:
         # Converts the input polynomial type from numpy to numba format so that it can be used in the spec list below.
         if polynomial.dtype is np.dtype(np.uint8):
@@ -167,6 +171,8 @@ class CRCProcessor:
             ("polynomial", crc_type),
             ("initial_crc_value", crc_type),
             ("final_xor_value", crc_type),
+            ("reflected", boolean),
+            ("initial_register", crc_type),
             ("crc_byte_length", uint8),
             ("crc_table", crc_type[:]),
             ("expected_residue", crc_type),
@@ -178,6 +184,7 @@ class CRCProcessor:
             polynomial=polynomial,
             initial_crc_value=initial_crc_value,
             final_xor_value=final_xor_value,
+            reflected=reflected,
         )
 
     def __repr__(self) -> str:
@@ -186,6 +193,7 @@ class CRCProcessor:
             f"CRCProcessor(polynomial={hex(self._processor.polynomial)}, "
             f"initial_crc_value={hex(self._processor.initial_crc_value)}, "
             f"final_xor_value={hex(self._processor.final_xor_value)}, "
+            f"reflected={self._processor.reflected}, "
             f"crc_byte_length={self._processor.crc_byte_length})"
         )
 
@@ -252,6 +260,11 @@ class CRCProcessor:
     def final_xor_value(self) -> CRCType:
         """Returns the final XOR value used for checksum calculation."""
         return self._processor.final_xor_value
+
+    @property
+    def reflected(self) -> bool:
+        """Returns whether the processor consumes data and writes the checksum postamble least significant end first."""
+        return bool(self._processor.reflected)
 
 
 class SerialMock:
@@ -513,14 +526,20 @@ class _CRCProcessor:  # pragma: no cover
         subsequently used to calculate CRC checksums.
 
     Args:
-        polynomial: The polynomial used to generate the CRC lookup table.
+        polynomial: The polynomial used to generate the CRC lookup table, expressed in the standard non-reflected,
+            MSB-aligned form used by published CRC parameter catalogues.
         initial_crc_value: The initial value to which the CRC checksum variable is initialized during calculation.
         final_xor_value: The final XOR value to be applied to the calculated CRC checksum value.
+        reflected: Determines whether the class consumes each data byte least significant bit first and writes the
+            checksum postamble least significant byte first.
 
     Attributes:
         polynomial: Stores the polynomial used for the CRC checksum calculation.
         initial_crc_value: Stores the initial value used for the CRC checksum calculation.
         final_xor_value: Stores the final XOR value used for the CRC checksum calculation.
+        reflected: Determines whether the class processes data least significant end first.
+        initial_register: Stores the initial value in the form the checksum register consumes, which is the
+            bit-reversed initial value for reflected configurations.
         crc_byte_length: Stores the length of the CRC polynomial in bytes.
         crc_table: The array that stores the CRC lookup table.
         expected_residue: Stores the checksum value that verifying an intact packet produces.
@@ -531,6 +550,7 @@ class _CRCProcessor:  # pragma: no cover
         polynomial: CRCType,
         initial_crc_value: CRCType,
         final_xor_value: CRCType,
+        reflected: bool,
     ) -> None:
         # Resolves the crc_type and polynomial size based on the input polynomial. Makes use of the recently added
         # dtype comparison support.
@@ -549,8 +569,15 @@ class _CRCProcessor:  # pragma: no cover
         self.polynomial: CRCType = polynomial
         self.initial_crc_value: CRCType = initial_crc_value
         self.final_xor_value: CRCType = final_xor_value
+        self.reflected: bool = reflected
         self.crc_byte_length: np.uint8 = polynomial_size
         self.crc_table = np.empty(256, dtype=crc_type)  # Initializes to empty for efficiency.
+
+        # Reflected configurations run the checksum register least significant bit first, which requires the initial
+        # value to enter the register in its bit-reversed form.
+        self.initial_register: CRCType = initial_crc_value
+        if reflected:
+            self.initial_register = self._reflect_value(initial_crc_value)
 
         # Generates the lookup table based on the target polynomial parameters and iteratively sets each variable
         # inside the crc_table placeholder to the calculated values.
@@ -581,19 +608,17 @@ class _CRCProcessor:  # pragma: no cover
         packet_size = len(buffer) - self.crc_byte_length
 
         # Initializes the checksum
-        crc_checksum = self.initial_crc_value
+        crc_checksum = self.initial_register
 
         # Calculates the checksum for the packet
         for i in range(packet_size):
-            table_index = (crc_checksum >> (_BYTE_SIZE * (self.crc_byte_length - 1))) ^ buffer[i]
-            crc_checksum = self._make_polynomial_type((crc_checksum << _BYTE_SIZE) ^ self.crc_table[table_index])
+            crc_checksum = self._update_checksum(crc_checksum, buffer[i])
 
         # If the method is called to verify the incoming packet's integrity, includes the CRC checksum postamble in
         # the calculation.
         if check:
             for i in range(packet_size, packet_size + self.crc_byte_length):
-                table_index = (crc_checksum >> (_BYTE_SIZE * (self.crc_byte_length - 1))) ^ buffer[i]
-                crc_checksum = self._make_polynomial_type((crc_checksum << _BYTE_SIZE) ^ self.crc_table[table_index])
+                crc_checksum = self._update_checksum(crc_checksum, buffer[i])
 
         # Applies the final XOR
         crc_checksum ^= self.final_xor_value
@@ -602,7 +627,7 @@ class _CRCProcessor:  # pragma: no cover
         # buffer.
         if not check:
             for i in range(self.crc_byte_length):
-                buffer[packet_size + i] = (crc_checksum >> (_BYTE_SIZE * (self.crc_byte_length - i - 1))) & 0xFF
+                buffer[packet_size + i] = self._extract_checksum_byte(crc_checksum, i)
 
             # Returns the total size of the buffer with the post-pended checksum to indicate that the method ran as
             # expected.
@@ -615,6 +640,24 @@ class _CRCProcessor:  # pragma: no cover
             return np.uint16(1)
         # Otherwise, the data is corrupted.
         return np.uint16(0)
+
+    def _reflect_value(self, value: CRCType) -> CRCType:
+        """Reverses the bit order of the input value across the full bit width of the CRC polynomial type.
+
+        Args:
+            value: The value whose bit order to reverse.
+
+        Returns:
+            The input value with its bit order reversed.
+        """
+        crc_bits = self.crc_byte_length * _BYTE_SIZE
+        reflection = 0
+
+        for bit in range(crc_bits):
+            if (value >> bit) & 1:
+                reflection |= 1 << (crc_bits - bit - 1)
+
+        return self._make_polynomial_type(reflection)
 
     def _generate_crc_table(self, polynomial: CRCType) -> None:
         """Uses the input polynomial to compute the CRC checksums for each possible uint8 (byte) value.
@@ -630,6 +673,33 @@ class _CRCProcessor:  # pragma: no cover
         Args:
             polynomial: The polynomial to use for the generation of the CRC lookup table.
         """
+        # Reflected configurations divide from the least significant bit upward, which is the mirror image of the
+        # division carried out below and consumes the bit-reversed form of the polynomial.
+        if self.reflected:
+            reflected_polynomial = self._reflect_value(polynomial)
+
+            # Iterates over each possible value of a byte variable
+            for byte in np.arange(256, dtype=np.uint8):
+                # Initializes the byte CRC value in the low end of the register, which is where reflected processing
+                # keeps the byte currently being divided.
+                crc = self._make_polynomial_type(byte)
+
+                # Loops over each of the 8 bits making up the byte-value being processed
+                for _ in range(_BYTE_SIZE):
+                    # Checks if the bottom bit (LSB) is set
+                    if crc & 1:
+                        # Shifts the crc value right to bring the next bit into the bottom position, then XORs it with
+                        # the reflected polynomial.
+                        crc = self._make_polynomial_type((crc >> 1) ^ reflected_polynomial)
+                    else:
+                        # Shifts the crc value right to move to the next bit without changing the current crc value,
+                        # as division by the polynomial would not modify it.
+                        crc = self._make_polynomial_type(crc >> 1)
+
+                self.crc_table[byte] = crc
+
+            return
+
         # Determines the number of bits in the CRC datatype
         crc_bits = np.uint8(self.crc_byte_length * _BYTE_SIZE)
 
@@ -679,11 +749,45 @@ class _CRCProcessor:  # pragma: no cover
         # Feeds the final XOR value through a zeroed checksum register, mirroring the way verification consumes the
         # checksum postamble appended to the packet.
         for i in range(self.crc_byte_length):
-            postamble_byte = (self.final_xor_value >> (_BYTE_SIZE * (self.crc_byte_length - i - 1))) & 0xFF
-            table_index = (residue >> (_BYTE_SIZE * (self.crc_byte_length - 1))) ^ postamble_byte
-            residue = self._make_polynomial_type((residue << _BYTE_SIZE) ^ self.crc_table[table_index])
+            residue = self._update_checksum(residue, self._extract_checksum_byte(self.final_xor_value, i))
 
         return self._make_polynomial_type(residue ^ self.final_xor_value)
+
+    def _update_checksum(self, checksum: CRCType, data_byte: np.uint8) -> CRCType:
+        """Folds the input data byte into the running checksum.
+
+        Args:
+            checksum: The running checksum to fold the data byte into.
+            data_byte: The data byte to fold into the checksum.
+
+        Returns:
+            The checksum updated with the input data byte.
+        """
+        # Reflected processing keeps the byte being divided in the low end of the register, so the lookup table index
+        # comes from the low byte and the register advances by shifting right.
+        if self.reflected:
+            reflected_index = (checksum ^ data_byte) & 0xFF
+            return self._make_polynomial_type((checksum >> _BYTE_SIZE) ^ self.crc_table[reflected_index])
+
+        table_index = (checksum >> (_BYTE_SIZE * (self.crc_byte_length - 1))) ^ data_byte
+        return self._make_polynomial_type((checksum << _BYTE_SIZE) ^ self.crc_table[table_index])
+
+    def _extract_checksum_byte(self, checksum: CRCType, index: int) -> np.uint8:
+        """Extracts the checksum byte stored at the requested postamble offset.
+
+        Args:
+            checksum: The checksum from which to extract the byte.
+            index: The postamble offset of the byte to extract.
+
+        Returns:
+            The checksum byte that occupies the requested postamble offset.
+        """
+        # Reflected checksums occupy the postamble least significant byte first, which is the order that drives the
+        # verification register to the expected residue.
+        if self.reflected:
+            return np.uint8((checksum >> (_BYTE_SIZE * index)) & 0xFF)
+
+        return np.uint8((checksum >> (_BYTE_SIZE * (self.crc_byte_length - index - 1))) & 0xFF)
 
     def _make_polynomial_type(self, value: Any) -> CRCType:
         """Converts the input value to the appropriate numpy unsigned integer type based on the class instance
