@@ -51,8 +51,8 @@ dependencies = [
     "pyserial>=3,<4",
 
     # Ataraxis
-    "ataraxis-time>=6,<7",
-    "ataraxis-base-utilities>=6,<7",
+    "ataraxis-time>=7,<8",
+    "ataraxis-base-utilities>=7,<8",
 ]
 
 # Project repository and hosted documentation URLs.
