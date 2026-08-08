@@ -1210,13 +1210,13 @@ def test_serial_mock() -> None:
     mock_serial.tx_buffer = b"Output"
     assert mock_serial.out_waiting == 6
 
-    # Tests methods when the port is not open (expecting Exception)
+    # Tests methods when the port is not open (expecting RuntimeError)
     mock_serial.close()
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         mock_serial.write(b"Test")
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         mock_serial.read()
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         mock_serial.reset_input_buffer()
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         mock_serial.reset_output_buffer()

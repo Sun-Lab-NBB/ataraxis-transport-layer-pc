@@ -25,14 +25,12 @@ class SampleDataClass:
 @pytest.fixture()
 def protocol() -> TransportLayer:
     """Creates a TransportLayer instance with test mode enabled."""
-    protocol = TransportLayer(
+    return TransportLayer(
         port="COM7",
         microcontroller_serial_buffer_size=1024,
         baudrate=1000000,
         test_mode=True,
     )
-
-    return protocol
 
 
 def test_init_and_repr(protocol) -> None:

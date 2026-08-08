@@ -3,29 +3,27 @@
 ## Session start behavior
 
 At the beginning of each coding session, before making any code changes, you should build a comprehensive understanding
-of the codebase by invoking the `/explore-codebase` skill.
-
-This ensures you:
-- Understand the project architecture before modifying code
-- Follow existing patterns and conventions
-- Do not introduce inconsistencies or break integrations
+of the codebase by invoking the `automation:explore-codebase` skill. This library implements one half of a wire
+protocol, so exploring first prevents changes that silently diverge from the companion `ataraxis-transport-layer-mc`
+library.
 
 ## Style guide compliance
 
 You MUST invoke the appropriate style skill before performing ANY of the following tasks:
 
-| Task                                    | Skill to invoke    |
-|-----------------------------------------|--------------------|
-| Writing or modifying Python code        | `/python-style`    |
-| Writing or modifying README files       | `/readme-style`    |
-| Writing or modifying pyproject.toml     | `/pyproject-style` |
-| Writing or modifying tox.ini            | `/tox-config`      |
-| Writing or modifying Sphinx docs files  | `/api-docs`        |
-| Writing git commit messages             | `/commit`          |
-| Writing or modifying skill files        | `/skill-design`    |
+| Task                                          | Skill to invoke              |
+|-----------------------------------------------|------------------------------|
+| Writing or modifying Python code              | `automation:python-style`    |
+| Writing or modifying README files             | `automation:readme-style`    |
+| Writing or modifying pyproject.toml           | `automation:pyproject-style` |
+| Writing or modifying tox.ini                  | `automation:tox-config`      |
+| Writing or modifying Sphinx docs files        | `automation:api-docs`        |
+| Creating or modifying project structure       | `automation:project-layout`  |
+| Writing or modifying companion C++ code       | `automation:cpp-style`       |
+| Writing git commit messages                   | `automation:commit`          |
+| Writing or modifying skill files or this file | `automation:skill-design`    |
 
-Each skill contains a verification checklist that you MUST complete before submitting any work. Failure to invoke the
-appropriate skill results in style violations.
+Each skill contains a verification checklist that you MUST complete before submitting any work.
 
 ## Cross-referenced library verification
 
@@ -56,23 +54,29 @@ state to prevent integration errors.
 
 ## Available skills
 
-| Skill                   | Description                                                                          |
-|-------------------------|--------------------------------------------------------------------------------------|
-| `/explore-codebase`     | Perform in-depth codebase exploration at session start                               |
-| `/explore-dependencies` | Explore ataraxis dependency APIs for a live API snapshot                             |
-| `/python-style`         | Apply Ataraxis framework Python coding conventions (REQUIRED for all Python changes) |
-| `/readme-style`         | Apply Ataraxis framework README conventions (REQUIRED for README changes)            |
-| `/pyproject-style`      | Apply Ataraxis framework pyproject.toml conventions                                  |
-| `/tox-config`           | Apply Ataraxis framework tox.ini conventions                                         |
-| `/api-docs`             | Apply Ataraxis framework API documentation conventions                               |
-| `/audit-facts`          | Fact-check documentation files against authoritative source code                     |
-| `/audit-style`          | Audit source, config, or docs for style compliance against Sun Lab checklists        |
-| `/commit`               | Draft Ataraxis framework style-compliant git commit messages                         |
-| `/pr`                   | Draft a style-compliant pull request summary for the active branch                   |
-| `/release`              | Draft style-compliant release notes from merged pull requests                        |
-| `/skill-design`         | Generate and verify skill files and CLAUDE.md project instructions                   |
-| `/project-layout`       | Apply Ataraxis framework project directory structure conventions                     |
-| `/cpp-style`            | Apply Ataraxis framework C++ conventions for companion library changes               |
+This project ships no skills of its own and has no Claude Code plugin. The skills below come from the external ataraxis
+**automation** plugin and are the only ones that apply here.
+
+| Skill                             | Description                                                      |
+|-----------------------------------|------------------------------------------------------------------|
+| `automation:explore-codebase`     | Perform in-depth codebase exploration at session start           |
+| `automation:explore-dependencies` | Explore installed dependency source to build a live API snapshot |
+| `automation:python-style`         | Apply Python coding conventions (REQUIRED for Python work)       |
+| `automation:readme-style`         | Apply README conventions (REQUIRED for README work)              |
+| `automation:pyproject-style`      | Apply pyproject.toml conventions (REQUIRED for pyproject.toml)   |
+| `automation:tox-config`           | Apply tox.ini conventions (REQUIRED for tox.ini work)            |
+| `automation:api-docs`             | Apply Sphinx documentation conventions (REQUIRED for docs work)  |
+| `automation:project-layout`       | Apply project directory structure conventions                    |
+| `automation:cpp-style`            | Apply C++ conventions for companion library changes              |
+| `automation:skill-design`         | Apply skill and CLAUDE.md conventions (REQUIRED for this file)   |
+| `automation:audit-correctness`    | Audit source for active and latent bugs                          |
+| `automation:audit-facts`          | Fact-check documentation against authoritative source            |
+| `automation:audit-performance`    | Audit source for algorithmic, allocation, and dtype costs        |
+| `automation:audit-project`        | Orchestrate all four audits and merge their findings             |
+| `automation:audit-style`          | Audit files against the applicable style checklists              |
+| `automation:commit`               | Stage changes and create a style-compliant commit                |
+| `automation:pr`                   | Draft a style-compliant pull request summary                     |
+| `automation:release`              | Draft style-compliant release notes                              |
 
 ## Companion library synchronization
 
@@ -148,12 +152,15 @@ compilation to achieve microsecond-level communication speeds.
 ### Public API surface
 
 Exported from `__init__.py` via `__all__`:
-- `TransportLayer` — Main communication class
-- `TransportLayerStatus` — Status code enumeration (IntEnum)
-- `COBSProcessor` — COBS encoding/decoding wrapper
-- `CRCProcessor` — CRC checksum computation wrapper
-- `list_available_ports()` — Returns available serial ports as `ListPortInfo` tuple
-- `print_available_ports()` — Prints formatted port list to terminal
+
+| Symbol                     | Role                                                       |
+|----------------------------|------------------------------------------------------------|
+| `TransportLayer`           | Main communication class                                   |
+| `TransportLayerStatus`     | Status code enumeration (IntEnum)                          |
+| `COBSProcessor`            | COBS encoding and decoding wrapper                         |
+| `CRCProcessor`             | CRC checksum computation wrapper                           |
+| `list_available_ports()`   | Returns available serial ports as a `ListPortInfo` tuple   |
+| `print_available_ports()`  | Prints the formatted port list to the terminal             |
 
 ### Core components
 
@@ -170,13 +177,14 @@ Exported from `__init__.py` via `__all__`:
 ### Key patterns
 
 - **Wrapper pattern**: Python classes (`COBSProcessor`, `CRCProcessor`) wrap Numba `jitclass` instances to provide
-  Pythonic APIs while preserving JIT compilation benefits. The wrapper handles input validation and error reporting;
-  the jitclass handles computation.
-- **JIT compilation**: Performance-critical methods use `@njit(cache=True)` or `@jitclass`. First invocation compiles
-  to native code (slow); subsequent calls run at C speed. Numba ships type information (`py.typed`), so mypy
-  type-checks the interop: required `# type: ignore` suppressions remain on the `jitclass` import (`attr-defined`),
-  its instantiation calls (`no-untyped-call`), and the in-jitclass `isinstance(value, <numba type>)` checks
-  (`arg-type`). Do not remove them; the `@njit` decorators and `njit` import need no suppression.
+  Pythonic APIs while preserving JIT compilation benefits. The wrapper handles input validation and error reporting,
+  and the jitclass handles computation.
+- **JIT compilation**: Performance-critical methods use `@njit(cache=True)` or `@jitclass`. The first invocation
+  compiles to native code and runs slowly, while subsequent calls run at C speed. Numba ships type information
+  (`py.typed`), so mypy type-checks the interop. Required `# type: ignore` suppressions remain on the `jitclass`
+  import (`attr-defined`), its instantiation calls (`no-untyped-call`), and the in-jitclass
+  `isinstance(value, <numba type>)` checks (`arg-type`). Do not remove them. The `@njit` decorators and the `njit`
+  import need no suppression.
 - **Status code returns in JIT methods**: JIT-compiled methods return `TransportLayerStatus` enum values instead of
   raising exceptions (Numba limitation). Python wrapper methods convert status codes to exceptions via
   `console.error()`.
@@ -202,7 +210,7 @@ Exported from `__init__.py` via `__all__`:
 - Google-style docstrings
 - 120 character line limit
 - Uses `console.error(message=msg, error=ErrorType)` for all error handling (no bare `raise`)
-- See `/python-style` for complete conventions
+- See `automation:python-style` for complete conventions
 
 ### Development commands
 
@@ -212,8 +220,9 @@ tox -e stubs             # Generate .pyi stub files
 tox -e py312-test        # Run tests for Python 3.12
 tox -e py313-test        # Run tests for Python 3.13
 tox -e py314-test        # Run tests for Python 3.14
-tox -e coverage          # Aggregate multi-version coverage reports
+tox -e coverage          # Aggregate coverage and apply the 100% gate
 tox -e docs              # Build Sphinx API documentation
+tox -e deploy            # Upload the built documentation to the Netlify site
 tox                      # Run full pipeline (uninstall -> export -> lint -> ... -> install)
 ```
 
@@ -224,14 +233,14 @@ tox                      # Run full pipeline (uninstall -> export -> lint -> ...
 1. Review `src/ataraxis_transport_layer_pc/transport_layer.py` for the current implementation
 2. Understand the dual-buffer architecture and packet format (start_byte, payload_size, COBS-encoded data, CRC)
 3. JIT-compiled methods (`_write_scalar_data`, `_construct_packet`, `_parse_packet`, `_process_packet`) cannot use
-   Python objects or raise exceptions — they return status codes
-4. Parameters must match the companion `ataraxis-transport-layer-mc` C++ library exactly; mismatches cause
+   Python objects or raise exceptions, so they return status codes instead
+4. Parameters must match the companion `ataraxis-transport-layer-mc` C++ library exactly, because a mismatch causes
    unrecoverable packet corruption
 
 **Modifying helper modules:**
 
 1. Review `src/ataraxis_transport_layer_pc/helper_modules.py` for existing wrapper/jitclass patterns
-2. Numba jitclass instances have strict type requirements — use Numba-compatible types only
+2. Numba jitclass instances have strict type requirements, so use Numba-compatible types only
 3. Python wrappers handle input validation, error reporting via `console.error()`, and `__repr__` formatting
 4. The `_COBSProcessor` enforces a 254-byte maximum payload size (COBS protocol hard limit)
 
@@ -245,6 +254,6 @@ tox                      # Run full pipeline (uninstall -> export -> lint -> ...
 **Important considerations:**
 
 - Max payload size is 254 bytes (COBS protocol hard limit)
-- The `# pragma: no cover` annotations on JIT-compiled methods are intentional — Numba JIT code cannot be
+- The `# pragma: no cover` annotations on JIT-compiled methods are intentional, because Numba JIT code cannot be
   instrumented by coverage tools
 - The port close-then-reopen pattern in `__init__` is a Windows workaround for COM port release delays
