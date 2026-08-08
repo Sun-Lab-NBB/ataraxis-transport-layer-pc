@@ -13,9 +13,6 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 # Defines constants that are frequently reused in this module.
-_ZERO: np.uint8 = np.uint8(0)
-"""Zero value used as a default in byte operations."""
-
 _ONE_BYTE: int = 1
 """Byte-length of a CRC-8 polynomial, used to select the single-byte checksum type."""
 
@@ -45,13 +42,12 @@ class COBSProcessor:
         not verified during runtime and must be enforced through the use of the TransportLayer class.
 
     Attributes:
-        _processor: Stores the jit-compiled _COBSProcessor instance, which carries out all computations.
+        _processor: Stores the CompiledCOBSProcessor instance, which carries out all computations.
     """
 
     def __init__(self) -> None:
-        # The template for the numba compiler to assign specific datatypes to variables used by the COBSProcessor class.
-        # This is necessary for Numba to properly compile the class to C. Has to be defined before the class is
-        # instantiated with the jitclass function.
+        # The numba compiler needs this datatype template to compile the class to C, and the template has to be defined
+        # before the class is instantiated with the jitclass function.
         cobs_spec = [
             ("status", uint8),
             ("maximum_payload_size", uint8),
@@ -61,9 +57,8 @@ class COBSProcessor:
             ("delimiter", uint8),
         ]
 
-        # Instantiates the jit class and saves it to the wrapper class attribute. Developer hint: when used as a
-        # function, jitclass returns an uninitialized compiled object, so initializing is crucial here.
-        self._processor: _COBSProcessor = jitclass(cls_or_spec=_COBSProcessor, spec=cobs_spec)()  # type: ignore[no-untyped-call]
+        # Used as a function, jitclass returns an uninitialized compiled object, so the trailing call is required.
+        self._processor: CompiledCOBSProcessor = jitclass(cls_or_spec=CompiledCOBSProcessor, spec=cobs_spec)()  # type: ignore[no-untyped-call]
 
     def __repr__(self) -> str:
         """Returns a string representation of the COBSProcessor instance."""
@@ -86,8 +81,7 @@ class COBSProcessor:
         Returns:
             The serialized packet encoded using the COBS scheme.
         """
-        # Encodes the payload. The current class version assumes that the encoding cannot fail due to the safety checks
-        # enforced by the TransportLayer class.
+        # Encoding cannot fail, because the TransportLayer class enforces the safety checks that guard against it.
         return self._processor.encode_payload(payload)
 
     def decode_payload(self, packet: NDArray[np.uint8]) -> NDArray[np.uint8]:
@@ -105,7 +99,6 @@ class COBSProcessor:
         Raises:
             ValueError: If the decoding fails, indicating uncaught packet corruption.
         """
-        # Calls decoding method.
         payload = self._processor.decode_payload(packet)
 
         if payload.size == 0:
@@ -115,11 +108,10 @@ class COBSProcessor:
             )
             console.error(message=message, error=ValueError)
 
-        # Returns the decoded payload to caller if verification was successful.
         return payload
 
     @property
-    def processor(self) -> _COBSProcessor:
+    def processor(self) -> CompiledCOBSProcessor:
         """Returns the jit-compiled COBS processor instance, which external code can use to interface with the
         compiled class directly and bypass the Python wrapper.
         """
@@ -147,7 +139,7 @@ class CRCProcessor:
             checksum postamble least significant byte first.
 
     Attributes:
-        _processor: Stores the jit-compiled _CRCProcessor instance, which carries out all computations.
+        _processor: Stores the CompiledCRCProcessor instance, which carries out all computations.
 
     Raises:
         TypeError: If class initialization arguments are not of the valid type.
@@ -210,9 +202,8 @@ class CRCProcessor:
             ("expected_residue", crc_type),
         ]
 
-        # Initializes and compiles the internal _CRCProcessor class. This automatically generates the static CRC lookup
-        # table.
-        self._processor: _CRCProcessor = jitclass(cls_or_spec=_CRCProcessor, spec=crc_spec)(  # type: ignore[no-untyped-call]
+        # Instantiating the compiled class generates the static CRC lookup table.
+        self._processor: CompiledCRCProcessor = jitclass(cls_or_spec=CompiledCRCProcessor, spec=crc_spec)(  # type: ignore[no-untyped-call]
             polynomial=polynomial,
             initial_crc_value=initial_crc_value,
             final_xor_value=final_xor_value,
@@ -248,8 +239,7 @@ class CRCProcessor:
         Raises:
             ValueError: If the method is unable to verify the incoming packet's data integrity.
         """
-        # Runs the CRC checksum calculation. If the method is called in the check mode and returns 0, this indicates
-        # that the CRC computation failed.
+        # A zero result in the check mode indicates that the CRC verification failed.
         result = self._processor.calculate_checksum(buffer, check)
 
         if result == 0:
@@ -274,7 +264,7 @@ class CRCProcessor:
         return self._processor.crc_table.copy()
 
     @property
-    def processor(self) -> _CRCProcessor:
+    def processor(self) -> CompiledCRCProcessor:
         """Returns the jit-compiled CRC processor instance, which external code can use to interface with the
         compiled class directly and bypass the Python wrapper.
         """
@@ -309,7 +299,7 @@ class SerialMock:
     relevant for testing, such as reading and writing data.
 
     Attributes:
-        is_open: A flag indicating if the mock serial port is open.
+        is_open: Determines whether the mock serial port is open.
         tx_buffer: A byte buffer that stores transmitted data.
         rx_buffer: A byte buffer that stores received data.
         in_waiting: A read-only property returning the number of bytes available for reading from the rx_buffer.
@@ -413,7 +403,7 @@ class SerialMock:
         return len(self.tx_buffer)
 
 
-class _COBSProcessor:  # pragma: no cover
+class CompiledCOBSProcessor:  # pragma: no cover
     """Provides methods for encoding and decoding data using the Consistent Overhead Byte Stuffing (COBS) scheme.
 
     Notes:
@@ -433,7 +423,6 @@ class _COBSProcessor:  # pragma: no cover
     """
 
     def __init__(self) -> None:
-        # Stores constant class parameters.
         self.maximum_payload_size: int = 254
         self.minimum_payload_size: int = 1
         self.maximum_packet_size: int = 256
@@ -449,42 +438,30 @@ class _COBSProcessor:  # pragma: no cover
         Returns:
             The packet encoded using the COBS scheme.
         """
-        # Saves payload size to a separate variable.
         size = payload.size
 
-        # Initializes the output array, uses payload size + 2 as size to make space for the overhead and
-        # delimiter bytes (see COBS scheme for more details on why this is necessary).
+        # The extra two bytes hold the COBS overhead byte and the trailing delimiter.
         packet = np.empty(size + 2, dtype=payload.dtype)
-        packet[-1] = self.delimiter  # Sets the last byte of the packet to the delimiter byte value.
-        packet[1:-1] = payload  # Copies input payload into the packet array, leaving spaces for overhead and delimiter.
+        packet[-1] = self.delimiter
+        packet[1:-1] = payload
 
-        # A tracker variable that is used to calculate the distance to the next delimiter value when an
-        # unencoded delimiter is required.
         next_delimiter_position = packet.size - 1  # Initializes to the index of the delimiter value added above.
 
-        # Iterates over the payload in reverse and replaces every instance of the delimiter value inside the
-        # payload with the distance to the next delimiter value (or the value added to the end of the payload).
-        # This process ensures that the delimiter value is only found at the end of the packet and, if the delimiter
-        # is not 0, potentially also as the overhead byte value. This encodes the payload using the COBS scheme.
+        # Encoding leaves the delimiter value present only at the end of the packet and, when the delimiter is not 0,
+        # potentially as the overhead byte value.
         for i in range(size - 1, -1, -1):
             if payload[i] == self.delimiter:
-                # If any of the payload values match the delimiter value, replaces that value in the packet with
-                # the distance to the next_delimiter_position. This is either the distance to the next encoded
-                # value or the distance to the delimiter value located at the end of the packet.
+                # The stored distance points at either the next encoded value or the trailing delimiter.
                 packet[i + 1] = next_delimiter_position - (i + 1)  # +1 is to translate from payload to packet index.
 
-                # Overwrites the next_delimiter_position with the index of the encoded value
-                next_delimiter_position = i + 1  # +1 is to translate for payload to packet index.
+                next_delimiter_position = i + 1  # +1 is to translate from payload to packet index.
 
-        # Once the runtime above is complete, sets the overhead byte to the value of the
-        # next_delimiter_position. As a worst-case scenario, that would be the index of the delimiter byte
-        # written to the end of the packet, which at maximum can be 255. Otherwise, that would be the distance
-        # to the first encoded delimiter value inside the payload. It is now possible to start with the overhead
-        # byte and 'jump' through all encoded values all the way to the end of the packet, where the only
-        # unencoded delimiter is found.
+        # As a worst-case scenario, the overhead byte holds the index of the delimiter written to the end of the packet,
+        # which at maximum can be 255. Otherwise, it holds the distance to the first encoded delimiter value inside the
+        # payload. A reader can therefore start at the overhead byte and 'jump' through all encoded values all the way
+        # to the end of the packet, where the only unencoded delimiter is found.
         packet[0] = next_delimiter_position
 
-        # Returns the encoded packet array to caller.
         return packet
 
     def decode_payload(self, packet: NDArray[np.uint8]) -> NDArray[np.uint8]:
@@ -497,55 +474,39 @@ class _COBSProcessor:  # pragma: no cover
             The payload decoded from the packet or an empty uninitialized numpy array if the method fails to decode the
             payload.
         """
-        size = packet.size  # Extracts packet size for the checks below.
+        size = packet.size
 
-        # This is necessary due to how this method is used by the main class, where the input to this method
-        # happens to be a 'readonly' array. Copying the array removes the readonly flag.
+        # Decoding restores each encoded distance byte to the delimiter value in place, and callers pass a view into a
+        # buffer they continue to own, so the packet is copied to leave the caller's buffer intact.
         packet = packet.copy()
 
-        # Tracks the currently evaluated variable's index in the packet array. Initializes to 0 (overhead byte
-        # index).
+        # Index 0 is the overhead byte, where the jump chain starts.
         read_index = 0
 
-        # Tracks the distance to the next index to evaluate, relative to the read_index value
-        next_index = packet[read_index]  # Reads the distance stored in the overhead byte into the next_index.
+        # Holds a distance relative to read_index rather than an absolute index.
+        next_index = packet[read_index]
 
-        # Loops over the payload and iteratively jumps over all encoded values, restoring (decoding) them back
-        # to the delimiter value in the process. Carries on with the process until it reaches the end of the
-        # packet or until it encounters an unencoded delimiter value. These two conditions should coincide for
-        # each well-formed packet.
+        # The walk ends either at the end of the packet or at an unencoded delimiter value. These two conditions
+        # coincide for every well-formed packet.
         while (read_index + next_index) < size:
-            # Increments the read_index via aggregation for each iteration of the loop
             read_index += next_index
 
-            # If the value inside the packet array pointed by read_index is an unencoded delimiter, evaluates
-            # whether the delimiter is encountered at the end of the packet
             if packet[read_index] == self.delimiter:
                 if read_index == size - 1:
-                    # If the delimiter is found at the end of the packet, extracts and returns the decoded
-                    # packet to the caller.
                     return packet[1:-1]
 
-                # If the delimiter is encountered before reaching the end of the packet, this indicates that
-                # the packet was corrupted during transmission and the CRC-check failed to recognize the
-                # data corruption. In this case, returns an empty array to indicate the error.
+                # A delimiter before the end of the packet means corruption the CRC check failed to catch.
                 return np.empty(0, dtype=packet.dtype)
 
-            # If the read_index pointed value is not an unencoded delimiter, first extracts the value and saves
-            # it to the next_index, as the value is the distance to the next encoded value or the unencoded
-            # delimiter.
             next_index = packet[read_index]
-
-            # Decodes the extracted value by overwriting it with the delimiter value
             packet[read_index] = self.delimiter
 
-        # If this point is reached, that means that the method did not encounter an unencoded delimiter before
-        # reaching the end of the packet. While the reasons for this are numerous, overall that means that the
-        # packet is malformed and the data is corrupted, returns an empty array to indicate the error.
+        # Reaching this point means no unencoded delimiter was found before the end of the packet, so the packet is
+        # malformed and its data is corrupted.
         return np.empty(0, dtype=packet.dtype)
 
 
-class _CRCProcessor:  # pragma: no cover
+class CompiledCRCProcessor:  # pragma: no cover
     """Provides methods for working with Cyclic Redundancy Check (CRC) checksums used to verify the integrity of
     transferred data packets.
 
@@ -613,12 +574,11 @@ class _CRCProcessor:  # pragma: no cover
         if reflected:
             self.initial_register = self._reflect_value(initial_crc_value)
 
-        # Generates the lookup table based on the target polynomial parameters and iteratively sets each variable
-        # inside the crc_table placeholder to the calculated values.
         self._generate_crc_table(polynomial=polynomial)
 
         # Resolves the checksum value that verification produces for an intact packet. The value is determined by the
-        # polynomial and the final XOR value alone, so it is computed once and reused for every verification.
+        # polynomial, the reflection setting, and the final XOR value alone, so it is computed once and reused for
+        # every verification.
         self.expected_residue: CRCType = self._compute_expected_residue()
 
     def calculate_checksum(self, buffer: NDArray[np.uint8], check: bool = False) -> np.uint16:
@@ -638,41 +598,30 @@ class _CRCProcessor:  # pragma: no cover
             to calculate the new CRC checksum. The value '1' if the method is configured to verify the packet's data
             integrity and the data is intact and '0' otherwise.
         """
-        # Intelligently determines the packet size based on buffer size and CRC checksum length.
         packet_size = len(buffer) - self.crc_byte_length
 
-        # Initializes the checksum
         crc_checksum = self.initial_register
-
-        # Calculates the checksum for the packet
         for i in range(packet_size):
             crc_checksum = self._update_checksum(crc_checksum, buffer[i])
 
-        # If the method is called to verify the incoming packet's integrity, includes the CRC checksum postamble in
-        # the calculation.
+        # Verification folds the checksum postamble into the calculation as well.
         if check:
             for i in range(packet_size, packet_size + self.crc_byte_length):
                 crc_checksum = self._update_checksum(crc_checksum, buffer[i])
 
-        # Applies the final XOR
         crc_checksum ^= self.final_xor_value
 
-        # If the method is called to generate and write a new checksum, adds the calculated checksum to the end of the
-        # buffer.
         if not check:
             for i in range(self.crc_byte_length):
                 buffer[packet_size + i] = self._extract_checksum_byte(crc_checksum, i)
 
-            # Returns the total size of the buffer with the post-pended checksum to indicate that the method ran as
-            # expected.
+            # The returned buffer size doubles as the success indicator.
             return np.uint16(len(buffer))
 
-        # If the method is called to verify the data integrity, returns 1 if it succeeds and 0 otherwise.
-        # Running the CRC calculation on the data with post-pended checksum always produces the expected residue for
-        # valid data packets.
+        # Running the calculation over the data together with its post-pended checksum always produces the expected
+        # residue for an intact packet.
         if crc_checksum == self.expected_residue:
             return np.uint16(1)
-        # Otherwise, the data is corrupted.
         return np.uint16(0)
 
     def _reflect_value(self, value: CRCType) -> CRCType:
@@ -714,68 +663,52 @@ class _CRCProcessor:  # pragma: no cover
         if self.reflected:
             reflected_polynomial = self._reflect_value(polynomial)
 
-            # Iterates over each possible value of a byte variable
             for byte in np.arange(256, dtype=np.uint8):
                 # Initializes the byte CRC value in the low end of the register, which is where reflected processing
                 # keeps the byte currently being divided.
                 crc = self._make_polynomial_type(byte)
 
-                # Loops over each of the 8 bits making up the byte-value being processed
                 for _ in range(_BYTE_SIZE):
-                    # Checks if the bottom bit (LSB) is set
                     if crc & 1:
-                        # Shifts the crc value right to bring the next bit into the bottom position, then XORs it with
-                        # the reflected polynomial.
                         crc = self._make_polynomial_type((crc >> 1) ^ reflected_polynomial)
                     else:
-                        # Shifts the crc value right to move to the next bit without changing the current crc value,
-                        # as division by the polynomial would not modify it.
+                        # Division by the polynomial would not modify the value, so the shift alone advances to the
+                        # next bit.
                         crc = self._make_polynomial_type(crc >> 1)
 
                 self.crc_table[byte] = crc
 
             return
 
-        # Determines the number of bits in the CRC datatype
         crc_bits = np.uint8(self.crc_byte_length * _BYTE_SIZE)
-
-        # Determines the Most Significant Bit (MSB) mask based on the CRC type
         msb_mask = self._make_polynomial_type(np.left_shift(1, crc_bits - 1))
 
-        # Iterates over each possible value of a byte variable
         for byte in np.arange(256, dtype=np.uint8):
-            # Casts crc to the appropriate type based on the polynomial type
             crc = self._make_polynomial_type(byte)
 
-            # Shifts the CRC value left by the appropriate number of bits based on the CRC type to align the
-            # initial value to the highest byte of the CRC variable.
+            # Aligns the initial value to the highest byte of the CRC variable.
             if crc_bits > _BYTE_SIZE:
                 crc <<= crc_bits - _BYTE_SIZE
 
-            # Loops over each of the 8 bits making up the byte-value being processed
             for _ in range(_BYTE_SIZE):
-                # Checks if the top bit (MSB) is set
                 if crc & msb_mask:
-                    # If the top bit is set, shifts the crc value left to bring the next bit into the top
-                    # position, then XORs it with the polynomial. This simulates polynomial division where bits
-                    # are checked from top to bottom.
+                    # This simulates polynomial division, where bits are checked from top to bottom.
                     crc = self._make_polynomial_type((crc << 1) ^ polynomial)
                 else:
-                    # If the top bit is not set, simply shifts the crc value left. This moves to the next bit
-                    # without changing the current crc value, as division by polynomial wouldn't modify it.
+                    # Division by the polynomial would not modify the value, so the shift alone advances to the next
+                    # bit.
                     crc <<= np.uint8(1)
 
-            # Adds the calculated CRC value for the byte to the storage table using byte-value as the key
-            # (index). This value is the remainder of the polynomial division of the byte (treated as a
-            # CRC-sized number), by the CRC polynomial.
+            # The stored value is the remainder of dividing the byte, treated as a CRC-sized number, by the CRC
+            # polynomial.
             self.crc_table[byte] = crc
 
     def _compute_expected_residue(self) -> CRCType:
         """Computes the checksum value that verifying an intact packet produces.
 
         Verification runs the checksum calculation over the packet together with its checksum postamble. The value this
-        produces for an intact packet is determined by the polynomial and the final XOR value alone, so it is resolved
-        once during class initialization and reused for every verification.
+        produces for an intact packet is determined by the polynomial, the reflection setting, and the final XOR value
+        alone, so it is resolved once during class initialization and reused for every verification.
 
         Returns:
             The checksum value that indicates an intact packet.
@@ -851,5 +784,5 @@ class _CRCProcessor:  # pragma: no cover
         if self.crc_byte_length == _TWO_BYTE:
             return np.uint16(value)
 
-        # CRC-32. Since there are no plans to support CRC-64, this is the only remaining option
+        # CRC-32. Since there are no plans to support CRC-64, this is the only remaining option.
         return np.uint32(value)

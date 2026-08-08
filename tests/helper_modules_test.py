@@ -95,7 +95,7 @@ def test_cobs_processor_decode_errors() -> None:
     processor = COBSProcessor()
 
     # Tests packet decoder corruption error where an unencoded delimiter (0) is found before reaching the end of the
-    # packet (delimiter_found_too_early_error).
+    # packet, for which the decoder returns an empty array.
     corrupted_packet = np.array([4, 1, 2, 3, 0, 5, 0], dtype=np.uint8)
     message = (
         "Failed to decode the payload using the COBS scheme as the decoder did not find an unencoded delimiter "
@@ -105,7 +105,7 @@ def test_cobs_processor_decode_errors() -> None:
         _ = processor.decode_payload(corrupted_packet)
 
     # Tests packet decoder corruption error where the unencoded delimiter is not found at the end of the packet or, for
-    # that matter, at all (delimiter_not_found_error)
+    # that matter, at all, for which the decoder also returns an empty array.
     corrupted_packet = np.array([6, 1, 2, 3, 4, 5, 6], dtype=np.uint8)
     message = (
         "Failed to decode the payload using the COBS scheme as the decoder did not find an unencoded delimiter "
@@ -116,7 +116,7 @@ def test_cobs_processor_decode_errors() -> None:
 
 
 def test_crc_processor_generate_table_crc_8() -> None:
-    """Verifies the functioning of the CRCProcessor's generate_crc_table() method for CRC8 polynomials."""
+    """Verifies the functioning of the CRCProcessor's _generate_crc_table() method for CRC8 polynomials."""
     # Defines crc-8 polynomial parameters and test values
     polynomial = np.uint8(0x07)
     initial_crc_value = np.uint8(0x00)
@@ -392,7 +392,7 @@ def test_crc_processor_generate_table_crc_8() -> None:
 
 
 def test_crc_processor_generate_table_crc_16() -> None:
-    """Verifies the functioning of the CRCProcessor's generate_crc_table() method for CRC16 polynomials."""
+    """Verifies the functioning of the CRCProcessor's _generate_crc_table() method for CRC16 polynomials."""
     # Defines crc-16 polynomial parameters and test values
     polynomial = np.uint16(0x1021)
     initial_crc_value = np.uint16(0xFFFF)
@@ -668,7 +668,7 @@ def test_crc_processor_generate_table_crc_16() -> None:
 
 
 def test_crc_processor_generate_table_crc_32() -> None:
-    """Verifies the functioning of the CRCProcessor's generate_crc_table() method for CRC32 polynomials."""
+    """Verifies the functioning of the CRCProcessor's _generate_crc_table() method for CRC32 polynomials."""
     # Defines crc-32 polynomial parameters and test values
     polynomial = np.uint32(0x000000AF)
     initial_crc_value = np.uint32(0x00000000)

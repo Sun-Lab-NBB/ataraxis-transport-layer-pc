@@ -93,8 +93,9 @@ indent-width = 4
 target-version = "py312"  # Targets the lowest supported version of python
 src = ["src"]
 
-# Excludes 'service' .py files, such as the sphinx configuration file, from linting.
-extend-exclude = ["conf.py"]
+# Excludes 'service' .py files from linting and formatting, covering the sphinx configuration file and the quickstart
+# example. The example asserts its results and constructs numpy boolean scalars, which the library lint corpus reports.
+extend-exclude = ["conf.py", "examples"]
 
 # Checks for all potential violations and uses the exclusions below to target-disable specific ones.
 lint.select = ["ALL"]
