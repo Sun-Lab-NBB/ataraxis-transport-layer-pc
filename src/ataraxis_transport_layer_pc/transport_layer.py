@@ -62,8 +62,8 @@ class TransportLayerStatus(IntEnum):
     """Not enough bytes read to fully parse the packet. The packet payload was successfully parsed, but there were not 
     enough bytes to fully parse the CRC postamble."""
     NO_BYTES_TO_READ = 4
-    """No start byte found, which is interpreted as 'no bytes to read,' as the class is configured to ignore start byte 
-    errors. Usually, this situation is caused by communication line noise generating 'noise bytes'."""
+    """No start byte found, which is interpreted as 'no bytes to read.' Usually, this situation is caused by
+    communication line noise generating 'noise bytes'."""
     PAYLOAD_SIZE_MISMATCH = 5
     """Parsed payload_size value does not match the expected value. This likely indicates packet corruption or 
     communication parameter mismatch between the TransportLayer instance and the connected Microcontroller."""
@@ -604,8 +604,8 @@ class TransportLayer:
             )
             console.error(message=message, error=TypeError)
 
-        # If end_index is different from the start_index and no error has been raised, the method runtime was
-        # successful, so returns the read data_object and the end_index to the caller.
+        # If the end_index exceeds the start_index and no error has been raised, the method runtime was successful,
+        # so returns the read data_object to the caller.
         if end_index > start_index:
             # Updates the consumed bytes tracker and returns the object recreated using data from the buffer.
             self._consumed_bytes = end_index
@@ -692,8 +692,9 @@ class TransportLayer:
             potentially unprocessed data.
 
         Returns:
-            True if the packet was successfully received and unpacked and False if the communication interface does not
-            contain enough bytes to justify processing the packet.
+            True if the packet was successfully received and unpacked. False if the communication interface does not
+            contain enough bytes to justify processing the packet or if the available bytes carry no start byte, which
+            indicates communication line noise.
 
         Raises:
             RuntimeError: If the method runs into an error while receiving or processing the packet's data.
@@ -1020,8 +1021,8 @@ class TransportLayer:
                 )  # pragma: no cover
                 console.error(message=message, error=RuntimeError)  # pragma: no cover
 
-            # If _bytes_available() method returned true for status codes 1 to 3, that means that additional bytes were
-            # received in time and the loop has to be cycled again to process newly received bytes.
+            # If _bytes_available() method returned true for status codes 0, 2 and 3, that means that additional bytes
+            # were received in time and the loop has to be cycled again to process newly received bytes.
             if status <= TransportLayerStatus.NOT_ENOUGH_CRC_BYTES:
                 continue
 
@@ -1075,7 +1076,7 @@ class TransportLayer:
         # The static guard for unknown status code. This is moved to the end of the message to appease MyPy.
         message = (
             f"Failed to parse the incoming serial packet data. Encountered an unknown status value "
-            f"{status}, returned by the _receive_packet() method. Manual user intervention is required to "
+            f"{status}, returned by the _parse_packet() method. Manual user intervention is required to "
             f"resolve the issue."
         )  # pragma: no cover
         # Raises the resolved error message as RuntimeError.
@@ -1169,7 +1170,7 @@ class TransportLayer:
             discarded during this method's runtime.
 
         Args:
-            unparsed_bytes: A bytes() object that stores the serial stream bytes to be parsed.
+            unparsed_bytes: The uint8 array that stores the serial stream bytes to be parsed.
             start_byte: The byte-value used to mark the beginning of a transmitted packet in the byte-stream.
             delimiter_byte: The byte-value used to mark the end of a transmitted packet in the byte-stream.
             max_payload_size: The maximum size of the payload, in bytes, that can be received.
@@ -1184,10 +1185,11 @@ class TransportLayer:
 
         Returns:
             A tuple of five elements. The first element is an integer status code that describes the runtime. The
-            second element is the number of packet's bytes processed during method runtime. The third element is a
-            bytes' object that stores any unprocessed bytes that remain after method runtime. The fourth element
-            is the uint8 array that stores some or all of the packet's bytes. The fifth element is the start byte
-            acquisition flag, which the caller feeds back into the next call to resume parsing the same packet.
+            second element is the cumulative number of the packet's bytes parsed so far, which includes the bytes
+            parsed by any preceding calls. The third element is the uint8 array that stores any unprocessed bytes that
+            remain after method runtime. The fourth element is the uint8 array that stores some or all of the packet's
+            bytes. The fifth element is the start byte acquisition flag, which the caller feeds back into the next call
+            to resume parsing the same packet.
         """
         total_bytes = unparsed_bytes.size  # Calculates the total number of bytes available for parsing.
         processed_bytes = 0  # Tracks how many input bytes are processed during method runtime.

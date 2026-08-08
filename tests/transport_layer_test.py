@@ -353,8 +353,9 @@ def test_receive_multi_iteration_parsing(protocol) -> None:
     protocol._crc_processor.calculate_checksum(packet_with_crc, check=False)
     test_data = np.concatenate((np.array([129, test_payload.size], dtype=np.uint8), packet_with_crc), dtype=np.uint8)
 
-    # Splitting the stream so that the first iteration resolves only the start byte forces the parser to resume with
-    # the start byte already found, which is the state the parsing method has to carry between its iterations.
+    # Splitting the stream at every offset exercises both reception paths. A split that leaves at least the minimum
+    # packet size in the leftover buffer parses that prefix on its own and resumes with the start byte and the payload
+    # size already resolved, while a shorter prefix is merged with the port buffer and parsed in a single iteration.
     for split_index in range(1, test_data.size):
         protocol.reset_reception_buffer()
         protocol._leftover_bytes = test_data[:split_index].tobytes()
@@ -488,7 +489,7 @@ def test_read_data_errors(protocol) -> None:
 
 
 def test_write_data_errors(protocol) -> None:
-    """Verifies the error-handling behavior of TransportLayer write_data() method."""
+    """Verifies the error-handling behavior of TransportLayer write_data() and send_data() methods."""
     # Invalid data type
     invalid_data = None
     message = (
@@ -734,6 +735,13 @@ def test_reception_buffer_property(protocol) -> None:
     buffer = protocol.reception_buffer
     assert isinstance(buffer, np.ndarray)
     assert buffer.dtype == np.uint8
+    assert buffer is not protocol._reception_buffer
+
+    # Writing through the returned array must leave the internal buffer untouched. XOR always yields a different
+    # byte value, so the check holds whatever the uninitialized buffer happens to contain.
+    original_value = protocol._reception_buffer[0]
+    buffer[0] = np.uint8(original_value ^ 0xFF)
+    assert protocol._reception_buffer[0] == original_value
 
 
 def test_bytes_available_timeout_loop(protocol) -> None:

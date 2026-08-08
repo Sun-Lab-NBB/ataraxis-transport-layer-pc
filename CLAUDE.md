@@ -104,7 +104,7 @@ in `ataraxis-transport-layer-mc`, and vice versa.
 **What requires synchronization:**
 - Packet format fields (start byte, delimiter, payload size encoding, CRC postamble)
 - COBS encoding/decoding algorithm
-- CRC polynomial, initial value, final XOR value, and lookup table generation
+- CRC polynomial, initial value, final XOR value, reflection setting, and lookup table generation
 - `TransportLayerStatus` code values and meanings
 - Buffer size calculations and payload size constraints
 - Data serialization byte ordering and type representations
@@ -232,8 +232,9 @@ tox                      # Run full pipeline (uninstall -> export -> lint -> ...
 
 1. Review `src/ataraxis_transport_layer_pc/transport_layer.py` for the current implementation
 2. Understand the dual-buffer architecture and packet format (start_byte, payload_size, COBS-encoded data, CRC)
-3. JIT-compiled methods (`_write_scalar_data`, `_construct_packet`, `_parse_packet`, `_process_packet`) cannot use
-   Python objects or raise exceptions, so they return status codes instead
+3. JIT-compiled methods (`_write_scalar_data`, `_write_array_data`, `_read_array_data`, `_construct_packet`,
+   `_parse_packet`, `_process_packet`) cannot use Python objects or raise exceptions, so they return status codes
+   instead
 4. Parameters must match the companion `ataraxis-transport-layer-mc` C++ library exactly, because a mismatch causes
    unrecoverable packet corruption
 
@@ -242,7 +243,7 @@ tox                      # Run full pipeline (uninstall -> export -> lint -> ...
 1. Review `src/ataraxis_transport_layer_pc/helper_modules.py` for existing wrapper/jitclass patterns
 2. Numba jitclass instances have strict type requirements, so use Numba-compatible types only
 3. Python wrappers handle input validation, error reporting via `console.error()`, and `__repr__` formatting
-4. The `_COBSProcessor` enforces a 254-byte maximum payload size (COBS protocol hard limit)
+4. `TransportLayer` enforces the 254-byte maximum payload size that `_COBSProcessor` declares (COBS hard limit)
 
 **Adding new serializable data types:**
 

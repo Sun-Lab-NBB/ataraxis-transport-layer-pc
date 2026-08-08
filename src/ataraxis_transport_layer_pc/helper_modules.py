@@ -13,9 +13,6 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 # Defines constants that are frequently reused in this module.
-_ZERO: np.uint8 = np.uint8(0)
-"""Zero value used as a default in byte operations."""
-
 _ONE_BYTE: int = 1
 """Byte-length of a CRC-8 polynomial, used to select the single-byte checksum type."""
 
@@ -499,8 +496,8 @@ class _COBSProcessor:  # pragma: no cover
         """
         size = packet.size  # Extracts packet size for the checks below.
 
-        # This is necessary due to how this method is used by the main class, where the input to this method
-        # happens to be a 'readonly' array. Copying the array removes the readonly flag.
+        # Decoding restores each encoded distance byte to the delimiter value in place, and callers pass a view into a
+        # buffer they continue to own, so the packet is copied to leave the caller's buffer intact.
         packet = packet.copy()
 
         # Tracks the currently evaluated variable's index in the packet array. Initializes to 0 (overhead byte
@@ -618,7 +615,8 @@ class _CRCProcessor:  # pragma: no cover
         self._generate_crc_table(polynomial=polynomial)
 
         # Resolves the checksum value that verification produces for an intact packet. The value is determined by the
-        # polynomial and the final XOR value alone, so it is computed once and reused for every verification.
+        # polynomial, the reflection setting, and the final XOR value alone, so it is computed once and reused for
+        # every verification.
         self.expected_residue: CRCType = self._compute_expected_residue()
 
     def calculate_checksum(self, buffer: NDArray[np.uint8], check: bool = False) -> np.uint16:
@@ -774,8 +772,8 @@ class _CRCProcessor:  # pragma: no cover
         """Computes the checksum value that verifying an intact packet produces.
 
         Verification runs the checksum calculation over the packet together with its checksum postamble. The value this
-        produces for an intact packet is determined by the polynomial and the final XOR value alone, so it is resolved
-        once during class initialization and reused for every verification.
+        produces for an intact packet is determined by the polynomial, the reflection setting, and the final XOR value
+        alone, so it is resolved once during class initialization and reused for every verification.
 
         Returns:
             The checksum value that indicates an intact packet.

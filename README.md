@@ -264,10 +264,10 @@ There are three key methods associated with receiving data from the microcontrol
 - The `receive_data()` method reads the encoded packet from the byte-stream stored in Serial interface buffer, verifies
   its integrity with the CRC checksum, and decodes the payload from the packet using COBS. If the packet was
   successfully received and unpacked, this method returns True.
-- The `read_data()` method overwrites the memory (data) of the input object with the data extracted from the received
-  payload. To do so, the method reads and consumes the number of bytes necessary to 'fill' the object with data from
-  the payload. Following this procedure, the object stores the new value(s) that match the read data and the consumed
-  bytes are discarded, meaning it is only possible to read the same data **once**.
+- The `read_data()` method uses the input object as a prototype for the data extracted from the received payload. To do
+  so, the method reads and consumes the number of bytes necessary to 'fill' the object with data from the payload and
+  returns a new object of the same type storing the read value(s). Dataclass inputs additionally have their fields
+  overwritten in place. The consumed bytes are discarded, meaning it is only possible to read the same data **once**.
 
 The example below showcases the sequence of steps necessary to receive data from the microcontroller and assumes
 TransportLayer 'tl_class' was initialized following the steps in the [Quickstart](#quickstart) example:
