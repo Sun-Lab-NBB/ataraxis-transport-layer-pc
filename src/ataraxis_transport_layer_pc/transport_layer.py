@@ -161,6 +161,8 @@ class TransportLayer:
         _leftover_bytes: A buffer used to preserve any 'unconsumed' bytes that were read from the serial port
             but not used to reconstruct the payload sent from the Microcontroller. This is used to minimize the number
             of calls to pySerial methods, as they are costly to run.
+        _timeout_guard: Stores the Timeout instance that bounds the wait for the bytes that are missing from a
+            partially received packet.
         _accepted_numpy_scalars: Stores numpy types (classes) that can be used as scalar inputs or as 'dtype'
             fields of the numpy arrays that are provided to class methods.
         _minimum_packet_size: Stores the minimum number of bytes that can represent a valid packet. This value is used
@@ -284,6 +286,10 @@ class TransportLayer:
         self._bytes_in_reception_buffer: int = 0
         self._consumed_bytes: int = 0
         self._leftover_bytes: bytes = b""  # Placeholder, this is re-initialized as needed during data reception.
+
+        # The guard is built once and restarted for each wait, as building it costs more than the wait it bounds when
+        # the missing bytes are already in flight over a fast interface.
+        self._timeout_guard: Timeout = Timeout(duration=self._timeout, precision=TimerPrecisions.MICROSECOND)
 
         # Opens (connects to) the serial port. Cycles closing and opening to ensure the port is opened,
         # non-graciously replacing whatever is using the port at the time of instantiating TransportLayer class.
@@ -1046,11 +1052,12 @@ class TransportLayer:
         if timeout == 0:
             return False
 
-        # Uses the Timeout class to manage the activity-based timeout. The kick() method resets the timeout whenever
-        # new bytes arrive, allowing the method to wait as long as the serial port keeps receiving data.
-        timeout_guard = Timeout(duration=timeout, precision=TimerPrecisions.MICROSECOND)
+        # Restarts the instance's timeout guard to manage the activity-based timeout. The kick() method resets the
+        # timeout whenever new bytes arrive, allowing the method to wait as long as the serial port keeps receiving
+        # data.
+        self._timeout_guard.reset(duration=timeout)
         previous_additional_bytes = additional_bytes
-        while not timeout_guard.expired:
+        while not self._timeout_guard.expired:
             additional_bytes = self._port.in_waiting  # Returns the number of bytes that can be read from serial port.
             total_bytes = available_bytes + additional_bytes  # Combines leftover and serial port bytes.
 
@@ -1064,7 +1071,7 @@ class TransportLayer:
             # for the remaining bytes to arrive.
             if previous_additional_bytes < additional_bytes:  # pragma: no cover
                 previous_additional_bytes = additional_bytes  # Updates the byte tracker, if necessary.
-                timeout_guard.kick()  # Resets the timeout as long as the port receives additional bytes.
+                self._timeout_guard.kick()  # Resets the timeout as long as the port receives additional bytes.
 
         # If there are not enough bytes across both buffers after the timeout expires, returns False.
         return False
