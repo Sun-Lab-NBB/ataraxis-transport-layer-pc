@@ -45,7 +45,6 @@ dependencies = [
     # Numerical Computing
     "numpy>=2,<3",
     "numba>=0.63,<1",
-    "intel-cmplr-lib-rt>=2026,<2027; sys_platform != 'darwin'",  # Numba SVML runtime; loaded dynamically, not imported
 
     # Serial Communication
     "pyserial>=3,<4",
