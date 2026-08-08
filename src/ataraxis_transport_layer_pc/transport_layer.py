@@ -34,6 +34,10 @@ _POLYNOMIAL: np.uint8 = np.uint8(0x07)
 _EMPTY_ARRAY: NDArray[np.uint8] = np.empty(0, dtype=np.uint8)
 """Empty uint8 array used as a default for iterative packet parsing."""
 
+_MINIMUM_SERIAL_BUFFER_SIZE: int = 9
+"""Smallest microcontroller serial buffer size that leaves room for a single-byte payload alongside the 8 bytes of
+packet metadata, which is the smallest size that yields a usable instance."""
+
 
 class TransportLayerStatus(IntEnum):
     """Defines the status codes used by the TransportLayer class to communicate the state of various processing steps
@@ -123,7 +127,8 @@ class TransportLayer:
             command to discover available port names.
         microcontroller_serial_buffer_size: The size, in bytes, of the buffer used by the connected microcontroller's
             serial communication interface. Usually, this information is available from the microcontroller's
-            manufacturer (UART / USB controller specification).
+            manufacturer (UART / USB controller specification). Must be at least 9 bytes, as 8 bytes are consumed by
+            the packet metadata and at least one byte has to remain available for the payload.
         baudrate: The baudrate to use for communication if the microcontroller uses the UART interface. Should match
             the value used by the microcontroller. This parameter is ignored when using the USB interface.
         polynomial: The polynomial to use for the generation of the CRC lookup table. The polynomial must be expressed
@@ -231,11 +236,14 @@ class TransportLayer:
             )
             console.error(message=message, error=ValueError)
 
-        if not isinstance(microcontroller_serial_buffer_size, int) or microcontroller_serial_buffer_size < 1:
+        if (
+            not isinstance(microcontroller_serial_buffer_size, int)
+            or microcontroller_serial_buffer_size < _MINIMUM_SERIAL_BUFFER_SIZE
+        ):
             message = (
-                f"Unable to initialize TransportLayer class. Expected a positive integer value for "
-                f"'microcontroller_serial_buffer_size' argument, but encountered {microcontroller_serial_buffer_size} "
-                f"of type {type(microcontroller_serial_buffer_size).__name__}."
+                f"Unable to initialize TransportLayer class. Expected an integer value of at least "
+                f"{_MINIMUM_SERIAL_BUFFER_SIZE} for 'microcontroller_serial_buffer_size' argument, but encountered "
+                f"{microcontroller_serial_buffer_size} of type {type(microcontroller_serial_buffer_size).__name__}."
             )
             console.error(message=message, error=ValueError)
 
@@ -385,12 +393,13 @@ class TransportLayer:
         Args:
             data_object: A numpy scalar or array object or a python dataclass made entirely out of valid numpy objects.
                 Supported numpy types are: uint8, uint16, uint32, uint64, int8, int16, int32, int64, float32, float64,
-                and bool. Arrays have to be 1-dimensional and not empty to be supported.
+                and bool. Arrays have to be 1-dimensional, contiguous, and not empty to be supported.
 
         Raises:
             TypeError: If the input object is not a supported numpy scalar, numpy array, or python dataclass.
-            ValueError: If the transmission buffer does not have enough space to accommodate the written object's data.
-                If the input object is a multidimensional or empty numpy array.
+            ValueError: If writing the object's data would grow the payload past the maximum transmittable payload
+                size. If the input object is a numpy array that is not one-dimensional, is empty, or is not stored
+                contiguously in memory.
         """
         end_index = -10  # Initializes to a specific negative value that is not a valid index or runtime error code.
 
@@ -403,29 +412,51 @@ class TransportLayer:
                 target_buffer=self._transmission_buffer,
                 scalar_object=data_object,
                 start_index=start_index,
+                max_payload_size=int(self._max_tx_payload_size),
             )
 
         # If the input object is a numpy array, first ensures that it's datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data writing method.
         elif isinstance(data_object, np.ndarray) and data_object.dtype in self._accepted_numpy_scalars:
+            # The serialization step below reinterprets the array's memory as raw bytes, which requires a contiguous
+            # buffer. A strided view, such as the result of a step-slice, would otherwise escape as a numba
+            # TypingError that names neither the argument nor the cause.
+            if not data_object.flags["C_CONTIGUOUS"]:
+                message = (
+                    "Failed to write the data to the transmission buffer. Encountered a non-contiguous numpy array as "
+                    "input data_object. At this time, only arrays stored contiguously in memory are supported. Use "
+                    "numpy.ascontiguousarray() to convert the array before writing it."
+                )
+                console.error(message=message, error=ValueError)
+
             end_index = self._write_array_data(
                 target_buffer=self._transmission_buffer,
                 array_object=data_object,
                 start_index=start_index,
+                max_payload_size=int(self._max_tx_payload_size),
             )
 
         # If the input object is a python dataclass, iteratively loops over each field of the class and recursively
         # calls write_data() to write each attribute of the class to the buffer. This implementation supports using
         # this function for any dataclass that stores numpy scalars or arrays, replicating the behavior of the
-        # Microcontroller TransportLayer class.
-        elif is_dataclass(data_object):
-            # Loops over each field (attribute) of the dataclass and writes it to the buffer.
-            for field in fields(data_object):
-                # Calls the write method recursively onto the value of each field.
-                data_value = getattr(data_object, field.name)
+        # Microcontroller TransportLayer class. Excludes dataclass types, as is_dataclass() accepts the class itself
+        # in addition to its instances.
+        elif is_dataclass(data_object) and not isinstance(data_object, type):
+            # Snapshots the payload size tracker so that a field that fails to serialize does not leave the fields
+            # written before it staged for transmission.
+            original_payload_size = self._bytes_in_transmission_buffer
 
-                # If this call fails, it raises an error that terminates this loop early.
-                self.write_data(data_object=data_value)
+            try:
+                # Loops over each field (attribute) of the dataclass and writes it to the buffer.
+                for field in fields(data_object):
+                    # Calls the write method recursively onto the value of each field.
+                    data_value = getattr(data_object, field.name)
+
+                    # If this call fails, it raises an error that terminates this loop early.
+                    self.write_data(data_object=data_value)
+            except Exception:
+                self._bytes_in_transmission_buffer = original_payload_size
+                raise
 
             # The recurrent write_data calls resolve errors and update the payload size trackers as necessary, so if
             # the method runs without errors, returns to caller without further processing.
@@ -447,15 +478,16 @@ class TransportLayer:
             self._bytes_in_transmission_buffer = end_index
         elif end_index == TransportLayerStatus.INSUFFICIENT_BUFFER_SPACE_ERROR:
             message = (
-                f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
-                f"space to write the data starting at the index {start_index}. Specifically, given the data size of "
-                f"{data_object.nbytes} bytes, the required buffer size is {start_index + data_object.nbytes} bytes, "
-                f"but the available size is {self._transmission_buffer.size} bytes."
+                f"Failed to write the data to the transmission buffer. Writing the data starting at the index "
+                f"{start_index} would grow the payload past the maximum transmittable payload size. Specifically, "
+                f"given the data size of {data_object.nbytes} bytes, the required payload size is "
+                f"{start_index + data_object.nbytes} bytes, but the maximum payload size is "
+                f"{self._max_tx_payload_size} bytes."
             )
             console.error(message=message, error=ValueError)
         elif end_index == TransportLayerStatus.MULTIDIMENSIONAL_ARRAY_ERROR:
             message = (
-                f"Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with "
+                f"Failed to write the data to the transmission buffer. Encountered a numpy array with "
                 f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) arrays "
                 f"are supported."
             )
@@ -517,11 +549,14 @@ class TransportLayer:
         if isinstance(data_object, self._accepted_numpy_scalars):
             returned_object, end_index = self._read_array_data(
                 source_buffer=self._reception_buffer,
-                array_object=np.array(data_object, dtype=data_object.dtype),
+                array_object=np.array([data_object], dtype=data_object.dtype),
                 start_index=start_index,
                 payload_size=self._bytes_in_reception_buffer,
             )
-            out_object = returned_object[0]
+            # Unpacks the scalar only when the read succeeded. The reader returns an empty array on failure, so
+            # indexing it unconditionally would raise IndexError before the status-code dispatch below can report the
+            # documented error.
+            out_object = returned_object[0] if end_index > start_index else returned_object
 
         # If the input object is a numpy array, first ensures that its datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data reading method.
@@ -536,15 +571,23 @@ class TransportLayer:
         # If the input object is a python dataclass, enters a recursive loop which calls this method for each class
         # attribute. This allows retrieving and overwriting each attribute with the bytes read from the buffer,
         # similar to the Microcontroller TransportLayer class.
-        elif is_dataclass(data_object):
-            # Loops over each field of the dataclass.
-            for field in fields(data_object):
-                # Calls the reader function recursively onto each field of the class.
-                attribute_value = getattr(data_object, field.name)
-                attribute_object = self.read_data(data_object=attribute_value)
+        elif is_dataclass(data_object) and not isinstance(data_object, type):
+            # Snapshots the consumed byte tracker so that a field that fails to deserialize does not consume the bytes
+            # belonging to the fields read before it.
+            original_consumed_bytes = self._consumed_bytes
 
-                # Updates the field in the original dataclass instance with the read object.
-                setattr(data_object, field.name, attribute_object)
+            try:
+                # Loops over each field of the dataclass.
+                for field in fields(data_object):
+                    # Calls the reader function recursively onto each field of the class.
+                    attribute_value = getattr(data_object, field.name)
+                    attribute_object = self.read_data(data_object=attribute_value)
+
+                    # Updates the field in the original dataclass instance with the read object.
+                    setattr(data_object, field.name, attribute_object)
+            except Exception:
+                self._consumed_bytes = original_consumed_bytes
+                raise
 
             # The recurrent read_data calls resolve errors and update the payload size trackers as necessary, so if
             # the method runs without errors, returns to caller without further processing.
@@ -577,7 +620,7 @@ class TransportLayer:
             console.error(message=message, error=ValueError)
         elif end_index == TransportLayerStatus.MULTIDIMENSIONAL_ARRAY_ERROR:
             message = (
-                f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
+                f"Failed to read the data from the reception buffer. Encountered a numpy array with "
                 f"{data_object.ndim} dimensions as input data_object. At this time, only one-dimensional (flat) arrays "
                 f"are supported."
             )
@@ -604,7 +647,20 @@ class TransportLayer:
         Notes:
             This method resets the instance's transmission buffer after transmitting the data, discarding any data
             stored inside the buffer.
+
+        Raises:
+            ValueError: If the instance's transmission buffer does not store any payload data.
         """
+        # Aborts the transmission if the payload is empty, as the protocol reserves the payload size of 0 as an invalid
+        # value that every receiver rejects. The companion microcontroller library enforces the same floor.
+        if self._bytes_in_transmission_buffer < int(self._cobs_processor.processor.minimum_payload_size):
+            message = (
+                "Failed to send the data to the Microcontroller. The transmission buffer does not store any payload "
+                "data, and the communication protocol reserves the payload size of 0 as an invalid value that every "
+                "receiver rejects. Call the write_data() method to stage the data before sending it."
+            )
+            console.error(message=message, error=ValueError)
+
         # Constructs the serial packet to be sent. This is a fast inline aggregation of all packet construction steps,
         # using JIT compilation to increase runtime speed. To maximize compilation benefits, it has to access the
         # inner jitclasses instead of using the python COBS and CRC class wrappers.
@@ -667,7 +723,10 @@ class TransportLayer:
             self._bytes_in_reception_buffer = payload_size
             return True
 
-        # Otherwise, notifies the user about an error processing the packet
+        # Otherwise, discards the unusable packet before notifying the user about an error processing it. Without the
+        # reset, the reception buffer trackers keep pointing at the raw COBS-encoded packet and its CRC postamble, so a
+        # caller that catches the error below would read those bytes back as though they were a decoded payload.
+        self.reset_reception_buffer()
         message = (
             "Failed to process the received serial packet. This indicates that the packet was corrupted during "
             "transmission or reception."
@@ -682,6 +741,7 @@ class TransportLayer:
         target_buffer: NDArray[np.uint8],
         scalar_object: Any,
         start_index: int,
+        max_payload_size: int,
     ) -> int:
         """Converts the input numpy scalar to a sequence of bytes and writes it to the transmission buffer at the
         specified start_index.
@@ -690,6 +750,7 @@ class TransportLayer:
             target_buffer: The buffer where to write the data.
             scalar_object: The scalar numpy object to be written to the transmission buffer.
             start_index: The index inside the transmission buffer at which to start writing the data.
+            max_payload_size: The maximum number of payload bytes the transmission buffer is allowed to accumulate.
 
         Returns:
             The positive index inside the transmission buffer that immediately follows the last index of the buffer to
@@ -703,8 +764,10 @@ class TransportLayer:
         data_size = array_object.size * array_object.itemsize
         required_size = start_index + data_size
 
-        # If the space to store the data extends outside the available transmission_buffer boundaries, returns 0.
-        if required_size > target_buffer.size:
+        # Bounds the payload by the maximum transmittable payload size rather than by the buffer size. The buffer is
+        # deliberately larger, as it also accommodates the packet metadata and the CRC postamble, so bounding by it
+        # would allow a payload the COBS overhead byte and the payload_size byte cannot represent.
+        if required_size > max_payload_size:
             return TransportLayerStatus.INSUFFICIENT_BUFFER_SPACE_ERROR.value
 
         # Writes the data to the buffer.
@@ -720,6 +783,7 @@ class TransportLayer:
         target_buffer: NDArray[np.uint8],
         array_object: NDArray[Any],
         start_index: int,
+        max_payload_size: int,
     ) -> int:
         """Converts the input numpy array to a sequence of bytes and writes it to the transmission buffer at the
         specified start_index.
@@ -728,6 +792,7 @@ class TransportLayer:
             target_buffer: The buffer where to write the data.
             array_object: The numpy array to be written to the transmission buffer.
             start_index: The index inside the transmission buffer at which to start writing the data.
+            max_payload_size: The maximum number of payload bytes the transmission buffer is allowed to accumulate.
 
         Returns:
             The positive index inside the transmission buffer that immediately follows the last index of the buffer to
@@ -744,7 +809,9 @@ class TransportLayer:
         data_size = array_data.size * array_data.itemsize
         required_size = start_index + data_size
 
-        if required_size > target_buffer.size:
+        # Bounds the payload by the maximum transmittable payload size rather than by the buffer size. See the
+        # _write_scalar_data() method for the rationale.
+        if required_size > max_payload_size:
             return TransportLayerStatus.INSUFFICIENT_BUFFER_SPACE_ERROR.value
 
         # Writes the array data to the buffer, starting at the start_index and ending just before the required_size
@@ -788,8 +855,9 @@ class TransportLayer:
         if required_size > payload_size:
             return np.empty(0, dtype=array_object.dtype), TransportLayerStatus.INSUFFICIENT_BUFFER_SPACE_ERROR.value
 
-        # Prevents reading multidimensional numpy arrays.
-        if array_object.ndim > 1:
+        # Prevents reading numpy arrays that are not one-dimensional. Matches the check the writer applies, so the two
+        # halves agree on which prototypes are supported.
+        if array_object.ndim != 1:
             return np.empty(0, dtype=array_object.dtype), TransportLayerStatus.MULTIDIMENSIONAL_ARRAY_ERROR.value
 
         # Prevents reading empty numpy arrays
@@ -879,7 +947,7 @@ class TransportLayer:
 
             # Calls the packet parsing method. The method reuses some iterative outputs as arguments for later
             # calls.
-            status, parsed_bytes_count, remaining_bytes, parsed_bytes = self._parse_packet(
+            status, parsed_bytes_count, remaining_bytes, parsed_bytes, start_found = self._parse_packet(
                 unparsed_bytes=remaining_bytes,
                 start_byte=self._start_byte,
                 delimiter_byte=self._delimiter_byte,
@@ -1088,7 +1156,7 @@ class TransportLayer:
         start_found: bool = False,
         parsed_byte_count: int = 0,
         parsed_bytes: NDArray[np.uint8] = _EMPTY_ARRAY,
-    ) -> tuple[int, int, NDArray[np.uint8], NDArray[np.uint8]]:
+    ) -> tuple[int, int, NDArray[np.uint8], NDArray[np.uint8], bool]:
         """Parses as much of the incoming serialized packet's data as possible using the input unparsed_bytes object.
 
         Notes:
@@ -1115,10 +1183,11 @@ class TransportLayer:
                 Multiple method runtimes may be necessary to fully fill the object with parsed data bytes.
 
         Returns:
-            A tuple of four elements. The first element is an integer status code that describes the runtime. The
+            A tuple of five elements. The first element is an integer status code that describes the runtime. The
             second element is the number of packet's bytes processed during method runtime. The third element is a
             bytes' object that stores any unprocessed bytes that remain after method runtime. The fourth element
-            is the uint8 array that stores some or all of the packet's bytes.
+            is the uint8 array that stores some or all of the packet's bytes. The fifth element is the start byte
+            acquisition flag, which the caller feeds back into the next call to resume parsing the same packet.
         """
         total_bytes = unparsed_bytes.size  # Calculates the total number of bytes available for parsing.
         processed_bytes = 0  # Tracks how many input bytes are processed during method runtime.
@@ -1140,12 +1209,24 @@ class TransportLayer:
             # status code.
             if not start_found:
                 remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes.
-                return TransportLayerStatus.NO_BYTES_TO_READ.value, parsed_byte_count, remaining_bytes, parsed_bytes
+                return (
+                    TransportLayerStatus.NO_BYTES_TO_READ.value,
+                    parsed_byte_count,
+                    remaining_bytes,
+                    parsed_bytes,
+                    start_found,
+                )
 
             # If this stage uses up all unprocessed bytes, ends method runtime with partial success code.
             if processed_bytes == total_bytes:
                 remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes.
-                return TransportLayerStatus.PACKET_SIZE_UNKNOWN.value, parsed_byte_count, remaining_bytes, parsed_bytes
+                return (
+                    TransportLayerStatus.PACKET_SIZE_UNKNOWN.value,
+                    parsed_byte_count,
+                    remaining_bytes,
+                    parsed_bytes,
+                    start_found,
+                )
 
         # Calculates the size of the COBS-encoded payload (data packet) from the total size of the parsed_bytes
         # array and the crc_postamble. Ensures the value is always non-negative. Relies on the fact that stage 2
@@ -1157,6 +1238,19 @@ class TransportLayer:
         # fully parse the packet. Additionally, this is used to infer the packet layout, which is critical for the
         # following stages.
         if packet_size == 0:
+            # A resumed call enters this stage with the start byte already consumed, so it can arrive with no bytes
+            # left to read. Numba does not bounds-check the indexing below, so an unguarded read would silently return
+            # whatever memory follows the array.
+            if processed_bytes == total_bytes:
+                remaining_bytes = np.empty(0, dtype=np.uint8)
+                return (
+                    TransportLayerStatus.PACKET_SIZE_UNKNOWN.value,
+                    parsed_byte_count,
+                    remaining_bytes,
+                    parsed_bytes,
+                    start_found,
+                )
+
             # Reads the first available unprocessed byte and checks it for validity. This relies on the fact that
             # valid packets store the payload_size byte immediately after the start_byte.
             payload_size = unparsed_bytes[processed_bytes]
@@ -1173,6 +1267,7 @@ class TransportLayer:
                     parsed_byte_count,
                     remaining_bytes,
                     parsed_bytes,
+                    start_found,
                 )
 
             # If payload size passed verification, calculates the number of bytes occupied by the COBS-encoded payload
@@ -1194,6 +1289,7 @@ class TransportLayer:
                     parsed_byte_count,
                     remaining_bytes,
                     parsed_bytes,
+                    start_found,
                 )
             # Recalculates the packet size to match the size of the expanded array. Otherwise, if all stages are
             # resolved as part of the same cycle, the code below will continue working with the assumption that the
@@ -1230,6 +1326,7 @@ class TransportLayer:
                         parsed_byte_count,
                         remaining_bytes,
                         parsed_bytes,
+                        start_found,
                     )
 
                 # If the evaluated byte is a delimiter byte value and this is the last byte of the encoded payload, the
@@ -1248,6 +1345,7 @@ class TransportLayer:
                         parsed_byte_count,
                         remaining_bytes,
                         parsed_bytes,
+                        start_found,
                     )
 
             # If this stage uses up all unprocessed bytes, ends method runtime with partial success code.
@@ -1258,6 +1356,7 @@ class TransportLayer:
                     parsed_byte_count,
                     remaining_bytes,
                     parsed_bytes,
+                    start_found,
                 )
 
         # If the packet is fully resolved at this point, terminates the runtime before advancing to stage 4. While this
@@ -1265,7 +1364,13 @@ class TransportLayer:
         # execution reaches this point.
         if parsed_bytes.size == parsed_byte_count:
             remaining_bytes = unparsed_bytes[processed_bytes:].copy()
-            return TransportLayerStatus.PACKET_PARSED.value, parsed_byte_count, remaining_bytes, parsed_bytes
+            return (
+                TransportLayerStatus.PACKET_PARSED.value,
+                parsed_byte_count,
+                remaining_bytes,
+                parsed_bytes,
+                start_found,
+            )
         # Otherwise, determines how many CRC bytes are left to parse.
         remaining_crc_bytes = parsed_bytes.size - parsed_byte_count
 
@@ -1282,12 +1387,24 @@ class TransportLayer:
             # If all crc bytes have been parsed, the packet is also fully parsed. Returns with success code.
             if remaining_crc_bytes == 0:
                 remaining_bytes = unparsed_bytes[processed_bytes:].copy()
-                return TransportLayerStatus.PACKET_PARSED.value, parsed_byte_count, remaining_bytes, parsed_bytes
+                return (
+                    TransportLayerStatus.PACKET_PARSED.value,
+                    parsed_byte_count,
+                    remaining_bytes,
+                    parsed_bytes,
+                    start_found,
+                )
 
         # The only way to reach this point is when the CRC parsing loop above escapes due to running out of bytes to
         # process without fully parsing the postamble. Returns with partial success code.
         remaining_bytes = np.empty(0, dtype=np.uint8)  # The loop above used all unprocessed bytes.
-        return TransportLayerStatus.NOT_ENOUGH_CRC_BYTES.value, parsed_byte_count, remaining_bytes, parsed_bytes
+        return (
+            TransportLayerStatus.NOT_ENOUGH_CRC_BYTES.value,
+            parsed_byte_count,
+            remaining_bytes,
+            parsed_bytes,
+            start_found,
+        )
 
     @staticmethod
     @njit(cache=True)  # pragma: no cover

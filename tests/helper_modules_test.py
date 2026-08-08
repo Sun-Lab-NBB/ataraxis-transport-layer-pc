@@ -1169,6 +1169,65 @@ def test_crc_processor_errors() -> None:
         crc_processor.calculate_checksum(buffer_with_checksum, check=True)
 
 
+def test_crc_processor_initialization_errors() -> None:
+    """Verifies the error-handling behavior of the CRCProcessor initialization method."""
+    # A plain python integer carries no numpy width, so the class rejects it rather than failing on the missing dtype
+    # attribute deeper inside the initialization method.
+    for argument_name, arguments in (
+        ("polynomial", {"polynomial": 0x07, "initial_crc_value": np.uint8(0), "final_xor_value": np.uint8(0)}),
+        ("initial_crc_value", {"polynomial": np.uint8(0x07), "initial_crc_value": 0, "final_xor_value": np.uint8(0)}),
+        ("final_xor_value", {"polynomial": np.uint8(0x07), "initial_crc_value": np.uint8(0), "final_xor_value": 0}),
+    ):
+        message = (
+            f"Unable to initialize the CRCProcessor class. Expected a numpy uint8, uint16, or uint32 value for "
+            f"the '{argument_name}' argument, but encountered {arguments[argument_name]} of type "
+            f"{type(arguments[argument_name]).__name__}."
+        )
+        with pytest.raises(TypeError, match=error_format(message)):
+            CRCProcessor(**arguments)
+
+    # The jitclass derives every checksum field type from the polynomial, so a wider argument would be silently
+    # truncated to the polynomial's width and yield checksums the microcontroller does not agree with.
+    for argument_name in ("initial_crc_value", "final_xor_value"):
+        arguments = {
+            "polynomial": np.uint8(0x07),
+            "initial_crc_value": np.uint8(0),
+            "final_xor_value": np.uint8(0),
+            argument_name: np.uint16(0x01FF),
+        }
+        message = (
+            f"Unable to initialize the CRCProcessor class. The '{argument_name}' argument must not be wider than "
+            f"the 'polynomial' argument, but encountered a 2-byte value for a 1-byte polynomial."
+        )
+        with pytest.raises(ValueError, match=error_format(message)):
+            CRCProcessor(**arguments)
+
+    # A narrower argument is widened without loss, so it stays acceptable.
+    narrow = CRCProcessor(
+        polynomial=np.uint16(0x1021), initial_crc_value=np.uint8(0xFF), final_xor_value=np.uint8(0x00)
+    )
+    assert narrow.crc_byte_length == 2
+
+
+def test_crc_processor_table_is_copied() -> None:
+    """Verifies that the crc_table property returns a copy rather than the live lookup table."""
+    crc_processor = CRCProcessor(
+        polynomial=np.uint8(0x07), initial_crc_value=np.uint8(0x00), final_xor_value=np.uint8(0x00)
+    )
+    original_entry = int(crc_processor.crc_table[1])
+
+    # Writing through the returned array must not reach the table the processor computes checksums from.
+    borrowed_table = crc_processor.crc_table
+    borrowed_table[1] = 0xAA
+    assert int(crc_processor.crc_table[1]) == original_entry
+
+    # The checksum the processor produces is therefore unchanged by the write above.
+    buffer = np.zeros(2, dtype=np.uint8)
+    buffer[0] = np.frombuffer(b"A", dtype=np.uint8)[0]
+    crc_processor.calculate_checksum(buffer, check=False)
+    assert int(buffer[1]) == 0xC0
+
+
 def test_serial_mock() -> None:
     """Verifies the functioning and error-handling behavior of all SerialMock class methods."""
     # Creates an instance of SerialMock to test

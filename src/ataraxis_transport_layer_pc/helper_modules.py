@@ -25,6 +25,9 @@ _TWO_BYTE: int = 2
 _BYTE_SIZE: int = 8
 """Number of bits in a single byte."""
 
+_ACCEPTED_CRC_TYPES: tuple[type[np.uint8], type[np.uint16], type[np.uint32]] = (np.uint8, np.uint16, np.uint32)
+"""Numpy unsigned integer types accepted as the polynomial and checksum parameters of the CRCProcessor class."""
+
 # Defines the collection of NumPy types used by the CRCProcessor class to represent valid input arguments and output
 # values.
 type CRCType = np.uint8 | np.uint16 | np.uint32
@@ -148,6 +151,7 @@ class CRCProcessor:
 
     Raises:
         TypeError: If class initialization arguments are not of the valid type.
+        ValueError: If the initial CRC value or the final XOR value is wider than the polynomial.
     """
 
     def __init__(
@@ -158,6 +162,34 @@ class CRCProcessor:
         *,
         reflected: bool = False,
     ) -> None:
+        # Verifies the input arguments before they reach the jitclass. The spec below derives every checksum field type
+        # from the polynomial, so an unexpected type raises deep inside numpy and a wider value is silently truncated to
+        # the polynomial's width, which yields checksums the microcontroller does not agree with.
+        for argument_name, argument_value in (
+            ("polynomial", polynomial),
+            ("initial_crc_value", initial_crc_value),
+            ("final_xor_value", final_xor_value),
+        ):
+            if not isinstance(argument_value, _ACCEPTED_CRC_TYPES):
+                message = (
+                    f"Unable to initialize the CRCProcessor class. Expected a numpy uint8, uint16, or uint32 value for "
+                    f"the '{argument_name}' argument, but encountered {argument_value} of type "
+                    f"{type(argument_value).__name__}."
+                )
+                console.error(message=message, error=TypeError)
+
+        for argument_name, argument_value in (
+            ("initial_crc_value", initial_crc_value),
+            ("final_xor_value", final_xor_value),
+        ):
+            if argument_value.itemsize > polynomial.itemsize:
+                message = (
+                    f"Unable to initialize the CRCProcessor class. The '{argument_name}' argument must not be wider "
+                    f"than the 'polynomial' argument, but encountered a {argument_value.itemsize}-byte value for a "
+                    f"{polynomial.itemsize}-byte polynomial."
+                )
+                console.error(message=message, error=ValueError)
+
         # Converts the input polynomial type from numpy to numba format so that it can be used in the spec list below.
         if polynomial.dtype is np.dtype(np.uint8):
             crc_type = uint8
@@ -236,8 +268,10 @@ class CRCProcessor:
 
     @property
     def crc_table(self) -> NDArray[CRCType]:
-        """Returns the CRC checksum lookup table."""
-        return self._processor.crc_table
+        """Returns a copy of the CRC checksum lookup table."""
+        # Copies the table so that a caller writing through the returned array cannot alter the checksums this instance
+        # computes.
+        return self._processor.crc_table.copy()
 
     @property
     def processor(self) -> _CRCProcessor:
@@ -650,7 +684,9 @@ class _CRCProcessor:  # pragma: no cover
         Returns:
             The input value with its bit order reversed.
         """
-        crc_bits = self.crc_byte_length * _BYTE_SIZE
+        # Keeps the bit width in Python integer space, so that the shift below stays an arbitrary-precision integer
+        # rather than adopting the uint8 width of the crc_byte_length attribute.
+        crc_bits = int(self.crc_byte_length) * _BYTE_SIZE
         reflection = 0
 
         for bit in range(crc_bits):
