@@ -56,9 +56,8 @@ ___
 
 ## Dependencies
 
-For users, all library dependencies are installed automatically by all supported installation
-methods. For developers, see the [Developers](#developers) section for information on installing
-additional development dependencies.
+For users, all library dependencies are installed automatically by all supported installation methods. For developers,
+see the [Developers](#developers) section for information on installing additional development dependencies.
 
 ___
 
@@ -66,21 +65,20 @@ ___
 
 ### Source
 
-***Note,*** installation from source is ***highly discouraged*** for anyone who is not an active
-project developer.
+***Note,*** installation from source is ***highly discouraged*** for anyone who is not an active project developer.
 
-1. Download this repository to the local machine using the preferred method, such as git-cloning.
-   Use one of the [stable releases](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc/tags) that
-   include precompiled binary and source code distribution (sdist) wheels.
-2. If the downloaded distribution is stored as a compressed archive, unpack it using the
-   appropriate decompression tool.
+1. Download this repository to the local machine using the preferred method, such as git-cloning. Use one of the
+   [stable releases](https://github.com/Sun-Lab-NBB/ataraxis-transport-layer-pc/tags) that include precompiled binary
+   and source code distribution (sdist) wheels.
+2. If the downloaded distribution is stored as a compressed archive, unpack it using the appropriate decompression
+   tool.
 3. `cd` to the root directory of the prepared project distribution.
 4. Run `pip install .` to install the project and its dependencies.
 
 ### pip
 
-Use the following command to install the library and all of its dependencies via
-[pip](https://pip.pypa.io/en/stable/): `pip install ataraxis-transport-layer-pc`
+Use the following command to install the library and all of its dependencies via [pip](https://pip.pypa.io/en/stable/):
+`pip install ataraxis-transport-layer-pc`
 
 ___
 
@@ -119,7 +117,7 @@ least once before entering the time-critical portion of the runtime so that the 
 Some microcontrollers, such as Arduino AVR boards, reset upon establishing connection over the UART interface. If
 TransportLayer attempts to transmit the data to a microcontroller undergoing the reset, the data may not reach the
 microcontroller at all or become corrupted. When using a microcontroller with the UART interface, further code
-execution should be delayed by ~2–5 seconds after initializing the TransportLayer class to allow the microcontroller to
+execution should be delayed by ~2-5 seconds after initializing the TransportLayer class to allow the microcontroller to
 finish its reset sequence.
 
 #### Baudrates
@@ -135,10 +133,12 @@ with the quickstart example of the [companion](https://github.com/Sun-Lab-NBB/at
 library. See the [rx_tx_loop.py](./examples/rx_tx_loop.py) for the .py implementation of this example:
 ```
 from dataclasses import field, dataclass
+
 import numpy as np
 from ataraxis_time import PrecisionTimer
+from ataraxis_base_utilities import LogLevel, console
+
 from ataraxis_transport_layer_pc import TransportLayer
-from ataraxis_base_utilities import console, LogLevel
 
 # Activates the console to print messages to the terminal during runtime.
 if not console.enabled:
@@ -148,7 +148,7 @@ if not console.enabled:
 # for most microcontrollers and assume that the companion library uses the default parameters. Consult the ReadMe and
 # the API documentation to learn about fine-tuning the TransportLayer's parameters to better match the intended
 # use-case.
-tl_class = TransportLayer(port="/dev/ttyACM1", baudrate=115200, microcontroller_serial_buffer_size=256)
+transport_layer = TransportLayer(port="/dev/ttyACM1", baudrate=115200, microcontroller_serial_buffer_size=256)
 
 # Note, buffer size 256 is set for an Arduino Due board. Most Arduino boards have buffers capped at 64 or 256
 # bytes. During production runtimes, it is critically important to set the buffer size to the actual size used by the
@@ -161,16 +161,22 @@ tl_class = TransportLayer(port="/dev/ttyACM1", baudrate=115200, microcontroller_
 
 # Pre-creates the objects used for the demonstration below.
 test_scalar = np.uint32(123456789)
-test_array = np.zeros(4, dtype=np.uint8)  # [0, 0, 0, 0]
+test_array = np.zeros(4, dtype=np.uint8)
 
 
-# While Python does not have C++-like structures, it has dataclasses that fulfill a similar role.
-@dataclass()  # It is important for the class to NOT be frozen!
+# While Python does not have C++-like structures, it has dataclasses that fulfill a similar role. This dataclass
+# must not be frozen, because read_data() overwrites its fields in place during the reception procedure.
+@dataclass(slots=True)
 class TestStruct:
+    """Groups the test values used to demonstrate dataclass serialization."""
+
     test_flag: np.bool_ = field(default_factory=lambda: np.bool_(True))
+    """Demonstrates serialization of a numpy boolean value."""
     test_float: np.float32 = field(default_factory=lambda: np.float32(6.66))
+    """Demonstrates serialization of a numpy 32-bit floating-point value."""
 
     def __repr__(self) -> str:
+        """Returns a string representation of the TestStruct instance."""
         return f"TestStruct(test_flag={self.test_flag}, test_float={round(float(self.test_float), ndigits=2)})"
 
 
@@ -178,58 +184,60 @@ test_struct = TestStruct()
 
 # Some Arduino boards reset after receiving a connection request. To make this example universal, sleeps for 2 seconds
 # to ensure the microcontroller is ready to receive data.
-timer = PrecisionTimer("s")
+timer = PrecisionTimer(precision="s")
 timer.delay(delay=2, allow_sleep=True, block=False)
 
-console.echo("Transmitting the data to the microcontroller...")
+console.echo(message="Transmitting the data to the microcontroller...")
 
 # Executes one transmission and one data reception cycle. During production runtime, this code would typically run in
 # a function or loop.
 
-# Writes objects to the TransportLayer's transmission buffer, staging them to be sent with the next
-# send_data() command. Note, the objects are written in the order they are read by the microcontroller.
-tl_class.write_data(test_scalar)
-tl_class.write_data(test_array)
-tl_class.write_data(test_struct)
+# Writes objects to the TransportLayer's transmission buffer, staging them to be sent with the next send_data() command.
+# Note, the objects are written in the order they are read by the microcontroller.
+transport_layer.write_data(test_scalar)
+transport_layer.write_data(test_array)
+transport_layer.write_data(test_struct)
 
 # Packages and sends the contents of the transmission buffer that were written above to the Microcontroller.
-tl_class.send_data()
+transport_layer.send_data()
 
-console.echo("Data transmission: Complete.", level=LogLevel.SUCCESS)
+console.echo(message="Data transmission: Complete.", level=LogLevel.SUCCESS)
 
 # Waits for the microcontroller to receive the data and respond by sending its data back to the PC.
-console.echo("Waiting for the microcontroller to respond...")
-while not tl_class.available:
-    continue  # If no data is available, the loop blocks until it becomes available.
+console.echo(message="Waiting for the microcontroller to respond...")
+
+# If no data is available, the loop blocks until the microcontroller's response becomes available.
+while not transport_layer.available:
+    continue
 
 # If the data is available, carries out the reception procedure (reads the received byte-stream, parses the
 # payload, and makes it available for reading).
-data_received = tl_class.receive_data()
+data_received = transport_layer.receive_data()
 
 # If the reception was successful, reads the data, assumed to contain serialized test objects. Note, this
 # example is intended to be used together with the example script from the ataraxis-transport-layer-mc library.
 if data_received:
-    console.echo("Data reception: Complete.", level=LogLevel.SUCCESS)
+    console.echo(message="Data reception: Complete.", level=LogLevel.SUCCESS)
 
-    # Overwrites the memory of the objects that were sent to the microcontroller with the response data
-    test_scalar = tl_class.read_data(test_scalar)
-    test_array = tl_class.read_data(test_array)
-    test_struct = tl_class.read_data(test_struct)
+    # Overwrites the memory of the objects that were sent to the microcontroller with the response data.
+    test_scalar = transport_layer.read_data(test_scalar)
+    test_array = transport_layer.read_data(test_array)
+    test_struct = transport_layer.read_data(test_struct)
 
-    # Verifies the received data
-    assert test_scalar == np.uint32(987654321)  # The microcontroller overwrites the scalar with reverse order.
+    # The microcontroller replaces the scalar with a new fixed value before sending it back.
+    assert test_scalar == np.uint32(987654321)
 
     # The rest of the data is transmitted without any modifications.
-    assert np.array_equal(test_array, np.array([0, 0, 0, 0]))
+    assert np.array_equal(test_array, np.array([0, 0, 0, 0], dtype=np.uint8))
     assert test_struct.test_flag == np.bool_(True)
     assert test_struct.test_float == np.float32(6.66)
 
 # Prints the received data values to the terminal for visual inspection.
-console.echo("Data reading: Complete.", level=LogLevel.SUCCESS)
-console.echo("Received data values:")
-console.echo(f"test_scalar = {test_scalar}")
-console.echo(f"test_array = {test_array}")
-console.echo(f"test_struct = {test_struct}")
+console.echo(message="Data reading: Complete.", level=LogLevel.SUCCESS)
+console.echo(message="Received data values:")
+console.echo(message=f"test_scalar = {test_scalar}")
+console.echo(message=f"test_array = {test_array}")
+console.echo(message=f"test_struct = {test_struct}")
 ```
 
 #### Sending Data
@@ -242,17 +250,17 @@ There are two key methods associated with sending data to the microcontroller:
   of data should be written to the transmission buffer before calling this method.
 
 The example below showcases the sequence of steps necessary to send the data to the microcontroller and assumes
-TransportLayer 'tl_class' was initialized following the steps in the [Quickstart](#quickstart) example:
+the 'transport_layer' instance was initialized following the steps in the [Quickstart](#quickstart) example:
 ```
 # Generates the test array to simulate the payload.
 test_array = np.array(object=[1, 2, 3, 0, 0, 6, 0, 8, 0, 0], dtype=np.uint8)
 
 # Writes the data into the instance's transmission buffer. The method raises an error if it is unable to write the
 # data.
-tl_class.write_data(test_array)
+transport_layer.write_data(test_array)
 
 # Constructs and hands the packet to the communication interface to be transmitted to the microcontroller.
-tl_class.send_data()
+transport_layer.send_data()
 ```
 
 ***Note,*** the transmission buffer is reset when the data is transmitted or via the call to the
@@ -270,22 +278,22 @@ There are three key methods associated with receiving data from the microcontrol
   overwritten in place. The consumed bytes are discarded, meaning it is only possible to read the same data **once**.
 
 The example below showcases the sequence of steps necessary to receive data from the microcontroller and assumes
-TransportLayer 'tl_class' was initialized following the steps in the [Quickstart](#quickstart) example:
+the 'transport_layer' instance was initialized following the steps in the [Quickstart](#quickstart) example:
 ```
 # Generates the test array to which the received data will be written.
 test_array = np.array([1, 2, 3, 0, 0, 6, 0, 8, 0, 0], dtype=np.uint8)
 
 # Blocks until the data is received from the microcontroller.
-while not tl_class.available:
+while not transport_layer.available:
     continue
 
 # Parses the received data. Note, this method internally accesses the 'available' property, so it is safe to call
 # receive_data() instead of 'available' in the 'while' loop above without changing how this example behaves.
-receive_status = tl_class.receive_data()  # Returns True if the packet was received and decoded.
+receive_status = transport_layer.receive_data()  # Returns True if the packet was received and decoded.
 
 # Recreates and returns the new test_array instance using the data received from the microcontroller. The method raises
 # an error if it is unable to read the data.
-updated_array = tl_class.read_data(test_array)
+updated_array = transport_layer.read_data(test_array)
 ```
 
 ***Note,*** each call to the `receive_data()` method resets the instance's reception buffer, discarding any potentially
@@ -302,8 +310,8 @@ ___
 
 ## API Documentation
 
-See the [API documentation](https://ataraxis-transport-layer-pc-api-docs.netlify.app/) for the
-detailed description of the methods and classes exposed by components of this library.
+See the [API documentation](https://ataraxis-transport-layer-pc-api-docs.netlify.app/) for the detailed description of
+the methods and classes exposed by components of this library.
 
 ___
 

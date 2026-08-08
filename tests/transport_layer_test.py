@@ -355,7 +355,7 @@ def test_receive_multi_iteration_parsing(protocol) -> None:
 
     # Splitting the stream at every offset exercises both reception paths. A split that leaves at least the minimum
     # packet size in the leftover buffer parses that prefix on its own and resumes with the start byte and the payload
-    # size already resolved, while a shorter prefix is merged with the port buffer and parsed in a single iteration.
+    # size already resolved. A shorter prefix is merged with the port buffer and parsed in a single iteration.
     for split_index in range(1, test_data.size):
         protocol.reset_reception_buffer()
         protocol._leftover_bytes = test_data[:split_index].tobytes()

@@ -138,10 +138,9 @@ compilation to achieve microsecond-level communication speeds.
   Manages dual buffers (transmission and reception), packet construction with COBS encoding and CRC checksums, and
   multi-stage resumable packet parsing. Supports numpy scalars, 1D arrays, and dataclasses as serializable data types.
 - **Helper modules** (`helper_modules.py`): Low-level JIT-compiled processing classes. `COBSProcessor` and
-  `CRCProcessor` are Python wrappers around Numba `jitclass` instances (`_COBSProcessor`, `_CRCProcessor`) that
-  handle Consistent Overhead Byte Stuffing encoding/decoding and CRC-8/16/32 checksum computation. `SerialMock`
+  `CRCProcessor` are Python wrappers around Numba `jitclass` instances (`CompiledCOBSProcessor`, `CompiledCRCProcessor`)
+  that handle Consistent Overhead Byte Stuffing encoding/decoding and CRC-8/16/32 checksum computation. `SerialMock`
   replicates the PySerial `Serial` interface for unit testing without hardware.
-- **No MCP server**: This library does not provide an MCP server.
 
 ### CLI entry point
 
@@ -153,26 +152,26 @@ compilation to achieve microsecond-level communication speeds.
 
 Exported from `__init__.py` via `__all__`:
 
-| Symbol                     | Role                                                       |
-|----------------------------|------------------------------------------------------------|
-| `TransportLayer`           | Main communication class                                   |
-| `TransportLayerStatus`     | Status code enumeration (IntEnum)                          |
-| `COBSProcessor`            | COBS encoding and decoding wrapper                         |
-| `CRCProcessor`             | CRC checksum computation wrapper                           |
-| `list_available_ports()`   | Returns available serial ports as a `ListPortInfo` tuple   |
-| `print_available_ports()`  | Prints the formatted port list to the terminal             |
+| Symbol                    | Role                                                     |
+|---------------------------|----------------------------------------------------------|
+| `TransportLayer`          | Main communication class                                 |
+| `TransportLayerStatus`    | Status code enumeration (IntEnum)                        |
+| `COBSProcessor`           | COBS encoding and decoding wrapper                       |
+| `CRCProcessor`            | CRC checksum computation wrapper                         |
+| `list_available_ports()`  | Returns available serial ports as a `ListPortInfo` tuple |
+| `print_available_ports()` | Prints the formatted port list to the terminal           |
 
 ### Core components
 
-| Component              | File                 | Purpose                                                     |
-|------------------------|----------------------|-------------------------------------------------------------|
-| `TransportLayer`       | `transport_layer.py` | Bidirectional serial communication with packet framing      |
-| `TransportLayerStatus` | `transport_layer.py` | Status codes for packet parsing and buffer operations       |
-| `COBSProcessor`        | `helper_modules.py`  | Python wrapper for JIT-compiled COBS encoder/decoder        |
-| `CRCProcessor`         | `helper_modules.py`  | Python wrapper for JIT-compiled CRC checksum calculator     |
-| `SerialMock`           | `helper_modules.py`  | Mock serial port replicating PySerial interface for testing |
-| `_COBSProcessor`       | `helper_modules.py`  | Numba jitclass for high-performance COBS operations         |
-| `_CRCProcessor`        | `helper_modules.py`  | Numba jitclass for high-performance CRC operations          |
+| Component               | File                 | Purpose                                                     |
+|-------------------------|----------------------|-------------------------------------------------------------|
+| `TransportLayer`        | `transport_layer.py` | Bidirectional serial communication with packet framing      |
+| `TransportLayerStatus`  | `transport_layer.py` | Status codes for packet parsing and buffer operations       |
+| `COBSProcessor`         | `helper_modules.py`  | Python wrapper for JIT-compiled COBS encoder/decoder        |
+| `CRCProcessor`          | `helper_modules.py`  | Python wrapper for JIT-compiled CRC checksum calculator     |
+| `SerialMock`            | `helper_modules.py`  | Mock serial port replicating PySerial interface for testing |
+| `CompiledCOBSProcessor` | `helper_modules.py`  | Numba jitclass for high-performance COBS operations         |
+| `CompiledCRCProcessor`  | `helper_modules.py`  | Numba jitclass for high-performance CRC operations          |
 
 ### Key patterns
 
@@ -243,7 +242,7 @@ tox                      # Run full pipeline (uninstall -> export -> lint -> ...
 1. Review `src/ataraxis_transport_layer_pc/helper_modules.py` for existing wrapper/jitclass patterns
 2. Numba jitclass instances have strict type requirements, so use Numba-compatible types only
 3. Python wrappers handle input validation, error reporting via `console.error()`, and `__repr__` formatting
-4. `TransportLayer` enforces the 254-byte maximum payload size that `_COBSProcessor` declares (COBS hard limit)
+4. `TransportLayer` enforces the 254-byte maximum payload size that `CompiledCOBSProcessor` declares (COBS hard limit)
 
 **Adding new serializable data types:**
 

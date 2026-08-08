@@ -67,8 +67,8 @@ console.echo(message="Transmitting the data to the microcontroller...")
 # Executes one transmission and one data reception cycle. During production runtime, this code would typically run in
 # a function or loop.
 
-# Writes objects to the TransportLayer's transmission buffer, staging them to be sent with the next
-# send_data() command. Note, the objects are written in the order they are read by the microcontroller.
+# Writes objects to the TransportLayer's transmission buffer, staging them to be sent with the next send_data() command.
+# Note, the objects are written in the order they are read by the microcontroller.
 transport_layer.write_data(test_scalar)
 transport_layer.write_data(test_array)
 transport_layer.write_data(test_struct)
