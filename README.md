@@ -309,33 +309,30 @@ ___
 
 ## Developers
 
-This section provides installation, dependency, and build-system instructions for the developers
-that want to modify the source code of this library.
+This section provides installation, dependency, and build-system instructions for the developers that want to modify
+the source code of this library.
 
 ### Installing the Project
 
-***Note,*** this installation method requires **mamba version 2.3.2 or above**. Currently, all
-Ataraxis framework automation pipelines require that mamba is installed through the
-[miniforge3](https://github.com/conda-forge/miniforge) installer.
+***Note,*** this installation method requires **mamba version 2.3.2 or above**. Currently, all automation pipelines
+require that mamba is installed through the [miniforge3](https://github.com/conda-forge/miniforge) installer.
 
 1. Download this repository to the local machine using the preferred method, such as git-cloning.
-2. If the downloaded distribution is stored as a compressed archive, unpack it using the
-   appropriate decompression tool.
+2. If the downloaded distribution is stored as a compressed archive, unpack it using the appropriate decompression
+   tool.
 3. `cd` to the root directory of the prepared project distribution.
-4. Install the core Ataraxis framework development dependencies into the ***base*** mamba environment via the
+4. Install the core development dependencies into the ***base*** mamba environment via the
    `mamba install tox uv tox-uv` command.
-5. Use the `tox -e create` command to create the project-specific development environment followed
-   by `tox -e install` command to install the project into that environment as a library.
+5. Use the `tox -e create` command to create the project-specific development environment followed by `tox -e install`
+   command to install the project into that environment as a library.
 
 ### Additional Dependencies
 
-In addition to installing the project and all user dependencies, install the following
-dependencies:
+In addition to installing the project and all user dependencies, install the following dependencies:
 
-1. [Python](https://www.python.org/downloads/) distributions, one for each version supported by
-   the developed project. Currently, this library supports the three latest stable versions. It is
-   recommended to use a tool like [pyenv](https://github.com/pyenv/pyenv) to install and manage
-   the required versions.
+1. [Python](https://www.python.org/downloads/) distributions, one for each version supported by the developed project.
+   Currently, this library supports the three latest stable versions. It is recommended to use a tool like
+   [pyenv](https://github.com/pyenv/pyenv) to install and manage the required versions.
 
 ### Development Automation
 
@@ -346,23 +343,23 @@ This project uses `tox` for development automation. The following tox environmen
 | `lint`               | Runs ruff formatting, ruff linting, and mypy type checking   |
 | `stubs`              | Generates py.typed marker and .pyi stub files                |
 | `{py312,...}-test`   | Runs the test suite via pytest for each supported Python     |
-| `coverage`           | Aggregates test coverage into an HTML report                 |
+| `coverage`           | Aggregates test coverage and applies the 100% coverage gate  |
 | `docs`               | Builds the API documentation via Sphinx                      |
 | `build`              | Builds sdist and wheel distributions                         |
 | `upload`             | Uploads distributions to PyPI via twine                      |
+| `deploy`             | Uploads the built documentation to the Netlify site          |
 | `install`            | Builds and installs the project into its mamba environment   |
 | `uninstall`          | Uninstalls the project from its mamba environment            |
 | `create`             | Creates the project's mamba development environment          |
 | `remove`             | Removes the project's mamba development environment          |
 | `provision`          | Recreates the mamba environment from scratch                 |
-| `export`             | Exports the mamba environment as .yml and spec.txt files     |
+| `export`             | Exports the mamba environment as a .yml file                 |
 | `import`             | Creates or updates the mamba environment from a .yml file    |
 
 Run any environment using `tox -e ENVIRONMENT`. For example, `tox -e lint`.
 
-***Note,*** all pull requests for this project have to successfully complete the `tox` task before
-being merged. To expedite the task's runtime, use the `tox --parallel` command to run some tasks
-in parallel.
+***Note,*** all pull requests for this project have to successfully complete the `tox` task before being merged. To
+expedite the task's runtime, use the `tox --parallel` command to run some tasks in parallel.
 
 ### AI-Assisted Development
 
@@ -373,11 +370,10 @@ agents.
 
 ### Automation Troubleshooting
 
-Many packages used in `tox` automation pipelines (uv, mypy, ruff) and `tox` itself may experience
-runtime failures. In most cases, this is related to their caching behavior. If an unintelligible
-error is encountered with any of the automation components, deleting the corresponding cache
-directories (`.tox`, `.ruff_cache`, `.mypy_cache`, etc.) manually or via a CLI command typically
-resolves the issue.
+Many packages used in `tox` automation pipelines (uv, mypy, ruff) and `tox` itself may experience runtime failures. In
+most cases, this is related to their caching behavior. If an unintelligible error is encountered with any of the
+automation components, deleting the corresponding cache directories (`.tox`, `.ruff_cache`, `.mypy_cache`, etc.)
+manually or via a CLI command typically resolves the issue.
 
 ___
 
