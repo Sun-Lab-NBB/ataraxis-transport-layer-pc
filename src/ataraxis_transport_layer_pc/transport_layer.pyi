@@ -5,6 +5,7 @@ import numpy as np
 from serial import Serial
 from _typeshed import Incomplete
 from numpy.typing import NDArray as NDArray
+from ataraxis_time import Timeout
 from serial.tools.list_ports_common import ListPortInfo
 
 from .helper_modules import (
@@ -68,6 +69,7 @@ class TransportLayer:
     _bytes_in_reception_buffer: int
     _consumed_bytes: int
     _leftover_bytes: bytes
+    _timeout_guard: Timeout
     def __init__(
         self,
         port: str,
@@ -77,6 +79,7 @@ class TransportLayer:
         initial_crc_value: CRCType = ...,
         final_crc_xor_value: CRCType = ...,
         *,
+        reflected: bool = False,
         test_mode: bool = False,
     ) -> None: ...
     def __del__(self) -> None: ...
