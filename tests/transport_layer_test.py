@@ -74,11 +74,28 @@ def test_init_errors() -> None:
 
     # Invalid microcontroller_serial_buffer_size argument
     message = (
-        f"Unable to initialize TransportLayer class. Expected a positive integer value for "
+        f"Unable to initialize TransportLayer class. Expected an integer value of at least 9 for "
         f"'microcontroller_serial_buffer_size' argument, but encountered {None} of type {type(None).__name__}."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         TransportLayer(port="COM7", microcontroller_serial_buffer_size=None, baudrate=1000000)
+
+    # A buffer size below the 9-byte floor. Sizes 1 through 8 leave no room for a payload once the 8 bytes of packet
+    # metadata are subtracted, so they are rejected rather than producing an instance that can never receive.
+    for buffer_size in (1, 7, 8):
+        message = (
+            f"Unable to initialize TransportLayer class. Expected an integer value of at least 9 for "
+            f"'microcontroller_serial_buffer_size' argument, but encountered {buffer_size} of type "
+            f"{type(buffer_size).__name__}."
+        )
+        with pytest.raises(ValueError, match=error_format(message)):
+            TransportLayer(port="COM7", microcontroller_serial_buffer_size=buffer_size, baudrate=1000000)
+
+    # The smallest accepted buffer size builds a usable instance whose receive bounds do not invert.
+    minimal_protocol = TransportLayer(
+        port="COM7", microcontroller_serial_buffer_size=9, baudrate=1000000, test_mode=True
+    )
+    assert minimal_protocol._max_rx_payload_size >= minimal_protocol._min_rx_payload_size
 
 
 @pytest.mark.parametrize(
@@ -309,17 +326,77 @@ def test_receive_bytes_available(protocol) -> None:
     chunk_2 = test_data[8:16]
 
     # Verifies that TransportLayer correctly combines data 'leftover' from previous data reception with new data that
-    # became available before the most recent read_data() call.
+    # became available before the most recent read_data() call. Parsing this split requires two iterations of the
+    # packet parsing method, as the first iteration exhausts chunk_1 before resolving the whole packet.
     protocol._leftover_bytes = chunk_1.tobytes()
     protocol._port.rx_buffer = chunk_2.tobytes()
-    protocol.receive_data()
+    assert protocol.receive_data()
+    assert protocol.bytes_in_reception_buffer == test_payload.size
+    assert np.array_equal(protocol.read_data(np.zeros_like(test_payload)), test_payload)
 
     # Verifies that TransportLayer can receive the data entirely from 'leftover' bytes.
     protocol._leftover_bytes = test_data.tobytes()
-    protocol.receive_data()
+    assert protocol.receive_data()
+    assert protocol.bytes_in_reception_buffer == test_payload.size
+    assert np.array_equal(protocol.read_data(np.zeros_like(test_payload)), test_payload)
 
     # Also verifies that receive_data() correctly returns without errors if no bytes are available for reception
     assert not protocol.receive_data()
+
+
+def test_receive_multi_iteration_parsing(protocol) -> None:
+    """Verifies that packets arriving in pieces are parsed across multiple iterations of the packet parsing method."""
+    test_payload = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
+    packet = protocol._cobs_processor.encode_payload(test_payload)
+    packet_with_crc = np.empty(len(packet) + protocol._crc_processor.crc_byte_length, dtype=np.uint8)
+    packet_with_crc[: len(packet)] = packet
+    protocol._crc_processor.calculate_checksum(packet_with_crc, check=False)
+    test_data = np.concatenate((np.array([129, test_payload.size], dtype=np.uint8), packet_with_crc), dtype=np.uint8)
+
+    # Splitting the stream so that the first iteration resolves only the start byte forces the parser to resume with
+    # the start byte already found, which is the state the parsing method has to carry between its iterations.
+    for split_index in range(1, test_data.size):
+        protocol.reset_reception_buffer()
+        protocol._leftover_bytes = test_data[:split_index].tobytes()
+        protocol._port.rx_buffer = test_data[split_index:].tobytes()
+
+        assert protocol.receive_data(), f"reception failed for a stream split at byte {split_index}"
+        assert protocol.bytes_in_reception_buffer == test_payload.size
+        assert np.array_equal(protocol.read_data(np.zeros_like(test_payload)), test_payload)
+
+    # A stream carrying a complete packet followed by the leading bytes of the next one leaves the remainder in the
+    # leftover buffer, so the following packet is parsed across two iterations without losing its start byte.
+    protocol.reset_reception_buffer()
+    protocol._leftover_bytes = b""
+    protocol._port.rx_buffer = np.concatenate((test_data, test_data[:6]), dtype=np.uint8).tobytes()
+    assert protocol.receive_data()
+    assert np.array_equal(protocol.read_data(np.zeros_like(test_payload)), test_payload)
+
+    protocol._port.rx_buffer += test_data[6:].tobytes()
+    assert protocol.receive_data()
+    assert np.array_equal(protocol.read_data(np.zeros_like(test_payload)), test_payload)
+
+
+def test_receive_data_resets_buffer_on_processing_failure(protocol) -> None:
+    """Verifies that a packet failing integrity verification leaves no readable data in the reception buffer."""
+    test_payload = np.array([1, 2, 3, 4, 0, 0, 7, 8, 9, 10], dtype=np.uint8)
+    packet = protocol._cobs_processor.encode_payload(test_payload)
+    packet_with_crc = np.empty(len(packet) + protocol._crc_processor.crc_byte_length, dtype=np.uint8)
+    packet_with_crc[: len(packet)] = packet
+    protocol._crc_processor.calculate_checksum(packet_with_crc, check=False)
+    test_data = np.concatenate((np.array([129, test_payload.size], dtype=np.uint8), packet_with_crc), dtype=np.uint8)
+
+    # Corrupts the checksum alone, so the packet parses cleanly and then fails integrity verification.
+    test_data[-1] ^= 0xFF
+    protocol._port.rx_buffer = test_data.tobytes()
+    with pytest.raises(RuntimeError, match="Failed to process the received serial packet"):
+        protocol.receive_data()
+
+    # Without the reset, the trackers would still point at the raw COBS-encoded packet and its checksum postamble, so a
+    # caller that catches the error above would read those bytes back as though they were a decoded payload.
+    assert protocol.bytes_in_reception_buffer == 0
+    with pytest.raises(ValueError, match="does not have enough unconsumed bytes"):
+        protocol.read_data(np.uint8(0))
 
 
 def test_read_data_errors(protocol) -> None:
@@ -351,12 +428,22 @@ def test_read_data_errors(protocol) -> None:
     # Multidimensional NdArray input.
     multidimensional_array = np.empty([2, 2], dtype=np.uint8)
     message = (
-        f"Failed to read the data from the reception buffer. Encountered a multidimensional numpy array with "
+        f"Failed to read the data from the reception buffer. Encountered a numpy array with "
         f"{multidimensional_array.ndim} dimensions as input data_object. At this time, only "
         f"one-dimensional (flat) arrays are supported."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         protocol.read_data(multidimensional_array)
+
+    # Zero-dimensional NdArray prototype. The reader applies the same one-dimensional check as the writer, so a 0-d
+    # array is rejected by both rather than silently returning an array of a different shape than the prototype.
+    zero_dimensional_array = np.array(0, dtype=np.uint8)
+    message = (
+        "Failed to read the data from the reception buffer. Encountered a numpy array with 0 dimensions as input "
+        "data_object. At this time, only one-dimensional (flat) arrays are supported."
+    )
+    with pytest.raises(ValueError, match=error_format(message)):
+        protocol.read_data(zero_dimensional_array)
 
     # Prototype needs more data than available for reading
     large_array = np.empty(shape=300, dtype=np.uint8)
@@ -368,6 +455,36 @@ def test_read_data_errors(protocol) -> None:
     )
     with pytest.raises(ValueError, match=error_format(message)):
         protocol.read_data(large_array)
+
+    # A scalar prototype needing more bytes than remain raises the documented ValueError rather than escaping as an
+    # IndexError from unpacking the reader's empty failure array.
+    scalar_prototype = np.uint64(0)
+    message = (
+        f"Failed to read the data from the reception buffer. The reception buffer does not have enough "
+        f"unconsumed bytes to recreate the object. Specifically, the object requires {scalar_prototype.nbytes} "
+        f"bytes, but the available payload size is {protocol.bytes_in_reception_buffer - protocol._consumed_bytes} "
+        f"bytes."
+    )
+    with pytest.raises(ValueError, match=error_format(message)):
+        protocol.read_data(scalar_prototype)
+
+    # A dataclass type, rather than an instance, is not a supported input. dataclasses.is_dataclass() accepts the class
+    # object itself, so the dispatcher excludes types explicitly.
+    message = (
+        f"Failed to read the data from the reception buffer. Encountered an unsupported input data_object "
+        f"type ({type(SampleDataClass).__name__}). At this time, only the following numpy scalar or array types "
+        f"are supported: {protocol._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes "
+        f"set to supported numpy scalar or array types is also supported."
+    )
+    with pytest.raises(TypeError, match=error_format(message)):
+        protocol.read_data(SampleDataClass)
+
+    # A dataclass whose fields overrun the remaining payload consumes nothing, so the tracker stays where it was
+    # instead of stranding the bytes the completed fields consumed.
+    protocol._consumed_bytes = 0
+    with pytest.raises(ValueError, match="does not have enough unconsumed bytes"):
+        protocol.read_data(SampleDataClass(uint_value=np.uint8(0), uint_array=np.zeros(10, dtype=np.uint8)))
+    assert protocol._consumed_bytes == 0
 
 
 def test_write_data_errors(protocol) -> None:
@@ -397,27 +514,67 @@ def test_write_data_errors(protocol) -> None:
     ):
         protocol.write_data(test_dataclass)
 
+    # The failed dataclass write above rolls the payload tracker back, so the partially written first field does not
+    # stay staged for the next transmission.
+    assert protocol.bytes_in_transmission_buffer == 0
+
     # Multidimensional NdArray input.
     message = (
-        "Failed to write the data to the transmission buffer. Encountered a multidimensional numpy array with 2 "
-        "dimensions as input data_object. At this time, only one-dimensional (flat) arrays are supported."
+        "Failed to write the data to the transmission buffer. Encountered a numpy array with 2 dimensions as input "
+        "data_object. At this time, only one-dimensional (flat) arrays are supported."
     )
     invalid_array: NDArray[np.uint8] = np.zeros((2, 2), dtype=np.uint8)
     with pytest.raises(ValueError, match=error_format(message)):
         protocol.write_data(invalid_array)
 
-    # An object whose size exceeds the available transmission buffer space.
-    large_data = np.empty(300, dtype=np.uint8)
-    # 1 below is due to a partial success of the dataclass writing (uint8 scalar is written). During real-world usage,
-    # the class would raise an exception and terminate the runtime, so this discrepancy is not an issue.
+    # Non-contiguous NdArray input. Serialization reinterprets the array's memory as raw bytes, which a strided view
+    # cannot supply, so the writer rejects it instead of failing inside the compiled serializer.
     message = (
-        f"Failed to write the data to the transmission buffer. The transmission buffer does not have enough "
-        f"space to write the data starting at the index {1}. Specifically, given the data size of "
-        f"{large_data.nbytes} bytes, the required buffer size is {1 + large_data.nbytes} bytes, but the available "
-        f"size is {protocol._transmission_buffer.size} bytes."
+        "Failed to write the data to the transmission buffer. Encountered a non-contiguous numpy array as input "
+        "data_object. At this time, only arrays stored contiguously in memory are supported. Use "
+        "numpy.ascontiguousarray() to convert the array before writing it."
+    )
+    with pytest.raises(ValueError, match=error_format(message)):
+        protocol.write_data(np.arange(10, dtype=np.uint8)[::2])
+
+    # A dataclass type, rather than an instance, is not a supported input.
+    message = (
+        f"Failed to write the data to the transmission buffer. Encountered an unsupported input data_object "
+        f"type ({type(SampleDataClass).__name__}). At this time, only the following numpy scalar or array "
+        f"types are supported: {protocol._accepted_numpy_scalars}. Alternatively, a dataclass with all attributes "
+        f"set to supported numpy scalar or array types is also supported."
+    )
+    with pytest.raises(TypeError, match=error_format(message)):
+        protocol.write_data(SampleDataClass)
+
+    # An object whose size exceeds the maximum transmittable payload size.
+    large_data = np.empty(300, dtype=np.uint8)
+    message = (
+        f"Failed to write the data to the transmission buffer. Writing the data starting at the index {0} would grow "
+        f"the payload past the maximum transmittable payload size. Specifically, given the data size of "
+        f"{large_data.nbytes} bytes, the required payload size is {large_data.nbytes} bytes, but the maximum payload "
+        f"size is {protocol._max_tx_payload_size} bytes."
     )
     with pytest.raises(ValueError, match=error_format(message)):
         protocol.write_data(large_data)
+
+    # The payload is bounded by the maximum payload size rather than by the transmission buffer size, which is larger
+    # because it also holds the packet metadata and the CRC postamble.
+    assert protocol._transmission_buffer.size > protocol._max_tx_payload_size
+    protocol.write_data(np.full(int(protocol._max_tx_payload_size), 7, dtype=np.uint8))
+    assert protocol.bytes_in_transmission_buffer == protocol._max_tx_payload_size
+    with pytest.raises(ValueError, match="maximum transmittable payload size"):
+        protocol.write_data(np.uint8(1))
+    protocol.reset_transmission_buffer()
+
+    # An empty payload is never transmitted, as the protocol reserves the payload size of 0 as an invalid value.
+    message = (
+        "Failed to send the data to the Microcontroller. The transmission buffer does not store any payload data, "
+        "and the communication protocol reserves the payload size of 0 as an invalid value that every receiver "
+        "rejects. Call the write_data() method to stage the data before sending it."
+    )
+    with pytest.raises(ValueError, match=error_format(message)):
+        protocol.send_data()
 
 
 def test_receive_data_errors(protocol) -> None:
