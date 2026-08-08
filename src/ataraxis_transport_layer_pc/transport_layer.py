@@ -515,7 +515,7 @@ class TransportLayer:
                 start_index=start_index,
                 payload_size=self._bytes_in_reception_buffer,
             )
-            out_object = returned_object[0].copy()
+            out_object = returned_object[0]
 
         # If the input object is a numpy array, first ensures that its datatype matches one of the accepted scalar
         # numpy types and, if so, calls the array data reading method.
