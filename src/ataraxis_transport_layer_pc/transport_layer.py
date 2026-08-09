@@ -122,7 +122,8 @@ class TransportLayer:
         microcontroller_serial_buffer_size: The size, in bytes, of the buffer used by the connected microcontroller's
             serial communication interface. Usually, this information is available from the microcontroller's
             manufacturer (UART / USB controller specification). Must be at least 9 bytes, as 8 bytes are consumed by
-            the packet metadata and at least one byte has to remain available for the payload.
+            the packet metadata and at least one byte has to remain available for the payload. This value bounds the
+            transmitted payload size alone, as reception is capped at the 254-byte COBS limit.
         baudrate: The baudrate to use for communication if the microcontroller uses the UART interface. Should match
             the value used by the microcontroller. This parameter is ignored when using the USB interface.
         polynomial: The polynomial to use for the generation of the CRC lookup table. The polynomial must be expressed
@@ -263,7 +264,7 @@ class TransportLayer:
         self._postamble_size: np.uint8 = self._crc_processor.crc_byte_length
 
         self._max_tx_payload_size: np.uint8 = np.uint8(min((microcontroller_serial_buffer_size - 8), 254))
-        self._max_rx_payload_size: np.uint8 = np.uint8(min((microcontroller_serial_buffer_size - 8), 254))
+        self._max_rx_payload_size: np.uint8 = np.uint8(254)  # Statically capped at 254 due to COBS encoding.
         self._min_rx_payload_size: np.uint8 = np.uint8(1)
 
         # Buffer sizes are upcast to uint16, as they may need to exceed the 256-value limit. They include the respective
@@ -480,13 +481,17 @@ class TransportLayer:
         self,
         data_object: Any,
     ) -> Any:
-        """Overwrites the input object's data with the data from the instance's reception buffer, consuming (discarding)
-        all read bytes.
+        """Reconstructs an object matching the input prototype from the data stored in the instance's reception buffer,
+        consuming (discarding) all read bytes.
 
         This method deserializes the objects stored in the reception buffer as a sequence of bytes. Calling this method
         consumes the read bytes, making it impossible to retrieve the same data from the reception buffer again.
 
         Notes:
+            The input object serves as a prototype that determines the type and the number of bytes to read. Numpy
+            scalar and array prototypes retain their original values, so the deserialized data is accessed through the
+            returned object. Dataclass prototypes additionally have their fields overwritten in place.
+
             At this time, the method only works with valid numpy scalars and arrays as well as python dataclasses
             entirely made out of valid numpy types.
 
