@@ -351,6 +351,13 @@ class TransportLayer:
         """Returns the number of payload bytes stored inside the instance's reception buffer."""
         return self._bytes_in_reception_buffer
 
+    @property
+    def reception_payload(self) -> NDArray[np.uint8]:
+        """Returns a copy of the payload bytes stored inside the instance's reception buffer, which is the leading
+        region of that buffer the last successful reception filled.
+        """
+        return self._reception_buffer[: self._bytes_in_reception_buffer].copy()
+
     def reset_transmission_buffer(self) -> None:
         """Resets the instance's transmission buffer, discarding any stored data."""
         self._bytes_in_transmission_buffer = 0
