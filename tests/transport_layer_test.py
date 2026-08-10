@@ -744,6 +744,26 @@ def test_reception_buffer_property(protocol) -> None:
     assert protocol._reception_buffer[0] == original_value
 
 
+def test_reception_payload_property(protocol) -> None:
+    """Verifies that the reception_payload property returns a copy of the received payload bytes alone."""
+    protocol._reception_buffer[:4] = np.array([1, 2, 3, 4], dtype=np.uint8)
+    protocol._bytes_in_reception_buffer = 4
+
+    payload = protocol.reception_payload
+    assert isinstance(payload, np.ndarray)
+    assert payload.dtype == np.uint8
+    assert payload.size == 4
+    assert payload.tobytes() == b"\x01\x02\x03\x04"
+
+    # Writing through the returned array must leave the internal buffer untouched.
+    payload[0] = np.uint8(0xFF)
+    assert protocol._reception_buffer[0] == 1
+
+    # An instance holding no received bytes yields an empty array rather than the whole buffer.
+    protocol.reset_reception_buffer()
+    assert protocol.reception_payload.size == 0
+
+
 def test_bytes_available_timeout_loop(protocol) -> None:
     """Verifies the _bytes_available() timeout loop branch where bytes arrive during the timed wait.
 
